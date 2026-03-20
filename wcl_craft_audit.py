@@ -1,0 +1,1175 @@
+#!/usr/bin/env python3
+"""
+WarcraftLogs Crafted Gear Audit Tool — Midnight Season 1
+=========================================================
+Pulls player gear from a WarcraftLogs report and identifies crafted items,
+spark usage, crest tier, and embellishments. Outputs to .xlsx.
+
+Usage:
+    python wcl_craft_audit.py
+
+You will be prompted for:
+    - WarcraftLogs Client ID & Secret
+    - Report code (the alphanumeric part of a WCL report URL)
+
+Requirements:
+    pip install requests openpyxl
+"""
+
+import sys
+import json
+import requests
+from datetime import datetime
+from html import escape
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+# ─── Midnight Season 1 Constants ─────────────────────────────────────────────
+
+# Crafting quality bonus IDs (WoW internal — ranks 1 through 5)
+# These are the bonus IDs appended to items when they are player-crafted.
+CRAFT_QUALITY_BONUS_IDS = {
+    10249: 1, 10250: 2, 10251: 3, 10252: 4, 10253: 5,  # TWW-era IDs
+    10255: 1, 10256: 2, 10257: 3, 10258: 4, 10259: 5,  # Midnight-era IDs (if changed)
+    11109: 1, 11110: 2, 11111: 3, 11112: 4, 11113: 5,  # Alternate range seen in beta
+}
+
+# Bonus IDs that indicate an item was crafted via the crafting order / profession system
+CRAFTED_INDICATOR_BONUS_IDS = {
+    8960,   # Midnight crafted tag
+    8791,   # Midnight crafted (often paired with 8960)
+    9497,   # TWW-era "Crafted" tag
+    9498,   # TWW-era "Crafted" tag (alternate)
+    10222,  # Crafting work order
+    10343,  # Recrafted
+}
+
+# Known embellishment bonus IDs for Midnight Season 1
+# Add more as they're discovered — these help confirm an item is crafted
+EMBELLISHMENT_BONUS_IDS = {
+    # Placeholder — update with actual Midnight embellishment bonus IDs
+    # Format: bonus_id: "Embellishment Name"
+}
+
+# Item level thresholds for Midnight Season 1 crafted gear
+ILVL_TIERS = {
+    "Myth (Spark + Myth Crests)":  (272, 285),
+    "Hero (Spark + Hero Crests)":  (259, 272),
+    "Epic Base (Spark, no crests)": (252, 259),
+    "Rare (Veteran Crests)":       (233, 246),
+    "Rare (Adventurer Crests)":    (214, 233),
+    "Rare Base (no spark)":        (200, 214),
+}
+
+# Gear slot mapping from WCL slot IDs
+SLOT_NAMES = {
+    0: "Head", 1: "Neck", 2: "Shoulder", 3: "Shirt", 4: "Chest",
+    5: "Waist", 6: "Legs", 7: "Feet", 8: "Wrist", 9: "Hands",
+    10: "Ring 1", 11: "Ring 2", 12: "Trinket 1", 13: "Trinket 2",
+    14: "Back", 15: "Main Hand", 16: "Off Hand",
+}
+
+
+# ─── WarcraftLogs API ────────────────────────────────────────────────────────
+
+def get_access_token(client_id: str, client_secret: str) -> str:
+    """Get OAuth2 access token using client credentials flow."""
+    resp = requests.post(
+        "https://www.warcraftlogs.com/oauth/token",
+        data={"grant_type": "client_credentials"},
+        auth=(client_id, client_secret),
+    )
+    if resp.status_code != 200:
+        print(f"[ERROR] Auth failed ({resp.status_code}): {resp.text}")
+        sys.exit(1)
+    return resp.json()["access_token"]
+
+
+def query_wcl(token: str, query: str, variables: dict = None) -> dict:
+    """Execute a GraphQL query against WarcraftLogs v2 API."""
+    resp = requests.post(
+        "https://www.warcraftlogs.com/api/v2/client",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"query": query, "variables": variables or {}},
+    )
+    if resp.status_code != 200:
+        print(f"[ERROR] API request failed ({resp.status_code}): {resp.text}")
+        sys.exit(1)
+    data = resp.json()
+    if "errors" in data:
+        print(f"[ERROR] GraphQL errors: {json.dumps(data['errors'], indent=2)}")
+        sys.exit(1)
+    return data["data"]
+
+
+def fetch_report_info(token: str, report_code: str) -> dict:
+    """Fetch basic report metadata (title, fights, actors, etc.)."""
+    query = """
+    query ($code: String!) {
+        reportData {
+            report(code: $code) {
+                title
+                startTime
+                endTime
+                guild { name server { name region { slug } } }
+                fights {
+                    id
+                    name
+                    kill
+                    difficulty
+                    encounterID
+                }
+                masterData(translate: true) {
+                    actors(type: "Player") {
+                        id
+                        name
+                        type
+                        subType
+                        server
+                    }
+                }
+            }
+        }
+    }
+    """
+    return query_wcl(token, query, {"code": report_code})["reportData"]["report"]
+
+
+def fetch_player_details(token: str, report_code: str, start_time: float = None, end_time: float = None, fight_ids: list = None) -> dict:
+    """Fetch player info including gear for the report."""
+    # Get player list
+    if fight_ids:
+        query = """
+        query ($code: String!, $fightIDs: [Int]!) {
+            reportData {
+                report(code: $code) {
+                    playerDetails(fightIDs: $fightIDs)
+                }
+            }
+        }
+        """
+        variables = {"code": report_code, "fightIDs": fight_ids}
+    else:
+        query = """
+        query ($code: String!, $startTime: Float!, $endTime: Float!) {
+            reportData {
+                report(code: $code) {
+                    playerDetails(startTime: $startTime, endTime: $endTime)
+                }
+            }
+        }
+        """
+        variables = {"code": report_code, "startTime": start_time, "endTime": end_time}
+    details = query_wcl(token, query, variables)["reportData"]["report"]["playerDetails"]
+    return details
+
+
+def fetch_combatant_info_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch gear data via the events endpoint for a specific fight."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData {
+            report(code: $code) {
+                events(dataType: CombatantInfo, fightIDs: [$fightID], limit: 500) {
+                    data
+                    nextPageTimestamp
+                }
+            }
+        }
+    }
+    """
+    variables = {"code": report_code, "fightID": fight_id}
+    result = query_wcl(token, query, variables)
+    events = result["reportData"]["report"]["events"]
+    return events.get("data", [])
+
+
+def fetch_cast_events(token: str, report_code: str, fight_id: int, start_time: float = None, end_time: float = None) -> list:
+    """Fetch all cast events for a fight. Paginates if needed."""
+    all_data = []
+    next_ts = start_time
+    
+    for _ in range(10):  # Max 10 pages to avoid infinite loop
+        query = """
+        query ($code: String!, $fightID: Int!, $startTime: Float, $endTime: Float) {
+            reportData {
+                report(code: $code) {
+                    events(dataType: Casts, fightIDs: [$fightID], startTime: $startTime, endTime: $endTime, hostilityType: Friendlies, limit: 10000) {
+                        data
+                        nextPageTimestamp
+                    }
+                }
+            }
+        }
+        """
+        variables = {"code": report_code, "fightID": fight_id}
+        if next_ts is not None:
+            variables["startTime"] = next_ts
+        if end_time is not None:
+            variables["endTime"] = end_time
+        
+        result = query_wcl(token, query, variables)
+        events = result["reportData"]["report"]["events"]
+        all_data.extend(events.get("data", []))
+        next_ts = events.get("nextPageTimestamp")
+        if next_ts is None:
+            break
+    
+    return all_data
+
+
+# ─── Tracked Spells ──────────────────────────────────────────────────────────
+
+# Health Potions & Healthstone (spell IDs for the "use" effect)
+HEALTH_POTS = {
+    # Midnight health potions
+    "Silvermoon Health Potion",
+    "Algari Healing Potion",
+    "Healthstone",
+}
+
+# Combat Potions (buff names when the potion effect is applied)
+COMBAT_POTS = {
+    "Light's Potential",
+    "Void-Shrouded Tincture",
+    "Tempered Potion",
+    "Potion of Unwavering Focus",
+    "Fleeting Light's Potential",
+    "Fleeting Void-Shrouded Tincture",
+    "Fleeting Tempered Potion",
+}
+
+# Class defensives (ability names — these are casts, not buffs)
+CLASS_DEFENSIVES = {
+    # Death Knight
+    "Icebound Fortitude", "Anti-Magic Shell", "Vampiric Blood", "Dancing Rune Weapon",
+    # Demon Hunter
+    "Blur", "Darkness", "Netherwalk", "Metamorphosis",
+    # Druid
+    "Barkskin", "Survival Instincts", "Ironbark",
+    # Evoker
+    "Obsidian Scales", "Renewing Blaze",
+    # Hunter
+    "Aspect of the Turtle", "Exhilaration", "Survival of the Fittest",
+    # Mage
+    "Ice Block", "Mirror Image", "Alter Time", "Greater Invisibility",
+    # Monk
+    "Fortifying Brew", "Diffuse Magic", "Zen Meditation", "Dampen Harm",
+    # Paladin
+    "Divine Shield", "Ardent Defender", "Guardian of Ancient Kings", "Shield of Vengeance",
+    # Priest
+    "Desperate Prayer", "Dispersion", "Fade", "Vampiric Embrace",
+    # Rogue
+    "Cloak of Shadows", "Evasion", "Feint", "Vanish",
+    # Shaman
+    "Astral Shift", "Spirit Link Totem",
+    # Warlock
+    "Unending Resolve", "Dark Pact", "Mortal Coil",
+    # Warrior
+    "Shield Wall", "Die by the Sword", "Enraged Regeneration", "Rallying Cry", "Spell Reflection",
+}
+
+ALL_TRACKED = HEALTH_POTS | COMBAT_POTS | CLASS_DEFENSIVES
+
+
+def classify_spell(ability_name: str) -> str | None:
+    """Classify a spell name into a category, or None if not tracked."""
+    if ability_name in HEALTH_POTS:
+        return "Health"
+    if ability_name in COMBAT_POTS:
+        return "Combat Pot"
+    if ability_name in CLASS_DEFENSIVES:
+        return "Defensive"
+    return None
+
+
+def analyze_fight_casts(cast_events: list, fight_start_time: float, actors: dict) -> dict:
+    """Analyze cast events for tracked spells. Returns {sourceID: [{spell, category, timestamp}]}."""
+    results = {}
+    for event in cast_events:
+        ability = event.get("ability", {})
+        ability_name = ability.get("name", "")
+        category = classify_spell(ability_name)
+        if category is None:
+            continue
+        
+        source_id = event.get("sourceID")
+        if source_id is None:
+            continue
+        
+        # Timestamp relative to fight start (in seconds)
+        ts_ms = event.get("timestamp", 0)
+        relative_sec = (ts_ms - fight_start_time) / 1000.0
+        minutes = int(relative_sec // 60)
+        seconds = int(relative_sec % 60)
+        time_str = f"{minutes}:{seconds:02d}"
+        
+        if source_id not in results:
+            results[source_id] = []
+        results[source_id].append({
+            "spell": ability_name,
+            "category": category,
+            "time": time_str,
+            "timestamp_ms": ts_ms,
+        })
+    
+    return results
+
+
+# ─── Gear Analysis ───────────────────────────────────────────────────────────
+
+def detect_craft_quality(bonus_ids: list) -> int | None:
+    """Return crafting quality rank (1-5) if item has a craft quality bonus ID."""
+    for bid in bonus_ids:
+        if bid in CRAFT_QUALITY_BONUS_IDS:
+            return CRAFT_QUALITY_BONUS_IDS[bid]
+    return None
+
+
+def is_crafted(bonus_ids: list) -> bool:
+    """Check if an item is crafted based on bonus IDs."""
+    if any(bid in CRAFTED_INDICATOR_BONUS_IDS for bid in bonus_ids):
+        return True
+    if detect_craft_quality(bonus_ids) is not None:
+        return True
+    return False
+
+
+def classify_ilvl_tier(ilvl: int, quality: int) -> str:
+    """Classify an item's crafting tier based on ilvl."""
+    if quality >= 4:  # Epic
+        if ilvl >= 272:
+            return "Myth (Spark + Myth Crests)"
+        elif ilvl >= 259:
+            return "Hero (Spark + Hero Crests)"
+        elif ilvl >= 252:
+            return "Epic Base (Spark, no crests)"
+        else:
+            return f"Epic (ilvl {ilvl})"
+    else:  # Rare
+        if ilvl >= 233:
+            return "Rare (Veteran Crests)"
+        elif ilvl >= 214:
+            return "Rare (Adventurer Crests)"
+        else:
+            return "Rare Base (no spark)"
+
+
+def estimate_spark_usage(ilvl: int, quality: int, slot: int) -> str:
+    """Estimate spark usage based on ilvl and quality."""
+    if quality < 4:  # Rare items don't use sparks
+        return "No"
+    if ilvl >= 252:
+        if slot in (15, 16):  # Weapons
+            return "Yes (2H = 4 sparks)" if ilvl >= 252 else "Yes (2 sparks)"
+        return "Yes (2 sparks)"
+    return "No"
+
+
+def analyze_players(actors: list, combatant_events: list) -> list:
+    """Analyze all players' gear using masterData actors + combatant events."""
+    records = []
+    
+    # Build actor lookup from masterData: id -> actor info
+    actor_lookup = {}
+    for actor in actors:
+        actor_lookup[actor["id"]] = {
+            "name": actor.get("name", "Unknown"),
+            "class": actor.get("subType", actor.get("type", "Unknown")),
+            "server": actor.get("server", "Unknown"),
+        }
+    
+    # Build gear lookup from combatant events: sourceID -> gear list
+    gear_lookup = {}
+    for event in combatant_events:
+        source_id = event.get("sourceID")
+        gear = event.get("gear", [])
+        if source_id is not None and gear:
+            # Keep the most complete gear entry per player
+            if source_id not in gear_lookup or len(gear) > len(gear_lookup.get(source_id, [])):
+                gear_lookup[source_id] = gear
+    
+    print(f"[DEBUG] Actors from masterData: {len(actor_lookup)}")
+    print(f"[DEBUG] Players with gear from events: {len(gear_lookup)}")
+    
+    # For each player that has gear events, analyze their gear
+    for source_id, gear in gear_lookup.items():
+        actor = actor_lookup.get(source_id, {"name": f"Unknown-{source_id}", "class": "Unknown", "server": "Unknown"})
+        player_has_crafted = False
+        
+        for idx, item in enumerate(gear):
+            if not item or not isinstance(item, dict):
+                continue
+            
+            item_id = item.get("id", 0)
+            if item_id == 0:
+                continue
+            
+            ilvl = item.get("itemLevel", 0)
+            quality = item.get("quality", 0)
+            bonus_ids = item.get("bonusIDs", []) or []
+            slot = idx
+            
+            if is_crafted(bonus_ids):
+                player_has_crafted = True
+                craft_rank = detect_craft_quality(bonus_ids)
+                tier = classify_ilvl_tier(ilvl, quality)
+                spark = estimate_spark_usage(ilvl, quality, slot)
+                
+                records.append({
+                    "player": actor["name"],
+                    "class": actor["class"],
+                    "server": actor["server"],
+                    "slot": SLOT_NAMES.get(slot, f"Slot {slot}"),
+                    "item_id": item_id,
+                    "item_level": ilvl,
+                    "quality": "Epic" if quality >= 4 else "Rare" if quality >= 3 else "Uncommon",
+                    "craft_rank": f"Rank {craft_rank}" if craft_rank else "Unknown",
+                    "tier": tier,
+                    "spark_used": spark,
+                    "bonus_ids": ", ".join(str(b) for b in bonus_ids),
+                })
+        
+        if not player_has_crafted:
+            records.append({
+                "player": actor["name"],
+                "class": actor["class"],
+                "server": actor["server"],
+                "slot": "—",
+                "item_id": 0,
+                "item_level": 0,
+                "quality": "—",
+                "craft_rank": "—",
+                "tier": "NO CRAFTED GEAR FOUND",
+                "spark_used": "—",
+                "bonus_ids": "",
+            })
+    
+    return records
+    
+    return records
+    
+    return records
+
+
+# ─── HTML Output ─────────────────────────────────────────────────────────────
+
+CLASS_COLORS = {
+    "DeathKnight": "#C41E3A", "DemonHunter": "#A330C9", "Druid": "#FF7C0A",
+    "Evoker": "#33937F", "Hunter": "#AAD372", "Mage": "#3FC7EB",
+    "Monk": "#00FF98", "Paladin": "#F48CBA", "Priest": "#FFFFFF",
+    "Rogue": "#FFF468", "Shaman": "#0070DD", "Warlock": "#8788EE",
+    "Warrior": "#C69B6D",
+}
+
+
+def write_html(records: list, report_info: dict, report_code: str, output_path: str):
+    """Write the audit data to a formatted HTML file with horizontal item layout."""
+    guild_name = "Unknown Guild"
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "Unknown Guild")
+    report_title = report_info.get("title", report_code)
+    report_date = ""
+    if report_info.get("startTime"):
+        report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
+
+    # Group records by player: { player_name: { class, items: [...] } }
+    players = {}
+    for rec in records:
+        p = rec["player"]
+        if p not in players:
+            players[p] = {"class": rec["class"], "items": []}
+        if rec["item_id"] != 0:
+            players[p]["items"].append(rec)
+
+    # Find max crafted items across any player (for column count)
+    max_items = max((len(p["items"]) for p in players.values()), default=0)
+    max_items = max(max_items, 2)  # At least 2 item column groups
+
+    total_players = len(players)
+    total_crafted = sum(len(p["items"]) for p in players.values())
+    no_craft = sum(1 for p in players.values() if len(p["items"]) == 0)
+
+    # Build table rows
+    table_rows = ""
+    for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
+        cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
+        row_class = "no-craft" if not pdata["items"] else ""
+        
+        row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
+        
+        for i in range(max_items):
+            div = ' divider' if i > 0 else ''  # Add divider class before Item 2, 3, etc.
+            if i < len(pdata["items"]):
+                item = pdata["items"][i]
+                iid = item["item_id"]
+                spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
+                spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
+                item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
+                row += f'<td class="item-cell{div}">{item_link}</td>'
+                row += f'<td>{escape(item["slot"])}</td>'
+                row += f'<td class="center">{item["item_level"]}</td>'
+                row += f'<td>{escape(item["craft_rank"])}</td>'
+                row += f'<td class="center {spark_cls}">{spark_txt}</td>'
+            else:
+                row += f'<td class="empty{div}">—</td>'
+                row += '<td class="empty">—</td>' * 4
+
+        row += '</tr>'
+        table_rows += row
+
+    # Build header groups
+    header_row = '<th class="player-header">Player</th>'
+    for i in range(max_items):
+        n = i + 1
+        div = ' divider' if i > 0 else ''
+        header_row += f'<th class="{div}">Item {n}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Craft Audit — {escape(guild_name)}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 20px; }}
+h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
+.subtitle {{ color: #888; font-size: 13px; margin-bottom: 20px; }}
+.subtitle a {{ color: #7289DA; text-decoration: none; }}
+.stats {{ display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }}
+.stat-box {{ background: #16213e; border-radius: 8px; padding: 12px 20px; }}
+.stat-box .num {{ font-size: 26px; font-weight: bold; color: #7289DA; }}
+.stat-box .label {{ font-size: 11px; color: #888; text-transform: uppercase; }}
+.stat-box.warn .num {{ color: #ffc107; }}
+.search-box {{ margin: 12px 0; }}
+.search-box input {{ background: #16213e; border: 1px solid #333; color: #e0e0e0; padding: 8px 14px; border-radius: 6px; width: 300px; font-size: 14px; }}
+.search-box input::placeholder {{ color: #555; }}
+.table-wrap {{ overflow-x: auto; border-radius: 8px; }}
+table {{ border-collapse: collapse; min-width: 100%; }}
+th {{ background: #16213e; color: #7289DA; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none; }}
+th:hover {{ background: #1a2a50; }}
+th.player-header {{ position: sticky; left: 0; z-index: 2; background: #16213e; }}
+/* Alternating item group backgrounds */
+th:nth-child(5n+2), th:nth-child(5n+3), th:nth-child(5n+4), th:nth-child(5n+5), th:nth-child(5n+6) {{  }}
+td {{ padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; white-space: nowrap; }}
+.player-cell {{ font-weight: bold; position: sticky; left: 0; background: #0f3460; z-index: 1; }}
+tr:hover .player-cell {{ background: #162a50; }}
+tr:hover {{ background: #162a50; }}
+tr.no-craft {{ background: rgba(255,160,0,0.08); }}
+tr.no-craft:hover {{ background: rgba(255,160,0,0.15); }}
+tr.no-craft .player-cell {{ background: rgba(255,160,0,0.08); }}
+tr.no-craft:hover .player-cell {{ background: rgba(255,160,0,0.15); }}
+.center {{ text-align: center; }}
+.spark-yes {{ color: #4caf50; font-weight: bold; }}
+.item-cell a {{ color: #a48cff; text-decoration: none; }}
+.item-cell a:hover {{ text-decoration: underline; color: #c4b0ff; }}
+.empty {{ color: #333; }}
+/* Item group separators */
+td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.3); }}
+a {{ color: #7289DA; }}
+</style>
+<!-- Wowhead tooltips + icons -->
+<script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
+<script src="https://wow.zamimg.com/js/tooltips.js"></script>
+</head>
+<body>
+
+<h1>Crafted Gear Audit — {escape(guild_name)}</h1>
+<div class="subtitle">{escape(report_title)} ({report_date}) · <a href="https://www.warcraftlogs.com/reports/{report_code}" target="_blank">View on WarcraftLogs</a></div>
+
+<div class="stats">
+  <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
+  <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
+  <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
+</div>
+
+<div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterTable(this)"></div>
+
+<div class="table-wrap">
+<table id="main-table">
+<thead><tr>{header_row}</tr></thead>
+<tbody>{table_rows}</tbody>
+</table>
+</div>
+
+<script>
+function filterTable(input) {{
+  const filter = input.value.toLowerCase();
+  const rows = document.getElementById('main-table').tBodies[0].rows;
+  for (let row of rows) {{
+    const name = row.cells[0].textContent.toLowerCase();
+    row.style.display = name.includes(filter) ? '' : 'none';
+  }}
+}}
+</script>
+
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"\n[OK] HTML report saved to: {output_path}")
+
+
+# ─── Roster Mapping (The Rupture) ────────────────────────────────────────────
+
+# Maps character name (lowercase) -> (Player name, "Main" or "Alt")
+ROSTER = {}
+# (Player, [(char_name, Main/Alt)])
+# Role is determined per-player, not per-char
+_roster_raw = [
+    ("Nope",        "Tank",    [("NopeDK","Alt"), ("Nopebrew","Main")]),
+    ("Phyxius",     "Tank",    [("Phyxius","Main"), ("Phyxy","Alt")]),
+    ("Toshiko",     "Healer",  [("Toshiko","Alt"), ("Evokenooblal","Alt")]),
+    ("Minxy",       "Healer",  [("Minxymender","Alt"), ("Minxycat","Main")]),
+    ("Hipe",        "Healer",  [("Cype","Alt"), ("Wype","Main")]),
+    ("Zush",        "Healer",  [("Zush","Main"), ("Züsh","Main"), ("Ryukho","Alt")]),
+    ("Jimy",        "DPS",     [("jaime","Main")]),
+    ("Ice",         "DPS",     [("Icecoldleap","Main"), ("Chocoice","Alt")]),
+    ("Zodiacos",    "DPS",     [("Zodiacos","Alt")]),
+    ("Kutcher",     "DPS",     [("Kutcherdhtwo","Alt"), ("Kutchersplit","Alt")]),
+    ("Hypno",       "DPS",     [("Hypno","Main"), ("Hypnodh","Alt")]),
+    ("Brunaine",    "DPS",     [("Brunainevoke","Alt"), ("Brunainehunt","Alt")]),
+    ("Beldryk",     "DPS",     [("beldrýk","Main"), ("Beldrýk","Main"), ("beldryc","Alt")]),
+    ("Potrenu",     "DPS",     [("Potrenu","Main"), ("Potrenuu","Alt")]),
+    ("Shamishan",   "DPS",     [("Samdracson","Alt"), ("Shamishan","Main")]),
+    ("Madonis",     "DPS",     [("Madonis","Alt"), ("Madonisvoker","Alt")]),
+    ("Kaze",        "DPS",     [("Kazeofscales","Main"), ("Käz","Main"), ("Kazeoflight","Alt")]),
+    ("Upyeah",      "DPS",     [("upyeah","Alt"), ("Upyeah","Alt"), ("upyeäh","Alt")]),
+    ("Mindhacker",  "DPS",     [("Mindrage","Alt"), ("Mindhacker","Main")]),
+    ("Uncleyoinky", "DPS",     [("allblues","Alt"), ("Allblues","Alt"), ("uncleyoinky","Main")]),
+    ("Nizze",       "DPS",     [("Nizzedk","Alt"), ("Nizze","Main")]),
+    ("Mostbanned",  "DPS",     [("Mosta","Alt"), ("Mostbanned","Alt")]),
+    ("Malheiro",    "DPS",     [("Rödinhas","Alt"), ("Malheiro","Main")]),
+    ("Bolters",     "DPS",     [("Schmosba","Main"), ("Ipala","Alt")]),
+    ("Tinet",       "DPS",     [("Pingveryhigh","Alt"), ("Guldanrämsay","Alt")]),
+    ("Doomkry",     "DPS",     [("Doomkry","Main"), ("Lockry","Alt")]),
+]
+PLAYER_ROLES = {}  # player_name -> "Tank"/"Healer"/"DPS"
+for player_name, role, chars in _roster_raw:
+    PLAYER_ROLES[player_name] = role
+    for char_name, main_alt in chars:
+        ROSTER[char_name.lower()] = (player_name, main_alt)
+
+
+def lookup_roster(char_name: str):
+    """Look up a character in the roster. Returns (player_name, 'Main'/'Alt') or (char_name, 'Unknown')."""
+    return ROSTER.get(char_name.lower(), (char_name, "Unknown"))
+
+
+# ─── XLSX Output ─────────────────────────────────────────────────────────────
+
+# Class background colors (lighter/muted versions for row backgrounds)
+XLSX_CLASS_BG = {
+    "DeathKnight": "77C41E3A", "DemonHunter": "77A330C9", "Druid": "77FF7C0A",
+    "Evoker": "7733937F", "Hunter": "77AAD372", "Mage": "773FC7EB",
+    "Monk": "7700FF98", "Paladin": "77F48CBA", "Priest": "77AAAAAA",
+    "Rogue": "77FFF468", "Shaman": "770070DD", "Warlock": "778788EE",
+    "Warrior": "77C69B6D",
+}
+
+
+def write_xlsx(records: list, report_info: dict, report_code: str, output_path: str, split_data: dict = None):
+    """Write crafted gear data to XLSX with Mains, Alts, and Split tabs."""
+    wb = Workbook()
+    
+    guild_name = "Unknown Guild"
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "Unknown Guild")
+    report_title = report_info.get("title", report_code)
+    report_date = ""
+    if report_info.get("startTime"):
+        report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
+
+    # Group records by player and enrich with roster data
+    players = {}
+    for rec in records:
+        char_name = rec["player"]
+        player_name, role = lookup_roster(char_name)
+        key = (player_name, char_name)
+        if key not in players:
+            players[key] = {"player": player_name, "char": char_name, "class": rec["class"], "role": role, "items": []}
+        if rec["item_id"] != 0:
+            players[key]["items"].append(rec)
+
+    # Split into mains and alts
+    mains = {k: v for k, v in players.items() if v["role"] == "Main"}
+    alts = {k: v for k, v in players.items() if v["role"] != "Main"}
+
+    # Find max items for column count
+    all_items_counts = [len(v["items"]) for v in players.values()]
+    max_items = max(all_items_counts) if all_items_counts else 2
+    max_items = max(max_items, 2)
+
+    # Role sort order
+    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
+
+    def sort_key(k):
+        pdata = players.get(k) or mains.get(k) or alts.get(k)
+        player_name = pdata["player"]
+        role_rank = ROLE_ORDER.get(PLAYER_ROLES.get(player_name, "DPS"), 2)
+        return (role_rank, -len(pdata["items"]), player_name.lower())
+
+    # Styling
+    header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill("solid", fgColor="1a1a2e")
+    black_font = Font(name="Arial", size=10, color="000000")
+    black_bold = Font(name="Arial", size=10, color="000000", bold=True)
+    border = Border(bottom=Side(style="thin", color="333333"))
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center")
+    spark_font = Font(name="Arial", size=10, color="006600", bold=True)
+    no_spark_font = Font(name="Arial", size=10, color="000000")
+    no_craft_fill = PatternFill("solid", fgColor="3D3D3D")
+    no_craft_font = Font(name="Arial", size=10, color="999999")
+
+    def get_class_fill(cls_name):
+        color = XLSX_CLASS_BG.get(cls_name, "77666666")
+        return PatternFill("solid", fgColor=color)
+
+    def build_sheet(ws, title, player_data):
+        # Title
+        total_cols = 2 + max_items * 3
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+        ws["A1"].value = f"{title} — {guild_name} — {report_title} ({report_date})"
+        ws["A1"].font = Font(name="Arial", bold=True, size=13, color="7289DA")
+        ws.row_dimensions[1].height = 26
+
+        ws["A2"].value = f"Report: https://www.warcraftlogs.com/reports/{report_code}"
+        ws["A2"].font = Font(name="Arial", size=9, color="888888", italic=True)
+
+        # Headers: Player | Char | Slot 1 | Ilvl 1 | Spark? 1 | Slot 2 | Ilvl 2 | Spark? 2 ...
+        hr = 4
+        headers = ["Player", "Char"]
+        for i in range(max_items):
+            headers += [f"Slot {i+1}", f"Ilvl", f"Spark?"]
+        
+        col_widths = [16, 18] + [12, 8, 8] * max_items
+        for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
+            cell = ws.cell(row=hr, column=ci, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+            cell.border = border
+            ws.column_dimensions[get_column_letter(ci)].width = w
+            # Divider before each item group
+            if ci > 2 and (ci - 3) % 3 == 0 and (ci - 3) // 3 > 0:
+                cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
+        ws.row_dimensions[hr].height = 20
+        ws.freeze_panes = "A5"
+
+        # Data rows — sorted by role then items
+        row = hr + 1
+        current_role = None
+        for key in sorted(player_data.keys(), key=sort_key):
+            pdata = player_data[key]
+            cls = pdata["class"]
+            cls_fill = get_class_fill(cls)
+            has_items = len(pdata["items"]) > 0
+            player_name = pdata["player"]
+            player_role = PLAYER_ROLES.get(player_name, "DPS")
+
+            # Role separator
+            if player_role != current_role:
+                current_role = player_role
+                sep_cell = ws.cell(row=row, column=1, value=f"── {current_role}s ──")
+                sep_cell.font = Font(name="Arial", size=9, bold=True, color="7289DA")
+                for ci in range(1, total_cols + 1):
+                    ws.cell(row=row, column=ci).fill = PatternFill("solid", fgColor="111122")
+                    ws.cell(row=row, column=ci).border = border
+                row += 1
+
+            if not has_items:
+                fill = no_craft_fill
+                name_font = no_craft_font
+                txt_font = no_craft_font
+            else:
+                fill = cls_fill
+                name_font = black_bold
+                txt_font = black_font
+
+            # Player name
+            c = ws.cell(row=row, column=1, value=player_name)
+            c.font = name_font
+            c.fill = fill
+            c.border = border
+            c.alignment = left
+
+            # Char name
+            c = ws.cell(row=row, column=2, value=pdata["char"])
+            c.font = txt_font
+            c.fill = fill
+            c.border = border
+            c.alignment = left
+
+            # Items: Slot | Ilvl | Spark?
+            for i in range(max_items):
+                base_col = 3 + i * 3
+                is_divider = i > 0
+
+                if i < len(pdata["items"]):
+                    item = pdata["items"][i]
+                    spark_yes = "Yes" in str(item["spark_used"])
+                    
+                    vals = [item["slot"], item["item_level"], "Yes" if spark_yes else "No"]
+                    for j, val in enumerate(vals):
+                        cell = ws.cell(row=row, column=base_col + j, value=val)
+                        cell.fill = fill
+                        cell.border = border
+                        if j == 1:
+                            cell.alignment = center
+                            cell.font = txt_font
+                        elif j == 2:
+                            cell.alignment = center
+                            cell.font = spark_font if spark_yes else txt_font
+                        else:
+                            cell.font = txt_font
+                        # Divider
+                        if j == 0 and is_divider:
+                            cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
+                else:
+                    for j in range(3):
+                        cell = ws.cell(row=row, column=base_col + j, value="—")
+                        cell.font = no_craft_font if not has_items else Font(name="Arial", size=10, color="444444")
+                        cell.fill = fill
+                        cell.border = border
+                        cell.alignment = center
+                        if j == 0 and is_divider:
+                            cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
+
+            row += 1
+
+        # Auto-filter
+        ws.auto_filter.ref = f"A{hr}:{get_column_letter(total_cols)}{row - 1}"
+
+    # Build crafted gear sheets
+    ws_mains = wb.active
+    ws_mains.title = "Mains"
+    build_sheet(ws_mains, "Mains — Crafted Gear", mains)
+
+    ws_alts = wb.create_sheet("Alts")
+    build_sheet(ws_alts, "Alts — Crafted Gear", alts)
+
+    # Build split consumable/defensive tabs
+    if split_data:
+        for split_name, split_fights in split_data.items():
+            ws_split = wb.create_sheet(split_name)
+            _build_split_sheet(ws_split, split_name, split_fights, report_info, actors_list=None)
+
+    wb.save(output_path)
+    print(f"[OK] XLSX report saved to: {output_path}")
+
+
+def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
+    """Build a split tab showing consumable/defensive usage per player per fight.
+    
+    fights_data: list of { "fight_name": str, "difficulty": str, "player_casts": { sourceID: [cast_info] } }
+    """
+    header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill("solid", fgColor="1a1a2e")
+    data_font = Font(name="Arial", size=10, color="000000")
+    border = Border(bottom=Side(style="thin", color="333333"))
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center")
+    wrap = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+    cat_fills = {
+        "Health": PatternFill("solid", fgColor="77CC4444"),
+        "Combat Pot": PatternFill("solid", fgColor="77AA44CC"),
+        "Defensive": PatternFill("solid", fgColor="774488CC"),
+    }
+
+    ws["A1"].value = title
+    ws["A1"].font = Font(name="Arial", bold=True, size=13, color="7289DA")
+    ws.row_dimensions[1].height = 26
+
+    # Collect all unique players across all fights in this split
+    all_player_ids = set()
+    for fd in fights_data:
+        all_player_ids.update(fd.get("player_casts", {}).keys())
+
+    # Get actor lookup
+    actors = {}
+    if report_info.get("masterData") and report_info["masterData"].get("actors"):
+        for a in report_info["masterData"]["actors"]:
+            actors[a["id"]] = a
+
+    # Sort players by roster role
+    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
+    def player_sort(pid):
+        actor = actors.get(pid, {})
+        name = actor.get("name", "")
+        player_name, _ = lookup_roster(name)
+        role = PLAYER_ROLES.get(player_name, "DPS")
+        return (ROLE_ORDER.get(role, 2), player_name.lower())
+
+    sorted_players = sorted(all_player_ids, key=player_sort)
+
+    # Headers: Player | Boss 1: Health | Combat | Defensive | Boss 2: Health | ...
+    hr = 3
+    headers = ["Player"]
+    col_widths = [18]
+    for fd in fights_data:
+        fname = fd.get("fight_name", "Boss")
+        headers += [f"{fname}\nHealth Pots", f"{fname}\nCombat Pots", f"{fname}\nDefensives"]
+        col_widths += [20, 20, 28]
+
+    for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
+        cell = ws.cell(row=hr, column=ci, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+        ws.column_dimensions[get_column_letter(ci)].width = w
+        # Divider before each boss group
+        if ci > 1 and (ci - 2) % 3 == 0:
+            cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
+    ws.row_dimensions[hr].height = 36
+    ws.freeze_panes = "A4"
+
+    # Data rows
+    row = hr + 1
+    for pid in sorted_players:
+        actor = actors.get(pid, {})
+        char_name = actor.get("name", f"ID-{pid}")
+        cls = actor.get("subType", "Unknown")
+        cls_bg = XLSX_CLASS_BG.get(cls, "77666666")
+        cls_fill = PatternFill("solid", fgColor=cls_bg)
+        player_name, _ = lookup_roster(char_name)
+
+        c = ws.cell(row=row, column=1, value=f"{player_name}\n({char_name})")
+        c.font = Font(name="Arial", size=10, color="000000", bold=True)
+        c.fill = cls_fill
+        c.border = border
+        c.alignment = Alignment(vertical="center", wrap_text=True)
+
+        for fi, fd in enumerate(fights_data):
+            base_col = 2 + fi * 3
+            casts = fd.get("player_casts", {}).get(pid, [])
+            
+            # Group by category
+            health = [c for c in casts if c["category"] == "Health"]
+            combat = [c for c in casts if c["category"] == "Combat Pot"]
+            defensives = [c for c in casts if c["category"] == "Defensive"]
+
+            for j, (items, cat) in enumerate([(health, "Health"), (combat, "Combat Pot"), (defensives, "Defensive")]):
+                cell = ws.cell(row=row, column=base_col + j)
+                cell.fill = cls_fill
+                cell.border = border
+                
+                if items:
+                    lines = [f"{it['spell']} @ {it['time']}" for it in items]
+                    cell.value = "\n".join(lines)
+                    cell.font = data_font
+                    cell.alignment = wrap
+                else:
+                    cell.value = "—"
+                    cell.font = Font(name="Arial", size=10, color="666666")
+                    cell.alignment = center
+
+                # Divider
+                if j == 0:
+                    cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
+
+        ws.row_dimensions[row].height = max(20, 14 * max(
+            sum(1 for c in fd.get("player_casts", {}).get(pid, []) for fd in fights_data) // max(len(fights_data), 1),
+            1
+        ))
+        row += 1
+
+def load_config(path="wcl_config.txt"):
+    """Load credentials from a config file if it exists."""
+    config = {}
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    key, val = line.split("=", 1)
+                    config[key.strip()] = val.strip()
+    except FileNotFoundError:
+        pass
+    return config
+
+
+def main():
+    print("=" * 60)
+    print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
+    print("=" * 60)
+    
+    # Try loading from config file
+    config = load_config()
+    
+    if config.get("CLIENT_ID") and config.get("CLIENT_SECRET"):
+        client_id = config["CLIENT_ID"]
+        client_secret = config["CLIENT_SECRET"]
+        print(f"\n[OK] Loaded credentials from wcl_config.txt (Client ID: {client_id[:8]}...)")
+    else:
+        client_id = input("\nWarcraftLogs Client ID: ").strip()
+        client_secret = input("WarcraftLogs Client Secret: ").strip()
+    
+    if not client_id or not client_secret:
+        print("[ERROR] Both Client ID and Client Secret are required.")
+        sys.exit(1)
+    
+    # Authenticate
+    print("\n[...] Authenticating with WarcraftLogs...")
+    token = get_access_token(client_id, client_secret)
+    print("[OK] Authenticated successfully.")
+    
+    # Report code — check config first
+    if config.get("REPORT_URL"):
+        report_input = config["REPORT_URL"]
+        print(f"[OK] Loaded report URL from config: {report_input}")
+    else:
+        report_input = input("\nReport code or URL: ").strip()
+    # Extract code from URL if full URL was pasted
+    if "warcraftlogs.com" in report_input:
+        # URL format: https://www.warcraftlogs.com/reports/XXXXXXXXXXXX
+        parts = report_input.rstrip("/").split("/")
+        report_code = parts[-1].split("#")[0].split("?")[0]
+    else:
+        report_code = report_input
+    
+    print(f"\n[...] Fetching report info for: {report_code}")
+    report_info = fetch_report_info(token, report_code)
+    
+    guild_name = ""
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "")
+    print(f"[OK] Report: {report_info.get('title', 'Untitled')} ({guild_name})")
+    
+    print("\n[...] Fetching players from ALL fights...")
+    
+    # Get all fights, filter to boss encounters (encounterID > 0) with kills
+    all_raw_fights = report_info.get("fights", [])
+    fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
+    all_fights = fights if fights else []
+    selected_fights = all_fights  # Default to all
+    
+    if all_fights:
+        print(f"\nBoss kills found ({len(all_fights)}):")
+        for f in all_fights:
+            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(f.get("difficulty", 0), f"D{f.get('difficulty', '?')}")
+            print(f"  [{f['id']:>3}] {f['name']} — {diff} (Kill)")
+        
+        fight_input = input("\nFight IDs to analyze (comma-separated, or 'all'): ").strip()
+        if fight_input.lower() != "all" and fight_input != "":
+            selected_ids = [int(x.strip()) for x in fight_input.split(",") if x.strip().isdigit()]
+            selected_fights = [f for f in all_fights if f["id"] in selected_ids]
+    
+    # Get actors from masterData (player names, classes, servers)
+    actors = []
+    if report_info.get("masterData") and report_info["masterData"].get("actors"):
+        actors = report_info["masterData"]["actors"]
+    print(f"[OK] Found {len(actors)} player actors in report.")
+    
+    # Fetch gear via CombatantInfo events for each fight
+    all_combatant_events = []
+    for fight in selected_fights:
+        fid = fight["id"]
+        fname = fight["name"]
+        print(f"  [...] Fetching gear from fight {fid}: {fname}...")
+        try:
+            events = fetch_combatant_info_events(token, report_code, fid)
+            all_combatant_events.extend(events)
+            print(f"         Got {len(events)} players' gear.")
+        except Exception as e:
+            print(f"    [WARN] Could not fetch gear events for fight {fid}: {e}")
+    
+    # Debug: dump raw API responses
+    debug_path = "wcl_debug_response.json"
+    with open(debug_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "actors": actors,
+            "combatantEvents": all_combatant_events[:3],
+            "totalCombatantEvents": len(all_combatant_events),
+        }, f, indent=2, ensure_ascii=False)
+    print(f"[DEBUG] Raw API responses saved to: {debug_path}")
+    
+    print("\n[...] Analyzing crafted gear...")
+    records = analyze_players(actors, all_combatant_events)
+    
+    crafted_count = sum(1 for r in records if r["item_id"] != 0)
+    player_count = len(set(r["player"] for r in records))
+    no_craft_count = sum(1 for r in records if r["item_id"] == 0)
+    
+    print(f"[OK] Found {crafted_count} crafted items across {player_count} players.")
+    if no_craft_count > 0:
+        print(f"[!!] {no_craft_count} player(s) have NO detected crafted gear.")
+    
+    # ── Split detection & cast tracking ──
+    # Group kills by encounter — first kill = Split 1, second = Split 2
+    encounter_kills = {}
+    for fight in selected_fights:
+        eid = fight.get("encounterID", 0)
+        if eid not in encounter_kills:
+            encounter_kills[eid] = []
+        encounter_kills[eid].append(fight)
+    
+    split1_fights = []
+    split2_fights = []
+    for eid, kills in encounter_kills.items():
+        kills.sort(key=lambda f: f["id"])
+        if len(kills) >= 1:
+            split1_fights.append(kills[0])
+        if len(kills) >= 2:
+            split2_fights.append(kills[1])
+    
+    print(f"\n[...] Detected {len(split1_fights)} Split 1 fights, {len(split2_fights)} Split 2 fights.")
+    
+    # Fetch cast events for each split
+    split_data = {}
+    report_start = report_info.get("startTime", 0)
+    
+    actor_lookup = {a["id"]: a for a in actors}
+    
+    for split_name, split_fights_list in [("Split 1", split1_fights), ("Split 2", split2_fights)]:
+        if not split_fights_list:
+            continue
+        
+        print(f"\n[...] Fetching spell usage for {split_name}...")
+        split_fight_data = []
+        
+        for fight in split_fights_list:
+            fid = fight["id"]
+            fname = fight["name"]
+            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
+            print(f"  [...] Fetching casts for {fname} ({diff})...")
+            
+            try:
+                cast_events = fetch_cast_events(token, report_code, fid)
+                fight_start = report_start  # WCL timestamps are absolute
+                # Get fight-relative start from first event if available
+                if cast_events:
+                    fight_start = min(e.get("timestamp", report_start) for e in cast_events[:5])
+                
+                player_casts = analyze_fight_casts(cast_events, fight_start, actor_lookup)
+                
+                total_tracked = sum(len(v) for v in player_casts.values())
+                print(f"         Found {total_tracked} tracked spell uses across {len(player_casts)} players.")
+                
+                split_fight_data.append({
+                    "fight_name": f"{fname} ({diff})",
+                    "fight_id": fid,
+                    "player_casts": player_casts,
+                })
+            except Exception as e:
+                print(f"    [WARN] Could not fetch casts for fight {fid}: {e}")
+        
+        split_data[split_name] = split_fight_data
+    
+    # Output
+    html_path = "craft_audit.html"
+    write_html(records, report_info, report_code, html_path)
+
+    xlsx_path = "craft_audit.xlsx"
+    write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data)
+    
+    print(f"\nDone! Refresh craft_audit.html in your browser, or open craft_audit.xlsx.\n")
+
+
+if __name__ == "__main__":
+    main()

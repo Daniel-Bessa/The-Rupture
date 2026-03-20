@@ -1,0 +1,19 @@
+# Credentials — never commit these
+wcl_config.txt
+
+# Output files (generated each run)
+craft_audit.html
+craft_audit.xlsx
+craft_audit_*.html
+craft_audit_*.xlsx
+wcl_debug_response.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db
