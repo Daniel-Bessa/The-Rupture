@@ -119,6 +119,8 @@ def fetch_report_info(token: str, report_code: str) -> dict:
                     kill
                     difficulty
                     encounterID
+                    startTime
+                    endTime
                 }
                 masterData(translate: true) {
                     actors(type: "Player") {
@@ -219,67 +221,120 @@ def fetch_cast_events(token: str, report_code: str, fight_id: int, start_time: f
     return all_data
 
 
-# ─── Tracked Spells ──────────────────────────────────────────────────────────
+# ─── Tracked Spells (matched by abilityGameID) ───────────────────────────────
+# WCL cast events return abilityGameID (numeric), not ability names.
 
-# Health Potions & Healthstone (spell IDs for the "use" effect)
-HEALTH_POTS = {
-    # Midnight health potions
-    "Silvermoon Health Potion",
-    "Algari Healing Potion",
-    "Healthstone",
+# Health Potions & Healthstone
+HEALTH_POT_IDS = {
+    5512,    # Healthstone
+    432112,  # Algari Healing Potion (TWW)
+    431924,  # Algari Healing Potion (alternate)
+    # Add Midnight health potion IDs here when known
 }
 
-# Combat Potions (buff names when the potion effect is applied)
-COMBAT_POTS = {
-    "Light's Potential",
-    "Void-Shrouded Tincture",
-    "Tempered Potion",
-    "Potion of Unwavering Focus",
-    "Fleeting Light's Potential",
-    "Fleeting Void-Shrouded Tincture",
-    "Fleeting Tempered Potion",
+# Combat Potions
+COMBAT_POT_IDS = {
+    431932,  # Tempered Potion (TWW)
+    432098,  # Potion of Unwavering Focus (TWW)
+    431945,  # Light's Potential (TWW)
+    432106,  # Void-Shrouded Tincture (TWW)
+    # Add Midnight combat potion IDs here when known
 }
 
-# Class defensives (ability names — these are casts, not buffs)
-CLASS_DEFENSIVES = {
+# Class Defensives
+CLASS_DEFENSIVE_IDS = {
     # Death Knight
-    "Icebound Fortitude", "Anti-Magic Shell", "Vampiric Blood", "Dancing Rune Weapon",
+    48792,   # Icebound Fortitude
+    48707,   # Anti-Magic Shell
+    55233,   # Vampiric Blood
+    49028,   # Dancing Rune Weapon
     # Demon Hunter
-    "Blur", "Darkness", "Netherwalk", "Metamorphosis",
+    198589,  # Blur
+    196718,  # Darkness
+    196555,  # Netherwalk
+    187827,  # Metamorphosis (Vengeance)
     # Druid
-    "Barkskin", "Survival Instincts", "Ironbark",
+    22812,   # Barkskin
+    61336,   # Survival Instincts
+    102342,  # Ironbark
     # Evoker
-    "Obsidian Scales", "Renewing Blaze",
+    363916,  # Obsidian Scales
+    374348,  # Renewing Blaze
     # Hunter
-    "Aspect of the Turtle", "Exhilaration", "Survival of the Fittest",
+    186265,  # Aspect of the Turtle
+    109304,  # Exhilaration
+    264735,  # Survival of the Fittest
     # Mage
-    "Ice Block", "Mirror Image", "Alter Time", "Greater Invisibility",
+    45438,   # Ice Block
+    55342,   # Mirror Image
+    108978,  # Alter Time
+    110959,  # Greater Invisibility
     # Monk
-    "Fortifying Brew", "Diffuse Magic", "Zen Meditation", "Dampen Harm",
+    115203,  # Fortifying Brew
+    122783,  # Diffuse Magic
+    131645,  # Zen Meditation
+    122278,  # Dampen Harm
     # Paladin
-    "Divine Shield", "Ardent Defender", "Guardian of Ancient Kings", "Shield of Vengeance",
+    642,     # Divine Shield
+    31850,   # Ardent Defender
+    86659,   # Guardian of Ancient Kings
+    184662,  # Shield of Vengeance
     # Priest
-    "Desperate Prayer", "Dispersion", "Fade", "Vampiric Embrace",
+    19236,   # Desperate Prayer
+    47585,   # Dispersion
+    586,     # Fade
+    15286,   # Vampiric Embrace
     # Rogue
-    "Cloak of Shadows", "Evasion", "Feint", "Vanish",
+    31224,   # Cloak of Shadows
+    5277,    # Evasion
+    1966,    # Feint
+    1856,    # Vanish
     # Shaman
-    "Astral Shift", "Spirit Link Totem",
+    108271,  # Astral Shift
+    98008,   # Spirit Link Totem
     # Warlock
-    "Unending Resolve", "Dark Pact", "Mortal Coil",
+    104773,  # Unending Resolve
+    108416,  # Dark Pact
+    6789,    # Mortal Coil
     # Warrior
-    "Shield Wall", "Die by the Sword", "Enraged Regeneration", "Rallying Cry", "Spell Reflection",
+    871,     # Shield Wall
+    118038,  # Die by the Sword
+    184364,  # Enraged Regeneration
+    97462,   # Rallying Cry
+    23920,   # Spell Reflection
 }
 
-ALL_TRACKED = HEALTH_POTS | COMBAT_POTS | CLASS_DEFENSIVES
+ALL_TRACKED_IDS = HEALTH_POT_IDS | COMBAT_POT_IDS | CLASS_DEFENSIVE_IDS
+
+# ID → display name
+SPELL_NAMES = {
+    5512: "Healthstone", 432112: "Algari Healing Potion", 431924: "Algari Healing Potion",
+    431932: "Tempered Potion", 432098: "Potion of Unwavering Focus",
+    431945: "Light's Potential", 432106: "Void-Shrouded Tincture",
+    48792: "Icebound Fortitude", 48707: "Anti-Magic Shell", 55233: "Vampiric Blood", 49028: "Dancing Rune Weapon",
+    198589: "Blur", 196718: "Darkness", 196555: "Netherwalk", 187827: "Metamorphosis",
+    22812: "Barkskin", 61336: "Survival Instincts", 102342: "Ironbark",
+    363916: "Obsidian Scales", 374348: "Renewing Blaze",
+    186265: "Aspect of the Turtle", 109304: "Exhilaration", 264735: "Survival of the Fittest",
+    45438: "Ice Block", 55342: "Mirror Image", 108978: "Alter Time", 110959: "Greater Invisibility",
+    115203: "Fortifying Brew", 122783: "Diffuse Magic", 131645: "Zen Meditation", 122278: "Dampen Harm",
+    642: "Divine Shield", 31850: "Ardent Defender", 86659: "Guardian of Ancient Kings", 184662: "Shield of Vengeance",
+    19236: "Desperate Prayer", 47585: "Dispersion", 586: "Fade", 15286: "Vampiric Embrace",
+    31224: "Cloak of Shadows", 5277: "Evasion", 1966: "Feint", 1856: "Vanish",
+    108271: "Astral Shift", 98008: "Spirit Link Totem",
+    104773: "Unending Resolve", 108416: "Dark Pact", 6789: "Mortal Coil",
+    871: "Shield Wall", 118038: "Die by the Sword", 184364: "Enraged Regeneration",
+    97462: "Rallying Cry", 23920: "Spell Reflection",
+}
 
 
-def classify_spell(ability_name: str) -> str | None:
-    """Classify a spell name into a category, or None if not tracked."""
-    if ability_name in HEALTH_POTS:
+def classify_spell(ability_game_id: int) -> str | None:
+    """Classify a spell by its game ID into a category, or None if not tracked."""
+    if ability_game_id in HEALTH_POT_IDS:
         return "Health"
-    if ability_name in COMBAT_POTS:
+    if ability_game_id in COMBAT_POT_IDS:
         return "Combat Pot"
-    if ability_name in CLASS_DEFENSIVES:
+    if ability_game_id in CLASS_DEFENSIVE_IDS:
         return "Defensive"
     return None
 
@@ -288,12 +343,15 @@ def analyze_fight_casts(cast_events: list, fight_start_time: float, actors: dict
     """Analyze cast events for tracked spells. Returns {sourceID: [{spell, category, timestamp}]}."""
     results = {}
     for event in cast_events:
-        ability = event.get("ability", {})
-        ability_name = ability.get("name", "")
-        category = classify_spell(ability_name)
+        if event.get("type") != "cast":
+            continue
+        ability_id = event.get("abilityGameID")
+        if ability_id is None:
+            continue
+        category = classify_spell(ability_id)
         if category is None:
             continue
-        
+
         source_id = event.get("sourceID")
         if source_id is None:
             continue
@@ -308,7 +366,7 @@ def analyze_fight_casts(cast_events: list, fight_start_time: float, actors: dict
         if source_id not in results:
             results[source_id] = []
         results[source_id].append({
-            "spell": ability_name,
+            "spell": SPELL_NAMES.get(ability_id, f"ID:{ability_id}"),
             "category": category,
             "time": time_str,
             "timestamp_ms": ts_ms,
@@ -1141,13 +1199,11 @@ def main():
             
             try:
                 cast_events = fetch_cast_events(token, report_code, fid)
-                fight_start = report_start  # WCL timestamps are absolute
-                # Get fight-relative start from first event if available
-                if cast_events:
-                    fight_start = min(e.get("timestamp", report_start) for e in cast_events[:5])
-                
+                # Fight timestamps in events are relative to report start
+                fight_start = report_start + fight.get("startTime", 0)
+
                 player_casts = analyze_fight_casts(cast_events, fight_start, actor_lookup)
-                
+
                 total_tracked = sum(len(v) for v in player_casts.values())
                 print(f"         Found {total_tracked} tracked spell uses across {len(player_casts)} players.")
                 
