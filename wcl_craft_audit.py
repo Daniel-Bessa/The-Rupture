@@ -1151,10 +1151,14 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
                 if j == 0:
                     cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
 
-        ws.row_dimensions[row].height = max(20, 14 * max(
-            sum(1 for c in fd.get("player_casts", {}).get(pid, []) for fd in fights_data) // max(len(fights_data), 1),
-            1
-        ))
+        # Height = tallest cell: max casts in any single category across all fights
+        max_lines = 1
+        for fd in fights_data:
+            player_casts = fd.get("player_casts", {}).get(pid, [])
+            for cat in ("Health", "Combat Pot", "Defensive"):
+                count = sum(1 for c in player_casts if c["category"] == cat)
+                max_lines = max(max_lines, count)
+        ws.row_dimensions[row].height = max(18, 15 * max_lines)
         row += 1
 
 def load_config(path="wcl_config.txt"):
