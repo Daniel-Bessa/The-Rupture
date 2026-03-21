@@ -2040,16 +2040,6 @@ def main():
         except Exception as e:
             print(f"    [WARN] Could not fetch gear events for fight {fid}: {e}")
     
-    # Debug: dump raw API responses
-    debug_path = "wcl_debug_response.json"
-    with open(debug_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "actors": actors,
-            "combatantEvents": all_combatant_events[:3],
-            "totalCombatantEvents": len(all_combatant_events),
-        }, f, indent=2, ensure_ascii=False)
-    print(f"[DEBUG] Raw API responses saved to: {debug_path}")
-    
     # Build player max HP lookup from combatant info (stamina * 20 approximation)
     player_max_hp = {}
     for ce in all_combatant_events:
