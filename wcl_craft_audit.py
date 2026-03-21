@@ -993,8 +993,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
         for m in mech_defs:
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
-            tip = escape(m.get("name", m["label"]))
-            html += f'<th class="{css} has-tip" data-tip="{tip}">{escape(m["label"])}</th>'
+            tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
+            html += f'<th class="{css}" style="cursor:help" data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">{escape(m["label"])}</th>'
         html += '<th>Notes</th>'
         html += '</tr></thead><tbody>'
 
