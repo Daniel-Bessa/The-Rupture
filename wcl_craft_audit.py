@@ -242,13 +242,202 @@ def fetch_death_events(token: str, report_code: str, fight_id: int) -> list:
     return result["reportData"]["report"]["events"].get("data", [])
 
 
+def fetch_interrupt_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch interrupt events for a fight (friendly players), with pagination."""
+    query = """
+    query ($code: String!, $fightID: Int!, $startTime: Float) {
+        reportData {
+            report(code: $code) {
+                events(dataType: Interrupts, fightIDs: [$fightID], hostilityType: Friendlies,
+                       limit: 10000, startTime: $startTime) {
+                    data
+                    nextPageTimestamp
+                }
+            }
+        }
+    }
+    """
+    all_events = []
+    variables = {"code": report_code, "fightID": fight_id, "startTime": None}
+    while True:
+        result = query_wcl(token, query, variables)
+        page = result["reportData"]["report"]["events"]
+        all_events.extend(page.get("data", []))
+        next_ts = page.get("nextPageTimestamp")
+        if not next_ts:
+            break
+        variables = {"code": report_code, "fightID": fight_id, "startTime": next_ts}
+    return all_events
+
+
+def analyze_interrupts(interrupt_events: list, actor_lookup: dict) -> dict:
+    """Count interrupts performed by each player.
+    Returns {pid: int}
+    """
+    totals = {}
+    for event in interrupt_events:
+        pid = event.get("sourceID")
+        if pid is None or pid not in actor_lookup:
+            continue
+        totals[pid] = totals.get(pid, 0) + 1
+    return totals
+
+
+def fetch_damage_taken_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch avoidable damage-taken events for a fight (friendly players only), with pagination."""
+    query = """
+    query ($code: String!, $fightID: Int!, $startTime: Float) {
+        reportData {
+            report(code: $code) {
+                events(dataType: DamageTaken, fightIDs: [$fightID], hostilityType: Friendlies,
+                       limit: 10000, startTime: $startTime) {
+                    data
+                    nextPageTimestamp
+                }
+            }
+        }
+    }
+    """
+    all_events = []
+    variables = {"code": report_code, "fightID": fight_id, "startTime": None}
+    while True:
+        result = query_wcl(token, query, variables)
+        page = result["reportData"]["report"]["events"]
+        all_events.extend(page.get("data", []))
+        next_ts = page.get("nextPageTimestamp")
+        if not next_ts:
+            break
+        variables = {"code": report_code, "fightID": fight_id, "startTime": next_ts}
+    return all_events
+
+
+def fetch_uptime_table(token: str, report_code: str, fight_id: int) -> dict:
+    """Fetch DPS active time + damage done per player from WCL table endpoint.
+    Returns {sourceID: {"activeTime": ms, "total": damage_int}}.
+    """
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData {
+            report(code: $code) {
+                table(dataType: DamageDone, fightIDs: [$fightID])
+            }
+        }
+    }
+    """
+    result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    table = result["reportData"]["report"]["table"]
+    entries = table.get("entries", []) if isinstance(table, dict) else []
+    return {e["id"]: {"activeTime": e.get("activeTime", 0), "total": e.get("total", 0)}
+            for e in entries if "id" in e}
+
+
+def fetch_healing_table(token: str, report_code: str, fight_id: int) -> dict:
+    """Fetch healing done per player from WCL table endpoint.
+    Returns {sourceID: total_healing_int}.
+    """
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData {
+            report(code: $code) {
+                table(dataType: Healing, fightIDs: [$fightID])
+            }
+        }
+    }
+    """
+    result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    table = result["reportData"]["report"]["table"]
+    entries = table.get("entries", []) if isinstance(table, dict) else []
+    return {e["id"]: e.get("total", 0) for e in entries if "id" in e}
+
+
+def fetch_rankings(token: str, report_code: str, fight_id: int) -> dict:
+    """Fetch player parse percentiles for a fight.
+    Returns {player_name_lower: rankPercent}.
+    """
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData {
+            report(code: $code) {
+                rankings(fightIDs: [$fightID])
+            }
+        }
+    }
+    """
+    result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    rankings = result["reportData"]["report"]["rankings"]
+    if not isinstance(rankings, dict):
+        return {}
+    out = {}
+    for entry in rankings.get("data", []):
+        name = entry.get("name", "").lower()
+        pct = entry.get("rankPercent", 0)
+        if name:
+            out[name] = round(pct)
+    return out
+
+
+def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
+    """Sum total actual damage taken per player (post-mitigation, all sources).
+    Returns {pid: total_damage_int}
+    """
+    totals = {}
+    for event in damage_events:
+        if event.get("type") != "damage":
+            continue
+        pid = event.get("targetID")
+        if pid is None or pid not in actor_lookup:
+            continue
+        totals[pid] = totals.get(pid, 0) + event.get("amount", 0)
+    return totals
+
+
+def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
+                             fight_start_ms: int = 0, ability_names: dict = None,
+                             player_max_hp: dict = None) -> dict:
+    """Count enemy-source damage-taken hits per player (proxy for avoidable damage).
+    Returns {pid: {"hits": int, "big_hits": int, "details": [{"ability": str, "amount_k": str, "time": str}]}}
+    where big_hits = hits > 10% of player's estimated max HP (stamina * 20).
+    """
+    ability_names = ability_names or {}
+    player_max_hp = player_max_hp or {}
+    friendly_ids = set(actor_lookup.keys())
+    results = {}
+    for event in sorted(damage_events, key=lambda e: e.get("timestamp", 0)):
+        if event.get("type") != "damage":
+            continue
+        pid = event.get("targetID")
+        if pid is None or pid not in actor_lookup:
+            continue
+        # Only count hits from non-friendly sources (enemy/boss abilities)
+        if event.get("sourceID") in friendly_ids:
+            continue
+        total_hit = event.get("unmitigatedAmount", 0) or event.get("amount", 0)
+        if total_hit == 0:
+            continue
+        ability_id = event.get("abilityGameID", 0)
+        ability_name = ability_names.get(ability_id, f"#{ability_id}")
+        ts = event.get("timestamp", 0)
+        elapsed_ms = ts - fight_start_ms
+        minutes = int(elapsed_ms // 60000)
+        seconds = int((elapsed_ms % 60000) // 1000)
+        time_str = f"{minutes}:{seconds:02d}"
+        amount_k = f"{total_hit / 1000:.1f}k"
+        entry = results.setdefault(pid, {"hits": 0, "big_hits": 0, "details": []})
+        entry["hits"] += 1
+        max_hp = player_max_hp.get(pid, 0)
+        if max_hp > 0 and total_hit >= max_hp * 0.10:
+            entry["big_hits"] += 1
+            entry["details"].append({"ability": ability_name, "amount_k": amount_k, "time": time_str})
+    return results
+
+
 # How many deaths before we stop counting (wipe cascade filter)
 WIPE_DEATH_THRESHOLD = 4
 
 
-def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None) -> dict:
+def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None, fight_end_ms: int = 0) -> dict:
     """Analyze death events, ignoring deaths after the Nth death (wipe cascade).
-    Returns {targetID: [{"time": str, "ability": str}, ...]}
+    Returns {targetID: [{"time": str, "ability": str, "fight_pct": int}, ...]}
     """
     results = {}
     total_deaths = 0
@@ -268,7 +457,9 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
         time_str = f"{minutes}:{seconds:02d}"
         killing_id = event.get("killingAbilityGameID", 0)
         killing_name = ability_names.get(killing_id, f"ID:{killing_id}" if killing_id else "Unknown")
-        results.setdefault(target_id, []).append({"time": time_str, "ability": killing_name})
+        fight_elapsed = ts_ms - fight_start_ms
+        pct = round(fight_elapsed / fight_end_ms * 100) if fight_end_ms > 0 else 0
+        results.setdefault(target_id, []).append({"time": time_str, "ability": killing_name, "fight_pct": pct})
 
     return results
 
@@ -276,14 +467,20 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
 # ─── Tracked Spells (matched by abilityGameID) ───────────────────────────────
 # WCL cast events return abilityGameID (numeric), not ability names.
 
-# Health Potions & Healthstone
-HEALTH_POT_IDS = {
+# Healthstone (tracked separately from health pots)
+HEALTHSTONE_IDS = {
     5512,    # Healthstone
+    6262,    # Healthstone (Midnight)
+}
+
+# Health Potions
+HEALTH_POT_IDS = {
     432112,  # Algari Healing Potion (TWW)
     431924,  # Algari Healing Potion (TWW alternate)
     241304,  # Silvermoon Health Potion (Midnight)
     241305,  # Silvermoon Health Potion (Midnight alternate)
     258138,  # Silvermoon Health Potion (Midnight alternate)
+    1234768, # Silvermoon Health Potion (Midnight)
 }
 
 # Combat Potions
@@ -362,16 +559,16 @@ CLASS_DEFENSIVE_IDS = {
     23920,   # Spell Reflection
 }
 
-ALL_TRACKED_IDS = HEALTH_POT_IDS | COMBAT_POT_IDS | CLASS_DEFENSIVE_IDS
+ALL_TRACKED_IDS = HEALTHSTONE_IDS | HEALTH_POT_IDS | COMBAT_POT_IDS | CLASS_DEFENSIVE_IDS
 
 # ID → display name
 SPELL_NAMES = {
-    5512: "Healthstone", 432112: "Algari Healing Potion", 431924: "Algari Healing Potion",
+    5512: "Healthstone", 6262: "Healthstone", 432112: "Health Potion", 431924: "Health Potion",
     431932: "Tempered Potion", 432098: "Potion of Unwavering Focus",
     431945: "Light's Potential", 432106: "Void-Shrouded Tincture",
     1236616: "Light's Potential", 245898: "Light's Potential",
     245897: "Light's Potential", 241308: "Light's Potential", 241309: "Light's Potential",
-    241304: "Health Potion", 241305: "Health Potion", 258138: "Health Potion",
+    241304: "Health Potion", 241305: "Health Potion", 258138: "Health Potion", 1234768: "Health Potion",
     48792: "Icebound Fortitude", 48707: "Anti-Magic Shell", 55233: "Vampiric Blood", 49028: "Dancing Rune Weapon",
     198589: "Blur", 196718: "Darkness", 196555: "Netherwalk", 187827: "Metamorphosis",
     22812: "Barkskin", 61336: "Survival Instincts", 102342: "Ironbark",
@@ -391,6 +588,8 @@ SPELL_NAMES = {
 
 def classify_spell(ability_game_id: int) -> str | None:
     """Classify a spell by its game ID into a category, or None if not tracked."""
+    if ability_game_id in HEALTHSTONE_IDS:
+        return "Healthstone"
     if ability_game_id in HEALTH_POT_IDS:
         return "Health"
     if ability_game_id in COMBAT_POT_IDS:
@@ -585,7 +784,7 @@ CLASS_COLORS = {
 
 def _build_split_html(split_data: dict, actors: list) -> dict:
     """Build HTML for each split. Returns {split_name: html_string}.
-    Layout: rows = players, columns = bosses (3 sub-cols: Health | Combat | Defensive).
+    Layout: rows = players, columns = bosses (4 sub-cols: Health | Healthstone | Combat | Defensive).
     """
     actor_lookup = {a["id"]: a for a in actors}
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
@@ -607,15 +806,16 @@ def _build_split_html(split_data: dict, actors: list) -> dict:
         )
 
         html = '<div class="table-wrap"><table><thead>'
-        # Row 1: boss names (3 cols each)
+        # Row 1: boss names (4 cols each)
         html += '<tr><th class="player-header" rowspan="2">Player</th>'
         for fd in fights:
-            html += f'<th colspan="3" class="boss-name divider">{escape(fd.get("fight_name", "Boss"))}</th>'
+            html += f'<th colspan="4" class="boss-name divider">{escape(fd.get("fight_name", "Boss"))}</th>'
         html += '</tr>'
         # Row 2: sub-column headers
         html += '<tr>'
         for _ in fights:
             html += '<th class="cast-h health-h divider">⚗ Health</th>'
+            html += '<th class="cast-h health-h">💚 Stone</th>'
             html += '<th class="cast-h combat-h">⚔ Combat</th>'
             html += '<th class="cast-h def-h">🛡 Defensive</th>'
         html += '</tr></thead><tbody>'
@@ -631,7 +831,7 @@ def _build_split_html(split_data: dict, actors: list) -> dict:
 
             if role != current_role:
                 current_role = role
-                colspan = 1 + len(fights) * 3
+                colspan = 1 + len(fights) * 4
                 html += f'<tr class="role-sep"><td colspan="{colspan}">── {current_role}s ──</td></tr>'
 
             html += f'<tr>'
@@ -641,14 +841,16 @@ def _build_split_html(split_data: dict, actors: list) -> dict:
 
             for fd in fights:
                 casts = fd.get("player_casts", {}).get(pid, [])
-                health    = [c for c in casts if c["category"] == "Health"]
-                combat    = [c for c in casts if c["category"] == "Combat Pot"]
-                defensive = [c for c in casts if c["category"] == "Defensive"]
+                health      = [c for c in casts if c["category"] == "Health"]
+                healthstone = [c for c in casts if c["category"] == "Healthstone"]
+                combat      = [c for c in casts if c["category"] == "Combat Pot"]
+                defensive   = [c for c in casts if c["category"] == "Defensive"]
 
                 for items, cat_cls, is_first in [
-                    (health,    "health-cell", True),
-                    (combat,    "combat-cell", False),
-                    (defensive, "def-cell",    False),
+                    (health,      "health-cell", True),
+                    (healthstone, "health-cell", False),
+                    (combat,      "combat-cell", False),
+                    (defensive,   "def-cell",    False),
                 ]:
                     div = " divider" if is_first else ""
                     if items:
@@ -669,8 +871,161 @@ def _build_split_html(split_data: dict, actors: list) -> dict:
     return results
 
 
+def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
+    """Build HTML for each boss tab. Returns {boss_name: html_string}."""
+    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
+    results = {}
+
+    for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
+        table_id = f"boss-tbl-{boss_idx}"
+        # Collect all pids across all fights for this boss
+        all_pids_set = set()
+        for fight in fights:
+            all_pids_set.update(fight.get("deaths", {}).keys())
+            all_pids_set.update(fight.get("all_player_ids", set()))
+
+        def pid_sort(pid):
+            actor = actor_lookup.get(pid, {})
+            char_name = actor.get("name", "")
+            pname, _ = lookup_roster(char_name)
+            role = PLAYER_ROLES.get(pname, "DPS")
+            return (ROLE_ORDER.get(role, 2), pname.lower())
+
+        sorted_pids = sorted(all_pids_set, key=pid_sort)
+
+        # ── Fight overview (aggregated across all splits) ──
+        ov_dmg_done = ov_healing = ov_dmg_taken = ov_avoid = 0
+        for fight in fights:
+            for pid, v in fight.get("uptime_map", {}).items():
+                ov_dmg_done += v.get("total", 0) if isinstance(v, dict) else 0
+            for pid, v in fight.get("healing_map", {}).items():
+                ov_healing += v if isinstance(v, int) else 0
+            for pid, v in fight.get("dmg_taken", {}).items():
+                ov_dmg_taken += v if isinstance(v, int) else 0
+            for pid, av in fight.get("avoidable_damage", {}).items():
+                ov_avoid += av.get("hits", 0) if isinstance(av, dict) else 0
+        def _hfmt(n):
+            return f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000 else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k")
+        overview_html  = '<div class="boss-overview">'
+        overview_html += f'<span class="ov-item"><span class="ov-label">⚔ Dmg Done</span><span class="ov-val">{_hfmt(ov_dmg_done) if ov_dmg_done else "—"}</span></span>'
+        overview_html += f'<span class="ov-item"><span class="ov-label">💚 Healing</span><span class="ov-val">{_hfmt(ov_healing) if ov_healing else "—"}</span></span>'
+        overview_html += f'<span class="ov-item"><span class="ov-label">🛡 Dmg Taken</span><span class="ov-val">{_hfmt(ov_dmg_taken) if ov_dmg_taken else "—"}</span></span>'
+        overview_html += f'<span class="ov-item"><span class="ov-label">☠ Avoid Hits</span><span class="ov-val">{ov_avoid if ov_avoid else "—"}</span></span>'
+        overview_html += '</div>'
+
+        html = overview_html
+        html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
+        html += '<tr>'
+        html += '<th style="width:10px"></th>'
+        html += '<th class="player-header">Player</th>'
+        html += '<th>Char</th>'
+        html += '<th>Split</th>'
+        html += '<th class="parse-h">Parse %</th>'
+        html += '<th class="dmg-h">Damage</th>'
+        html += '<th class="heal-h">Healing</th>'
+        html += '<th class="death-h">Deaths</th>'
+        html += '<th class="death-h">Killed by (time)</th>'
+        html += '<th class="dmg-h">Dmg Taken</th>'
+        html += '<th class="uptime-h">Uptime %</th>'
+        html += '<th class="interrupt-h">Interrupts</th>'
+        html += '<th class="avoid-h">Avoid Hits</th>'
+        html += '<th class="avoid-h">&gt;10% HP Hits</th>'
+        html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
+        html += '<th>Notes</th>'
+        html += '</tr></thead><tbody>'
+
+        # Group by split, then role, then player
+        for fi, fight in enumerate(fights, 1):
+            html += f'<tr class="role-sep"><td colspan="16" style="color:#a0b4ff;font-size:13px;padding:8px 10px;">── Split {fi} ──</td></tr>'
+            current_role = None
+            for pid in sorted_pids:
+                deaths_map = fight.get("deaths", {})
+                if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
+                    continue
+                actor = actor_lookup.get(pid, {})
+                char_name = actor.get("name", f"ID-{pid}")
+                cls = actor.get("subType", "Unknown")
+                cls_color = CLASS_COLORS.get(cls, "#ccc")
+                pname, _ = lookup_roster(char_name)
+                role = PLAYER_ROLES.get(pname, "DPS")
+
+                if role != current_role:
+                    current_role = role
+                    html += f'<tr class="role-sep"><td colspan="16">── {current_role}s ──</td></tr>'
+
+                avoidable    = fight.get("avoidable_damage", {})
+                dmg_taken    = fight.get("dmg_taken", {})
+                uptime_map   = fight.get("uptime_map", {})
+                interrupts   = fight.get("interrupts", {})
+                healing_map  = fight.get("healing_map", {})
+                rankings_map = fight.get("rankings_map", {})
+                fight_dur    = fight.get("fight_dur_ms", 0)
+
+                death_list = deaths_map.get(pid, [])
+                av = avoidable.get(pid, {})
+                d_raw = dmg_taken.get(pid, 0)
+                dmg_str = f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000 else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—")
+                active = uptime_map.get(pid, {}).get("activeTime", 0) if isinstance(uptime_map.get(pid), dict) else 0
+                uptime_str = f"{min(active / fight_dur * 100, 100):.0f}%" if fight_dur > 0 and active > 0 else "—"
+                interrupt_count = interrupts.get(pid, 0)
+                interrupt_str = str(interrupt_count) if interrupt_count > 0 else "—"
+                hits = av.get("hits", 0) or 0
+                big_hits = av.get("big_hits", 0) or 0
+                details_list = av.get("details", [])
+                details_str = "<br>".join(f'{escape(d["ability"])}: {escape(d["amount_k"])} @ {escape(d["time"])}' for d in details_list) or "—"
+
+                # Parse %
+                parse_pct = rankings_map.get(char_name.lower())
+                PARSE_COLORS = {99:"#E5CC80",95:"#FF8000",75:"#A335EE",50:"#0070DD",25:"#1EFF00"}
+                if parse_pct is not None:
+                    pc = int(parse_pct)
+                    pc_color = next((v for k, v in sorted(PARSE_COLORS.items(), reverse=True) if pc >= k), "#666")
+                    parse_cell = f'<span style="color:{pc_color};font-weight:600">{pc}</span>'
+                else:
+                    parse_cell = "—"
+
+                # Damage done
+                dmg_done_raw = uptime_map.get(pid, {}).get("total", 0) if isinstance(uptime_map.get(pid), dict) else 0
+                dmg_done_str = _hfmt(dmg_done_raw) if dmg_done_raw > 0 else "—"
+
+                # Healing done
+                heal_raw = healing_map.get(pid, 0)
+                heal_str = _hfmt(heal_raw) if heal_raw > 0 else "—"
+
+                death_count = len(death_list)
+                killed_str = "<br>".join(f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)' for d in death_list) or "—"
+
+                row_cls = "boss-death-row" if death_count > 0 else ""
+                interrupt_cls = " interrupt-yes" if interrupt_count > 0 else ""
+                bighit_cls = " bighit-row" if big_hits > 0 else ""
+
+                html += f'<tr class="{row_cls}">'
+                html += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
+                html += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
+                html += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
+                html += f'<td class="center">Split {fi}</td>'
+                html += f'<td class="center parse-h">{parse_cell}</td>'
+                html += f'<td class="center dmg-h">{dmg_done_str}</td>'
+                html += f'<td class="center heal-h">{heal_str}</td>'
+                html += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
+                html += f'<td class="death-h">{killed_str}</td>'
+                html += f'<td class="center dmg-h">{dmg_str}</td>'
+                html += f'<td class="center uptime-h">{uptime_str}</td>'
+                html += f'<td class="center interrupt-h{interrupt_cls}">{interrupt_str}</td>'
+                html += f'<td class="center avoid-h">{hits if hits else "—"}</td>'
+                html += f'<td class="center avoid-h{bighit_cls}">{big_hits if big_hits else "—"}</td>'
+                html += f'<td class="detail-cell">{details_str}</td>'
+                html += f'<td></td>'
+                html += '</tr>'
+
+        html += '</tbody></table></div>'
+        results[boss_name] = html
+
+    return results
+
+
 def write_html(records: list, report_info: dict, report_code: str, output_path: str,
-               split_data: dict = None, actors: list = None):
+               split_data: dict = None, actors: list = None, boss_data: dict = None):
     """Write the full audit report as a tabbed HTML file."""
     guild_name = "Unknown Guild"
     if report_info.get("guild"):
@@ -726,6 +1081,10 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
 
     # ── Split tabs data (one tab per split) ──
     split_htmls = _build_split_html(split_data or {}, actors or [])
+
+    # ── Boss tabs data ──
+    _boss_actor_lookup = {a["id"]: a for a in (actors or [])}
+    boss_htmls = _build_boss_html(boss_data or {}, _boss_actor_lookup)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -797,6 +1156,41 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 .role-sep td {{ background: #111827; color: #7289DA; font-size: 11px; font-weight: bold; padding: 4px 10px; }}
 .pname {{ font-weight: bold; }}
 .cname {{ color: #888; font-size: 11px; }}
+
+/* ── Column borders ── */
+td, th {{ border-left: 1px solid rgba(255,255,255,0.07); }}
+td:first-child, th:first-child {{ border-left: none; }}
+
+/* ── Boss overview bar ── */
+.boss-overview {{
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 14px; padding: 10px 14px;
+  background: rgba(255,255,255,0.04); border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}}
+.ov-item {{ display: flex; flex-direction: column; align-items: center; min-width: 90px; }}
+.ov-label {{ font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: .05em; }}
+.ov-val {{ font-size: 16px; font-weight: 700; color: #e0e0e0; margin-top: 2px; }}
+
+/* ── Boss tabs ── */
+.death-h {{ color: #e57373; }}
+.dmg-h {{ color: #ffb74d; }}
+.heal-h {{ color: #81c784; }}
+.parse-h {{ color: #E5CC80; }}
+.uptime-h {{ color: #81c784; }}
+.interrupt-h {{ color: #64b5f6; }}
+.avoid-h {{ color: #ce93d8; }}
+.detail-h {{ color: #7289DA; white-space: normal; min-width: 30px; cursor: pointer; user-select: none; }}
+.detail-h:hover {{ color: #a0b4ff; }}
+.detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
+.detail-col-hidden .detail-h span.detail-content,
+.detail-col-hidden .detail-cell {{ display: none; }}
+.detail-col-hidden .detail-h {{ min-width: 0; }}
+.boss-death-row td {{ background: rgba(61,16,16,0.4); }}
+.boss-death-row .player-cell {{ background: rgba(80,10,10,0.6); }}
+.death-num {{ color: #e57373; font-weight: bold; }}
+.interrupt-yes {{ color: #00FF88; font-weight: bold; }}
+.bighit-row {{ color: #ff8a65; font-weight: bold; }}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
@@ -809,6 +1203,7 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('gear', this)">⚙ Gear Audit</button>
   {''.join(f'<button class="tab-btn" onclick="switchTab(\'split-{i}\', this)">📋 {escape(name)}</button>' for i, name in enumerate(split_htmls))}
+  {''.join(f'<button class="tab-btn" onclick="switchTab(\'boss-{i}\', this)">⚔ {escape(name)}</button>' for i, name in enumerate(boss_htmls))}
 </div>
 
 <!-- ── GEAR TAB ── -->
@@ -830,6 +1225,9 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 <!-- ── SPLIT TABS ── -->
 {''.join(f'<div id="tab-split-{i}" class="tab-content">{content}</div>' for i, content in enumerate(split_htmls.values()))}
 
+<!-- ── BOSS TABS ── -->
+{''.join(f'<div id="tab-boss-{i}" class="tab-content">{content}</div>' for i, content in enumerate(boss_htmls.values()))}
+
 <script>
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -842,6 +1240,12 @@ function filterGear(input) {{
   for (let row of document.getElementById('gear-table').tBodies[0].rows) {{
     row.style.display = row.cells[0].textContent.toLowerCase().includes(filter) ? '' : 'none';
   }}
+}}
+function toggleDetails(tableId, btn) {{
+  const tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  const hidden = tbl.classList.toggle('detail-col-hidden');
+  btn.textContent = hidden ? '▶ Details' : '▼ Details';
 }}
 </script>
 </body>
@@ -859,13 +1263,13 @@ ROSTER = {}
 # (Player, [(char_name, Main/Alt)])
 # Role is determined per-player, not per-char
 _roster_raw = [
-    ("Nope",        "Tank",    [("NopeDK","Alt"), ("Nopebrew","Main")]),
+    ("Nope",        "Tank",    [("NopeDK","Alt"), ("Nopebrew","Main"), ("Nøpæ","Main")]),
     ("Phyxius",     "Tank",    [("Phyxius","Main"), ("Phyxy","Alt")]),
-    ("Toshiko",     "Healer",  [("Toshiko","Alt"), ("Evokenooblal","Alt")]),
+    ("Toshiko",     "Healer",  [("Toshiko","Main"), ("Evokenooblal","Alt")]),
     ("Minxy",       "Healer",  [("Minxymender","Alt"), ("Minxycat","Main")]),
     ("Hipe",        "Healer",  [("Cype","Alt"), ("Wype","Main")]),
-    ("Zush",        "Healer",  [("Zush","Main"), ("Züsh","Main"), ("Ryukho","Alt")]),
-    ("Jimy",        "DPS",     [("jaime","Main")]),
+    ("Zush",        "Healer",  [("Zush","Main"), ("Züsh","Main"), ("Ryukho","Alt"), ("Ryuhko","Alt")]),
+    ("Jimy",        "DPS",     [("jaime","Main"), ("Käz","Alt"), ("Madhmag","Alt")]),
     ("Ice",         "DPS",     [("Icecoldleap","Main"), ("Chocoice","Alt")]),
     ("Zodiacos",    "DPS",     [("Zodiacos","Alt")]),
     ("Kutcher",     "DPS",     [("Kutcherdhtwo","Alt"), ("Kutchersplit","Alt")]),
@@ -875,14 +1279,14 @@ _roster_raw = [
     ("Potrenu",     "DPS",     [("Potrenu","Main"), ("Potrenuu","Alt")]),
     ("Shamishan",   "DPS",     [("Samdracson","Alt"), ("Shamishan","Main")]),
     ("Madonis",     "DPS",     [("Madonis","Alt"), ("Madonisvoker","Alt")]),
-    ("Kaze",        "DPS",     [("Kazeofscales","Main"), ("Käz","Main"), ("Kazeoflight","Alt")]),
+    ("Kaze",        "DPS",     [("Kazeofscales","Main"), ("Kazeoflight","Alt")]),
     ("Upyeah",      "DPS",     [("upyeah","Alt"), ("Upyeah","Alt"), ("upyeäh","Alt")]),
     ("Mindhacker",  "DPS",     [("Mindrage","Alt"), ("Mindhacker","Main")]),
     ("Uncleyoinky", "DPS",     [("allblues","Alt"), ("Allblues","Alt"), ("uncleyoinky","Main")]),
     ("Nizze",       "DPS",     [("Nizzedk","Alt"), ("Nizze","Main")]),
     ("Mostbanned",  "DPS",     [("Mosta","Alt"), ("Mostbanned","Alt")]),
     ("Malheiro",    "DPS",     [("Rödinhas","Alt"), ("Malheiro","Main")]),
-    ("Bolters",     "DPS",     [("Schmosba","Main"), ("Ipala","Alt")]),
+    ("Bolters",     "DPS",     [("Schmosba","Main"), ("Ipala","Alt"), ("Devert","Alt")]),
     ("Tinet",       "DPS",     [("Pingveryhigh","Alt"), ("Guldanrämsay","Alt")]),
     ("Doomkry",     "DPS",     [("Doomkry","Main"), ("Lockry","Alt")]),
 ]
@@ -911,19 +1315,29 @@ XLSX_CLASS_BG = {
 
 
 def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor_lookup: dict):
-    """One sheet per boss: rows = chars from both splits, cols = Split | Deaths | Death Times | Notes."""
+    """One sheet per boss: rows = chars from both splits, cols = Split | Deaths | Death Times | Dmg Hits | Big Hits | Notes."""
     header_font  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     header_fill  = PatternFill("solid", fgColor="1a1a2e")
-    data_font    = Font(name="Arial", size=10, color="000000")
-    bold_font    = Font(name="Arial", size=10, color="000000", bold=True)
+    data_font    = Font(name="Arial", size=10, color="FFFFFF")
+    bold_font    = Font(name="Arial", size=10, color="FFFFFF", bold=True)
     death_font   = Font(name="Arial", size=10, color="CC0000", bold=True)
     border       = Border(bottom=Side(style="thin", color="333333"))
     center       = Alignment(horizontal="center", vertical="center")
     left         = Alignment(horizontal="left", vertical="center")
     wrap         = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    notes_fill   = PatternFill("solid", fgColor="F0F0F0")
-    no_death_fill = PatternFill("solid", fgColor="E8F5E9")  # light green = clean
-    death_fill   = PatternFill("solid", fgColor="FFEBEE")   # light red = died
+    notes_fill   = PatternFill("solid", fgColor="1E2736")
+    no_death_fill = PatternFill("solid", fgColor="111827")  # dark = clean
+    death_fill   = PatternFill("solid", fgColor="3D1010")   # dark red = died
+
+    def _parse_color(pct):
+        """Return ARGB fill color for parse percentile (WarcraftLogs style)."""
+        if not isinstance(pct, int): return "111827"
+        if pct >= 99: return "E5CC80"   # gold/legendary
+        if pct >= 95: return "FF8000"   # orange/epic
+        if pct >= 75: return "A335EE"   # purple/rare
+        if pct >= 50: return "0070DD"   # blue/uncommon
+        if pct >= 25: return "1EFF00"   # green/common
+        return "666666"                  # grey/low
 
     guild_name  = report_info.get("guild", {}).get("name", "") if report_info.get("guild") else ""
     report_date = ""
@@ -932,8 +1346,14 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
 
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
 
+    # Pre-fill entire sheet with dark background
+    dk = PatternFill("solid", fgColor="0D1117")
+    for r in range(1, 300):
+        for c in range(1, 55):
+            ws.cell(row=r, column=c).fill = dk
+
     # Title
-    ws.merge_cells("A1:F1")
+    ws.merge_cells("A1:M1")
     ws["A1"].value = f"{boss_name} — {guild_name} ({report_date})"
     ws["A1"].font  = Font(name="Arial", bold=True, size=13, color="7289DA")
     ws.row_dimensions[1].height = 22
@@ -941,10 +1361,43 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
     ws["A2"].value = f"Deaths filtered: only first {WIPE_DEATH_THRESHOLD} deaths shown (wipe cascade excluded)"
     ws["A2"].font  = Font(name="Arial", size=9, color="888888", italic=True)
 
-    # Headers
-    hr = 4
-    cols = ["Player", "Char", "Split", "Deaths", "Killed by (time)", "Notes"]
-    widths = [16, 18, 8, 10, 28, 40]
+    # Row 3: fight overview (aggregated across all splits)
+    def _k(v):
+        if v >= 1_000_000_000: return f"{v/1_000_000_000:.1f}B"
+        if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+        if v > 0: return f"{v/1000:.0f}k"
+        return "—"
+
+    total_dur_ms   = sum(f.get("fight_dur_ms", 0) for f in fights)
+    total_dmg_done = sum(e.get("total", 0) for f in fights for e in f.get("uptime_map", {}).values())
+    total_healing  = sum(v for f in fights for v in f.get("healing_map", {}).values())
+    total_dmg_taken = sum(v for f in fights for v in f.get("dmg_taken", {}).values())
+    total_avoidable = sum(e.get("hits", 0) for f in fights for e in f.get("avoidable_damage", {}).values())
+    dur_m, dur_s   = divmod(total_dur_ms // 1000, 60)
+
+    overview_items = [
+        ("⏱ Duration", f"{dur_m}:{dur_s:02d}"),
+        ("⚔ Dmg Done", _k(total_dmg_done)),
+        ("💚 Healing", _k(total_healing)),
+        ("🛡 Dmg Taken", _k(total_dmg_taken)),
+        ("☠ Avoid Hits", str(total_avoidable) if total_avoidable else "—"),
+    ]
+    ov_fill  = PatternFill("solid", fgColor="16213e")
+    ov_label = Font(name="Arial", size=9, color="888888")
+    ov_value = Font(name="Arial", size=11, bold=True, color="7289DA")
+    for i, (label, value) in enumerate(overview_items):
+        col = 2 + i * 2
+        ws.cell(row=3, column=col,     value=label).font  = ov_label
+        ws.cell(row=3, column=col,     value=label).fill  = ov_fill
+        ws.cell(row=3, column=col + 1, value=value).font  = ov_value
+        ws.cell(row=3, column=col + 1, value=value).fill  = ov_fill
+        ws.cell(row=3, column=col + 1).alignment = center
+    ws.row_dimensions[3].height = 22
+
+    # Headers: Class, Player, Char, Split, Deaths, Killed by (time), Dmg Taken, Uptime %, Interrupts, Avoid Hits, >10% HP Hits, Big Hit Details, Notes
+    hr = 5
+    cols = ["", "Player", "Char", "Split", "Parse %", "Damage", "Healing", "Deaths", "Killed by (time)", "Dmg Taken", "Uptime %", "Interrupts", "Avoid Hits", ">10% HP Hits", "Big Hit Details", "Notes"]
+    widths = [3, 16, 18, 8, 9, 12, 12, 10, 28, 12, 10, 11, 11, 13, 40, 40]
     for ci, (h, w) in enumerate(zip(cols, widths), 1):
         c = ws.cell(row=hr, column=ci, value=h)
         c.font = header_font
@@ -952,37 +1405,101 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
         c.alignment = center
         c.border = border
         ws.column_dimensions[get_column_letter(ci)].width = w
-    ws.row_dimensions[hr].height = 18
-    ws.freeze_panes = "A5"
+    ws.row_dimensions[hr].height = 30
+    ws.freeze_panes = "A6"
+    # Hide "Big Hit Details" column (col 15) by default — unhide to expand
+    ws.column_dimensions[get_column_letter(15)].hidden = True
 
     # Collect all chars across both splits, tag with split number
     rows = []
     for fi, fight in enumerate(fights, 1):
-        split_num = fi
+        split_num  = fi
+        avoidable    = fight.get("avoidable_damage", {})
+        dmg_taken    = fight.get("dmg_taken", {})
+        uptime_map   = fight.get("uptime_map", {})
+        healing_map  = fight.get("healing_map", {})
+        rankings_map = fight.get("rankings_map", {})
+        interrupts_map = fight.get("interrupts", {})
+        fight_dur    = fight.get("fight_dur_ms", 0)
+        seen_pids    = set()
+
+        def _fmt_k(val):
+            if val >= 1_000_000: return f"{val/1_000_000:.1f}M"
+            if val > 0:          return f"{val/1000:.0f}k"
+            return "—"
+
+        def _fmt_dmg_taken(pid):
+            return _fmt_k(dmg_taken.get(pid, 0))
+
+        def _fmt_dps_dmg(pid):
+            return _fmt_k(uptime_map.get(pid, {}).get("total", 0))
+
+        def _fmt_healing(pid):
+            return _fmt_k(healing_map.get(pid, 0))
+
+        def _fmt_uptime(pid, role):
+            if role not in ("DPS", "Healer"):
+                return "—"
+            active = uptime_map.get(pid, {}).get("activeTime", 0)
+            if fight_dur > 0 and active > 0:
+                return f"{min(active / fight_dur * 100, 100):.0f}%"
+            return "—"
+
+        def _fmt_parse(pid, char_name):
+            pct = rankings_map.get(char_name.lower(), None)
+            return pct if pct is not None else "—"
+
+        def _fmt_interrupts(pid):
+            count = interrupts_map.get(pid, 0)
+            return count if count > 0 else "—"
+
         for pid, death_times in fight.get("deaths", {}).items():
             actor = actor_lookup.get(pid, {})
             char_name = actor.get("name", f"ID-{pid}")
             cls = actor.get("subType", "Unknown")
             player_name, _ = lookup_roster(char_name)
             role = PLAYER_ROLES.get(player_name, "DPS")
+            av = avoidable.get(pid, {})
+            details_str = "\n".join(f"{d['ability']}: {d['amount_k']} @ {d['time']}" for d in av.get("details", []))
             rows.append({
                 "player": player_name, "char": char_name, "cls": cls,
                 "split": split_num, "role": role,
                 "deaths": len(death_times),
-                "death_times": "\n".join(f"{d['ability']} @ {d['time']}" for d in death_times),
+                "death_times": "\n".join(f"{d['ability']} @ {d['time']} ({d.get('fight_pct', 0)}%)" for d in death_times),
+                "parse": _fmt_parse(pid, char_name),
+                "dps_dmg": _fmt_dps_dmg(pid),
+                "healing": _fmt_healing(pid),
+                "dmg_taken": _fmt_dmg_taken(pid),
+                "uptime": _fmt_uptime(pid, role),
+                "interrupts": _fmt_interrupts(pid),
+                "dmg_hits": av.get("hits", "—"),
+                "big_hits": av.get("big_hits", "—"),
+                "details": details_str,
             })
+            seen_pids.add(pid)
         # Also include players with 0 deaths from cast events (they were in the fight)
         for pid in fight.get("all_player_ids", set()):
-            if pid not in fight.get("deaths", {}):
+            if pid not in seen_pids:
                 actor = actor_lookup.get(pid, {})
                 char_name = actor.get("name", f"ID-{pid}")
                 cls = actor.get("subType", "Unknown")
                 player_name, _ = lookup_roster(char_name)
                 role = PLAYER_ROLES.get(player_name, "DPS")
+                av = avoidable.get(pid, {})
+                details_str = "\n".join(f"{d['ability']}: {d['amount_k']} @ {d['time']}" for d in av.get("details", []))
                 rows.append({
                     "player": player_name, "char": char_name, "cls": cls,
                     "split": split_num, "role": role,
                     "deaths": 0, "death_times": "",
+                    "parse": _fmt_parse(pid, char_name),
+                    "dps_dmg": _fmt_dps_dmg(pid),
+                    "healing": _fmt_healing(pid),
+                    "dmg_taken": _fmt_dmg_taken(pid),
+                    "uptime": _fmt_uptime(pid, role),
+                    "interrupts": _fmt_interrupts(pid),
+                    "dmg_hits": av.get("hits", "—"),
+                    "big_hits": av.get("big_hits", "—"),
+                    "details": details_str,
                 })
 
     # Sort: role → player name → split
@@ -993,22 +1510,44 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
     for r in rows:
         if r["role"] != current_role:
             current_role = r["role"]
-            for ci in range(1, 7):
+            for ci in range(1, 17):
                 sc = ws.cell(row=row, column=ci)
                 sc.fill = PatternFill("solid", fgColor="111827")
                 sc.border = border
-            ws.cell(row=row, column=1).value = f"── {current_role}s ──"
-            ws.cell(row=row, column=1).font = Font(name="Arial", size=9, bold=True, color="7289DA")
+            ws.cell(row=row, column=2).value = f"── {current_role}s ──"
+            ws.cell(row=row, column=2).font = Font(name="Arial", size=9, bold=True, color="7289DA")
+            ws.row_dimensions[row].height = 30
             row += 1
 
-        cls_fill = PatternFill("solid", fgColor=XLSX_CLASS_BG.get(r["cls"], "77666666"))
+        cls_hex = CLASS_COLORS.get(r["cls"], "#CCCCCC").lstrip("#")
+        cls_bar_fill = PatternFill("solid", fgColor=cls_hex)
         died = r["deaths"] > 0
         row_fill = death_fill if died else no_death_fill
+        dmg_hits  = r.get("dmg_hits", "—")
+        big_hits  = r.get("big_hits", "—")
+        details   = r.get("details", "")
+        interrupt_val = r.get("interrupts", "—")
+        big_fill  = PatternFill("solid", fgColor="5D2D1A") if isinstance(big_hits, int) and big_hits > 0 else row_fill
+        interrupt_fill = PatternFill("solid", fgColor="1A3A1A") if isinstance(interrupt_val, int) and interrupt_val > 0 else row_fill
+        char_font = Font(name="Arial", size=10, color=cls_hex, bold=False)
 
-        vals = [r["player"], r["char"], f"Split {r['split']}", r["deaths"] or "—", r["death_times"] or "—", ""]
-        fills = [cls_fill, cls_fill, cls_fill, row_fill, row_fill, notes_fill]
-        aligns = [left, left, center, center, wrap, wrap]
-        fonts = [bold_font, data_font, data_font, death_font if died else data_font, data_font, data_font]
+        parse_val   = r.get("parse", "—")
+        parse_fill  = PatternFill("solid", fgColor=_parse_color(parse_val)) if isinstance(parse_val, int) else row_fill
+        parse_font  = Font(name="Arial", size=10, color="000000" if isinstance(parse_val, int) else "FFFFFF", bold=isinstance(parse_val, int))
+
+        vals   = ["", r["player"], r["char"], f"Split {r['split']}",
+                  parse_val, r.get("dps_dmg", "—"), r.get("healing", "—"),
+                  r["deaths"] or "—", r["death_times"] or "—",
+                  r.get("dmg_taken", "—"), r.get("uptime", "—"), interrupt_val,
+                  dmg_hits, big_hits, details or "—", ""]
+        fills  = [cls_bar_fill, row_fill, row_fill, row_fill,
+                  parse_fill, row_fill, row_fill,
+                  row_fill, row_fill, row_fill, row_fill, interrupt_fill, row_fill, big_fill, big_fill, notes_fill]
+        aligns = [left, left, left, center, center, center, center, center, wrap, center, center, center, center, center, wrap, wrap]
+        fonts  = [data_font, bold_font, char_font, data_font,
+                  parse_font, data_font, data_font,
+                  death_font if died else data_font, data_font,
+                  data_font, data_font, data_font, data_font, data_font, data_font, data_font]
 
         for ci, (val, fill, align, font) in enumerate(zip(vals, fills, aligns, fonts), 1):
             c = ws.cell(row=row, column=ci, value=val)
@@ -1017,7 +1556,7 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
             c.alignment = align
             c.border = border
 
-        ws.row_dimensions[row].height = 18
+        ws.row_dimensions[row].height = 30
         row += 1
 
 
@@ -1065,13 +1604,13 @@ def write_xlsx(records: list, report_info: dict, report_code: str, output_path: 
     # Styling
     header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     header_fill = PatternFill("solid", fgColor="1a1a2e")
-    black_font = Font(name="Arial", size=10, color="000000")
-    black_bold = Font(name="Arial", size=10, color="000000", bold=True)
+    black_font = Font(name="Arial", size=10, color="FFFFFF")
+    black_bold = Font(name="Arial", size=10, color="FFFFFF", bold=True)
     border = Border(bottom=Side(style="thin", color="333333"))
     center = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
-    spark_font = Font(name="Arial", size=10, color="006600", bold=True)
-    no_spark_font = Font(name="Arial", size=10, color="000000")
+    spark_font = Font(name="Arial", size=10, color="00FF88", bold=True)
+    no_spark_font = Font(name="Arial", size=10, color="FFFFFF")
     no_craft_fill = PatternFill("solid", fgColor="3D3D3D")
     no_craft_font = Font(name="Arial", size=10, color="999999")
 
@@ -1079,9 +1618,17 @@ def write_xlsx(records: list, report_info: dict, report_code: str, output_path: 
         color = XLSX_CLASS_BG.get(cls_name, "77666666")
         return PatternFill("solid", fgColor=color)
 
+    def prefill_dark(ws, rows=300, cols=60):
+        """Pre-fill entire sheet area with dark background so no white cells show."""
+        dk = PatternFill("solid", fgColor="0D1117")
+        for r in range(1, rows + 1):
+            for c in range(1, cols + 1):
+                ws.cell(row=r, column=c).fill = dk
+
     def build_sheet(ws, title, player_data):
         # Title
         total_cols = 2 + max_items * 3
+        prefill_dark(ws, rows=200, cols=total_cols + 5)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
         ws["A1"].value = f"{title} — {guild_name} — {report_title} ({report_date})"
         ws["A1"].font = Font(name="Arial", bold=True, size=13, color="7289DA")
@@ -1182,7 +1729,7 @@ def write_xlsx(records: list, report_info: dict, report_code: str, output_path: 
                 else:
                     for j in range(3):
                         cell = ws.cell(row=row, column=base_col + j, value="—")
-                        cell.font = no_craft_font if not has_items else Font(name="Arial", size=10, color="444444")
+                        cell.font = no_craft_font if not has_items else Font(name="Arial", size=10, color="AAAAAA")
                         cell.fill = fill
                         cell.border = border
                         cell.alignment = center
@@ -1227,7 +1774,7 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
     """
     header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     header_fill = PatternFill("solid", fgColor="1a1a2e")
-    data_font = Font(name="Arial", size=10, color="000000")
+    data_font = Font(name="Arial", size=10, color="FFFFFF")
     border = Border(bottom=Side(style="thin", color="333333"))
     center = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
@@ -1246,6 +1793,13 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
     report_date = ""
     if report_info.get("startTime"):
         report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    # Pre-fill entire sheet with dark background
+    dk = PatternFill("solid", fgColor="0D1117")
+    num_cols = 1 + len(fights_data) * 4 + 10
+    for r in range(1, 200):
+        for c in range(1, num_cols + 1):
+            ws.cell(row=r, column=c).fill = dk
 
     full_title = f"{title} — {guild_name} — {report_title} ({report_date})"
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=1 + len(fights_data) * 3)
@@ -1291,15 +1845,16 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
     c.border = border
     ws.column_dimensions["A"].width = 18
 
-    sub_labels = ["Health Pots", "Combat Pots", "Defensives"]
-    col_widths  = [20, 20, 28]
+    sub_labels = ["Health Pots", "Healthstone", "Combat Pots", "Defensives"]
+    col_widths  = [18, 14, 18, 28]
+    num_cols    = len(sub_labels)
 
     for fi, fd in enumerate(fights_data):
         fname   = fd.get("fight_name", "Boss")
-        base_ci = 2 + fi * 3  # first column of this boss group
+        base_ci = 2 + fi * num_cols  # first column of this boss group
 
-        # Merge boss name across 3 columns
-        ws.merge_cells(start_row=hr_boss, start_column=base_ci, end_row=hr_boss, end_column=base_ci + 2)
+        # Merge boss name across num_cols columns
+        ws.merge_cells(start_row=hr_boss, start_column=base_ci, end_row=hr_boss, end_column=base_ci + num_cols - 1)
         bc = ws.cell(row=hr_boss, column=base_ci, value=fname)
         bc.font = header_font
         bc.fill = PatternFill("solid", fgColor="111827")
@@ -1335,21 +1890,22 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
         player_name, _ = lookup_roster(char_name)
 
         c = ws.cell(row=row, column=1, value=f"{player_name}\n({char_name})")
-        c.font = Font(name="Arial", size=10, color="000000", bold=True)
+        c.font = Font(name="Arial", size=10, color="FFFFFF", bold=True)
         c.fill = cls_fill
         c.border = border
         c.alignment = Alignment(vertical="center", wrap_text=True)
 
         for fi, fd in enumerate(fights_data):
-            base_col = 2 + fi * 3
+            base_col = 2 + fi * num_cols
             casts = fd.get("player_casts", {}).get(pid, [])
-            
-            # Group by category
-            health = [c for c in casts if c["category"] == "Health"]
-            combat = [c for c in casts if c["category"] == "Combat Pot"]
-            defensives = [c for c in casts if c["category"] == "Defensive"]
 
-            for j, (items, cat) in enumerate([(health, "Health"), (combat, "Combat Pot"), (defensives, "Defensive")]):
+            # Group by category
+            health      = [c for c in casts if c["category"] == "Health"]
+            healthstone = [c for c in casts if c["category"] == "Healthstone"]
+            combat      = [c for c in casts if c["category"] == "Combat Pot"]
+            defensives  = [c for c in casts if c["category"] == "Defensive"]
+
+            for j, (items, cat) in enumerate([(health, "Health"), (healthstone, "Healthstone"), (combat, "Combat Pot"), (defensives, "Defensive")]):
                 cell = ws.cell(row=row, column=base_col + j)
                 cell.fill = cls_fill
                 cell.border = border
@@ -1361,7 +1917,7 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
                     cell.alignment = wrap
                 else:
                     cell.value = "—"
-                    cell.font = Font(name="Arial", size=10, color="666666")
+                    cell.font = Font(name="Arial", size=10, color="AAAAAA")
                     cell.alignment = center
 
                 # Divider
@@ -1372,7 +1928,7 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
         max_lines = 1
         for fd in fights_data:
             player_casts = fd.get("player_casts", {}).get(pid, [])
-            for cat in ("Health", "Combat Pot", "Defensive"):
+            for cat in ("Health", "Healthstone", "Combat Pot", "Defensive"):
                 count = sum(1 for c in player_casts if c["category"] == cat)
                 max_lines = max(max_lines, count)
         ws.row_dimensions[row].height = max(18, 15 * max_lines)
@@ -1494,6 +2050,15 @@ def main():
         }, f, indent=2, ensure_ascii=False)
     print(f"[DEBUG] Raw API responses saved to: {debug_path}")
     
+    # Build player max HP lookup from combatant info (stamina * 20 approximation)
+    player_max_hp = {}
+    for ce in all_combatant_events:
+        pid = ce.get("sourceID")
+        stamina = ce.get("stamina", 0)
+        if pid and stamina:
+            hp = stamina * 20
+            player_max_hp[pid] = max(player_max_hp.get(pid, 0), hp)
+
     print("\n[...] Analyzing crafted gear...")
     records = analyze_players(actors, all_combatant_events)
     
@@ -1552,20 +2117,6 @@ def main():
                 total_tracked = sum(len(v) for v in player_casts.values())
                 print(f"         Found {total_tracked} tracked spell uses across {len(player_casts)} players.")
 
-                # Debug: dump untracked spell IDs from first fight of Split 1
-                if split_name == "Split 1" and len(split_fight_data) == 0:
-                    from collections import Counter
-                    untracked = Counter(
-                        e["abilityGameID"] for e in cast_events
-                        if e.get("type") == "cast"
-                        and e.get("abilityGameID") not in ALL_TRACKED_IDS
-                        and e.get("sourceID") in actor_lookup
-                    )
-                    debug_spells = sorted(untracked.items(), key=lambda x: -x[1])[:60]
-                    print(f"\n[DEBUG] Top untracked spell IDs in {fname} ({diff}) — check these on Wowhead:")
-                    for sid, count in debug_spells:
-                        print(f"         {sid:>8}  x{count:>3}   https://www.wowhead.com/spell={sid}")
-                
                 split_fight_data.append({
                     "fight_name": f"{fname} ({diff})",
                     "fight_id": fid,
@@ -1576,39 +2127,61 @@ def main():
         
         split_data[split_name] = split_fight_data
 
-    # ── Boss analysis: deaths per boss (both splits combined) ──
-    # boss_data: { boss_name: [ {fight, deaths: {pid: [times]}, all_player_ids}, ... ] }
+    # ── Boss analysis: deaths + avoidable damage per boss (both splits combined) ──
+    # boss_data: { boss_name: [ {fight_id, deaths, all_player_ids, avoidable_damage}, ... ] }
     boss_data = {}
-    print(f"\n[...] Fetching death events per boss...")
+    print(f"\n[...] Fetching death + damage events per boss...")
     for fight in selected_fights:
         fid   = fight["id"]
         fname = fight["name"]
         diff  = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
         boss_key = f"{fname} ({diff})"
         try:
-            death_events = fetch_death_events(token, report_code, fid)
-            fight_start  = fight.get("startTime", 0)
-            deaths       = analyze_deaths(death_events, fight_start, ability_names)
-            # Collect all player IDs present in this fight from cast data
+            death_events     = fetch_death_events(token, report_code, fid)
+            damage_events    = fetch_damage_taken_events(token, report_code, fid)
+            interrupt_events = fetch_interrupt_events(token, report_code, fid)
+            fight_start      = fight.get("startTime", 0)
+            fight_end        = fight.get("endTime", 0)
+            fight_dur_ms     = fight_end - fight_start
+            deaths           = analyze_deaths(death_events, fight_start, ability_names, fight_end_ms=fight_dur_ms)
+            avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start, ability_names, player_max_hp)
+            dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
+            uptime_map       = fetch_uptime_table(token, report_code, fid)
+            healing_map      = fetch_healing_table(token, report_code, fid)
+            rankings_map     = fetch_rankings(token, report_code, fid)
+            interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
+            # Collect all player IDs: from casts, damage taken, uptime, and deaths
             all_pids = set()
             for sdata in split_data.values():
                 for fd in sdata:
                     if fd.get("fight_id") == fid:
                         all_pids.update(fd.get("player_casts", {}).keys())
+            all_pids.update(dmg_taken.keys())
+            all_pids.update(uptime_map.keys())
+            all_pids.update(deaths.keys())
+            # Only keep actual player actors
+            all_pids = {pid for pid in all_pids if pid in actor_lookup}
             if boss_key not in boss_data:
                 boss_data[boss_key] = []
             boss_data[boss_key].append({
                 "fight_id": fid,
+                "fight_dur_ms": fight_dur_ms,
                 "deaths": deaths,
                 "all_player_ids": all_pids,
+                "avoidable_damage": avoidable,
+                "dmg_taken": dmg_taken,
+                "uptime_map": uptime_map,
+                "healing_map": healing_map,
+                "rankings_map": rankings_map,
+                "interrupts": interrupts,
             })
-            print(f"  [OK] {fname}: {len(deaths)} death(s) before threshold.")
+            print(f"  [OK] {fname}: {len(deaths)} death(s), {len(avoidable)} player(s) with damage hits, {sum(interrupts.values())} total interrupts.")
         except Exception as e:
-            print(f"  [WARN] Could not fetch deaths for fight {fid}: {e}")
+            print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
     # Output
     html_path = "craft_audit.html"
-    write_html(records, report_info, report_code, html_path, split_data=split_data, actors=actors)
+    write_html(records, report_info, report_code, html_path, split_data=split_data, actors=actors, boss_data=boss_data)
 
     xlsx_path = "craft_audit.xlsx"
     write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data, boss_data=boss_data, actors=actors)

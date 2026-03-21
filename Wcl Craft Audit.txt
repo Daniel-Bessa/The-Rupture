@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""
+WarcraftLogs Crafted Gear Audit Tool — Midnight Season 1
+=========================================================
+Pulls player gear from a WarcraftLogs report and identifies crafted items,
+spark usage, crest tier, and embellishments. Outputs to .xlsx.
+
+Usage:
+    python wcl_craft_audit.py
+
+You will be prompted for:
+    - WarcraftLogs Client ID & Secret
+    - Report code (the alphanumeric part of a WCL report URL)
+
+Requirements:
+    pip install requests openpyxl
+"""
+
+import sys
+import json
+import requests
+from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+from openpyxl.utils import get_column_letter
+
+# ─── Midnight Season 1 Constants ─────────────────────────────────────────────
+
+# Crafting quality bonus IDs (WoW internal — ranks 1 through 5)
+# These are the bonus IDs appended to items when they are player-crafted.
+CRAFT_QUALITY_BONUS_IDS = {
+    10249: 1, 10250: 2, 10251: 3, 10252: 4, 10253: 5,  # TWW-era IDs
+    10255: 1, 10256: 2, 10257: 3, 10258: 4, 10259: 5,  # Midnight-era IDs (if changed)
+    11109: 1, 11110: 2, 11111: 3, 11112: 4, 11113: 5,  # Alternate range seen in beta
+}
+
+# Bonus IDs that indicate an item was crafted via the crafting order / profession system
+# (items with these always come from player crafting, not drops)
+CRAFTED_INDICATOR_BONUS_IDS = {
+    9497,   # "Crafted" tag
+    9498,   # "Crafted" tag (alternate)
+    10222,  # Crafting work order
+    10343,  # Recrafted
+    11316,  # Midnight crafted tag
+    11317,  # Midnight crafted tag (alternate)
+}
+
+# Known embellishment bonus IDs for Midnight Season 1
+# Add more as they're discovered — these help confirm an item is crafted
+EMBELLISHMENT_BONUS_IDS = {
+    # Placeholder — update with actual Midnight embellishment bonus IDs
+    # Format: bonus_id: "Embellishment Name"
+}
+
+# Item level thresholds for Midnight Season 1 crafted gear
+ILVL_TIERS = {
+    "Myth (Spark + Myth Crests)":  (272, 285),
+    "Hero (Spark + Hero Crests)":  (259, 272),
+    "Epic Base (Spark, no crests)": (252, 259),
+    "Rare (Veteran Crests)":       (233, 246),
+    "Rare (Adventurer Crests)":    (214, 233),
+    "Rare Base (no spark)":        (200, 214),
+}
+
+# Gear slot mapping from WCL slot IDs
+SLOT_NAMES = {
+    0: "Head", 1: "Neck", 2: "Shoulder", 3: "Shirt", 4: "Chest",
+    5: "Waist", 6: "Legs", 7: "Feet", 8: "Wrist", 9: "Hands",
+    10: "Ring 1", 11: "Ring 2", 12: "Trinket 1", 13: "Trinket 2",
+    14: "Back", 15: "Main Hand", 16: "Off Hand",
+}
+
+
+# ─── WarcraftLogs API ────────────────────────────────────────────────────────
+
+def get_access_token(client_id: str, client_secret: str) -> str:
+    """Get OAuth2 access token using client credentials flow."""
+    resp = requests.post(
+        "https://www.warcraftlogs.com/oauth/token",
+        data={"grant_type": "client_credentials"},
+        auth=(client_id, client_secret),
+    )
+    if resp.status_code != 200:
+        print(f"[ERROR] Auth failed ({resp.status_code}): {resp.text}")
+        sys.exit(1)
+    return resp.json()["access_token"]
+
+
+def query_wcl(token: str, query: str, variables: dict = None) -> dict:
+    """Execute a GraphQL query against WarcraftLogs v2 API."""
+    resp = requests.post(
+        "https://www.warcraftlogs.com/api/v2/client",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"query": query, "variables": variables or {}},
+    )
+    if resp.status_code != 200:
+        print(f"[ERROR] API request failed ({resp.status_code}): {resp.text}")
+        sys.exit(1)
+    data = resp.json()
+    if "errors" in data:
+        print(f"[ERROR] GraphQL errors: {json.dumps(data['errors'], indent=2)}")
+        sys.exit(1)
+    return data["data"]
+
+
+def fetch_report_info(token: str, report_code: str) -> dict:
+    """Fetch basic report metadata (title, fights, etc.)."""
+    query = """
+    query ($code: String!) {
+        reportData {
+            report(code: $code) {
+                title
+                startTime
+                endTime
+                guild { name server { name region { slug } } }
+                fights(killType: Encounters) {
+                    id
+                    name
+                    kill
+                    difficulty
+                }
+            }
+        }
+    }
+    """
+    return query_wcl(token, query, {"code": report_code})["reportData"]["report"]
+
+
+def fetch_player_details(token: str, report_code: str, fight_ids: list = None) -> dict:
+    """Fetch detailed player info including gear for the report."""
+    query = """
+    query ($code: String!, $fightIDs: [Int]) {
+        reportData {
+            report(code: $code) {
+                playerDetails(fightIDs: $fightIDs)
+            }
+        }
+    }
+    """
+    variables = {"code": report_code}
+    if fight_ids:
+        variables["fightIDs"] = fight_ids
+    return query_wcl(token, query, variables)["reportData"]["report"]["playerDetails"]
+
+
+# ─── Gear Analysis ───────────────────────────────────────────────────────────
+
+def detect_craft_quality(bonus_ids: list) -> int | None:
+    """Return crafting quality rank (1-5) if item has a craft quality bonus ID."""
+    for bid in bonus_ids:
+        if bid in CRAFT_QUALITY_BONUS_IDS:
+            return CRAFT_QUALITY_BONUS_IDS[bid]
+    return None
+
+
+def is_crafted(bonus_ids: list) -> bool:
+    """Check if an item is crafted based on bonus IDs."""
+    if any(bid in CRAFTED_INDICATOR_BONUS_IDS for bid in bonus_ids):
+        return True
+    if detect_craft_quality(bonus_ids) is not None:
+        return True
+    return False
+
+
+def classify_ilvl_tier(ilvl: int, quality: int) -> str:
+    """Classify an item's crafting tier based on ilvl."""
+    if quality >= 4:  # Epic
+        if ilvl >= 272:
+            return "Myth (Spark + Myth Crests)"
+        elif ilvl >= 259:
+            return "Hero (Spark + Hero Crests)"
+        elif ilvl >= 252:
+            return "Epic Base (Spark, no crests)"
+        else:
+            return f"Epic (ilvl {ilvl})"
+    else:  # Rare
+        if ilvl >= 233:
+            return "Rare (Veteran Crests)"
+        elif ilvl >= 214:
+            return "Rare (Adventurer Crests)"
+        else:
+            return "Rare Base (no spark)"
+
+
+def estimate_spark_usage(ilvl: int, quality: int, slot: int) -> str:
+    """Estimate spark usage based on ilvl and quality."""
+    if quality < 4:  # Rare items don't use sparks
+        return "No"
+    if ilvl >= 252:
+        if slot in (15, 16):  # Weapons
+            return "Yes (2H = 4 sparks)" if ilvl >= 252 else "Yes (2 sparks)"
+        return "Yes (2 sparks)"
+    return "No"
+
+
+def analyze_players(player_details: dict) -> list:
+    """Analyze all players' gear and return crafted item records."""
+    records = []
+    
+    # playerDetails groups players by role
+    for role in ["tanks", "healers", "dps"]:
+        players = player_details.get("data", player_details).get(role, [])
+        for player in players:
+            name = player.get("name", "Unknown")
+            player_class = player.get("type", "Unknown")
+            server = player.get("server", "Unknown")
+            
+            gear = player.get("combatantInfo", {}).get("gear", [])
+            if not gear:
+                gear = player.get("gear", [])
+            
+            player_has_crafted = False
+            
+            for idx, item in enumerate(gear):
+                if not item or not isinstance(item, dict):
+                    continue
+                
+                item_id = item.get("id", 0)
+                if item_id == 0:
+                    continue
+                
+                ilvl = item.get("itemLevel", 0)
+                quality = item.get("quality", 0)
+                bonus_ids = item.get("bonusIDs", []) or []
+                slot = idx  # WCL gear array index maps to slot
+                
+                if is_crafted(bonus_ids):
+                    player_has_crafted = True
+                    craft_rank = detect_craft_quality(bonus_ids)
+                    tier = classify_ilvl_tier(ilvl, quality)
+                    spark = estimate_spark_usage(ilvl, quality, slot)
+                    
+                    records.append({
+                        "player": name,
+                        "class": player_class,
+                        "server": server,
+                        "slot": SLOT_NAMES.get(slot, f"Slot {slot}"),
+                        "item_id": item_id,
+                        "item_level": ilvl,
+                        "quality": "Epic" if quality >= 4 else "Rare" if quality >= 3 else "Uncommon",
+                        "craft_rank": f"Rank {craft_rank}" if craft_rank else "Unknown",
+                        "tier": tier,
+                        "spark_used": spark,
+                        "bonus_ids": ", ".join(str(b) for b in bonus_ids),
+                    })
+            
+            # Track players with NO crafted gear
+            if not player_has_crafted:
+                records.append({
+                    "player": name,
+                    "class": player_class,
+                    "server": server,
+                    "slot": "—",
+                    "item_id": 0,
+                    "item_level": 0,
+                    "quality": "—",
+                    "craft_rank": "—",
+                    "tier": "NO CRAFTED GEAR FOUND",
+                    "spark_used": "—",
+                    "bonus_ids": "",
+                })
+    
+    return records
+
+
+# ─── XLSX Output ─────────────────────────────────────────────────────────────
+
+# Styling
+HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+HEADER_FILL = PatternFill("solid", fgColor="2F3136")  # Discord dark
+DATA_FONT = Font(name="Arial", size=10)
+ALERT_FILL = PatternFill("solid", fgColor="FFF3CD")  # Yellow — no crafted gear warning
+SPARK_YES_FILL = PatternFill("solid", fgColor="D4EDDA")  # Green
+SPARK_NO_FILL = PatternFill("solid", fgColor="F8D7DA")  # Red-ish for "No" on epic slots
+BORDER = Border(
+    bottom=Side(style="thin", color="444444"),
+    right=Side(style="thin", color="DDDDDD"),
+)
+
+COLUMNS = [
+    ("Player", 18),
+    ("Class", 16),
+    ("Server", 16),
+    ("Slot", 14),
+    ("Item ID", 12),
+    ("Item Level", 12),
+    ("Quality", 10),
+    ("Craft Rank", 12),
+    ("Tier / Crest Level", 28),
+    ("Spark Used?", 14),
+    ("Bonus IDs (raw)", 30),
+]
+
+
+def write_xlsx(records: list, report_info: dict, report_code: str, output_path: str):
+    """Write the audit data to a formatted .xlsx file."""
+    wb = Workbook()
+    
+    # ── Sheet 1: Crafted Gear Audit ──
+    ws = wb.active
+    ws.title = "Crafted Gear Audit"
+    
+    # Title row
+    guild_name = "Unknown Guild"
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "Unknown Guild")
+    
+    report_title = report_info.get("title", report_code)
+    report_date = ""
+    if report_info.get("startTime"):
+        report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
+    
+    ws.merge_cells("A1:K1")
+    title_cell = ws["A1"]
+    title_cell.value = f"Crafted Gear Audit — {guild_name} — {report_title} ({report_date})"
+    title_cell.font = Font(name="Arial", bold=True, size=14, color="7289DA")
+    title_cell.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 30
+    
+    ws.merge_cells("A2:K2")
+    ws["A2"].value = f"Report: https://www.warcraftlogs.com/reports/{report_code}"
+    ws["A2"].font = Font(name="Arial", size=9, color="888888", italic=True)
+    
+    # Headers (row 4)
+    header_row = 4
+    for col_idx, (col_name, col_width) in enumerate(COLUMNS, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=col_name)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = BORDER
+        ws.column_dimensions[get_column_letter(col_idx)].width = col_width
+    ws.row_dimensions[header_row].height = 22
+    
+    # Data rows
+    # Sort: players with no crafted gear at bottom, then alphabetical
+    records.sort(key=lambda r: (r["item_id"] == 0, r["player"].lower(), r["slot"]))
+    
+    for row_idx, rec in enumerate(records, start=header_row + 1):
+        values = [
+            rec["player"], rec["class"], rec["server"], rec["slot"],
+            rec["item_id"] if rec["item_id"] != 0 else "—",
+            rec["item_level"] if rec["item_level"] != 0 else "—",
+            rec["quality"], rec["craft_rank"], rec["tier"],
+            rec["spark_used"], rec["bonus_ids"],
+        ]
+        for col_idx, val in enumerate(values, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.font = DATA_FONT
+            cell.border = BORDER
+            cell.alignment = Alignment(vertical="center")
+            
+            # Center-align most columns
+            if col_idx in (4, 5, 6, 7, 8, 10):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Highlight rows where player has NO crafted gear
+        if rec["item_id"] == 0:
+            for col_idx in range(1, len(COLUMNS) + 1):
+                ws.cell(row=row_idx, column=col_idx).fill = ALERT_FILL
+        
+        # Color the "Spark Used?" column
+        spark_cell = ws.cell(row=row_idx, column=10)
+        if "Yes" in str(rec["spark_used"]):
+            spark_cell.fill = SPARK_YES_FILL
+        elif rec["spark_used"] == "No" and rec["quality"] == "Epic":
+            spark_cell.fill = SPARK_NO_FILL
+    
+    # Freeze header
+    ws.freeze_panes = "A5"
+    
+    # Auto-filter
+    ws.auto_filter.ref = f"A{header_row}:K{header_row + len(records)}"
+    
+    # ── Sheet 2: Summary ──
+    ws2 = wb.create_sheet("Summary")
+    ws2.merge_cells("A1:D1")
+    ws2["A1"].value = "Player Crafting Summary"
+    ws2["A1"].font = Font(name="Arial", bold=True, size=14, color="7289DA")
+    ws2.row_dimensions[1].height = 28
+    
+    summary_headers = ["Player", "Class", "Crafted Items", "Sparks Used (est.)"]
+    for col_idx, header in enumerate(summary_headers, start=1):
+        cell = ws2.cell(row=3, column=col_idx, value=header)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = BORDER
+    ws2.column_dimensions["A"].width = 18
+    ws2.column_dimensions["B"].width = 16
+    ws2.column_dimensions["C"].width = 16
+    ws2.column_dimensions["D"].width = 20
+    
+    # Aggregate per player
+    player_stats = {}
+    for rec in records:
+        p = rec["player"]
+        if p not in player_stats:
+            player_stats[p] = {"class": rec["class"], "crafted": 0, "sparks": 0}
+        if rec["item_id"] != 0:
+            player_stats[p]["crafted"] += 1
+            if "Yes" in str(rec["spark_used"]):
+                # Estimate spark count from text
+                if "4 sparks" in rec["spark_used"]:
+                    player_stats[p]["sparks"] += 4
+                else:
+                    player_stats[p]["sparks"] += 2
+    
+    for row_idx, (player, stats) in enumerate(sorted(player_stats.items()), start=4):
+        ws2.cell(row=row_idx, column=1, value=player).font = DATA_FONT
+        ws2.cell(row=row_idx, column=2, value=stats["class"]).font = DATA_FONT
+        c = ws2.cell(row=row_idx, column=3, value=stats["crafted"])
+        c.font = DATA_FONT
+        c.alignment = Alignment(horizontal="center")
+        s = ws2.cell(row=row_idx, column=4, value=stats["sparks"])
+        s.font = DATA_FONT
+        s.alignment = Alignment(horizontal="center")
+        
+        if stats["crafted"] == 0:
+            for ci in range(1, 5):
+                ws2.cell(row=row_idx, column=ci).fill = ALERT_FILL
+        
+        for ci in range(1, 5):
+            ws2.cell(row=row_idx, column=ci).border = BORDER
+    
+    ws2.freeze_panes = "A4"
+    
+    wb.save(output_path)
+    print(f"\n[OK] Report saved to: {output_path}")
+
+
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+def main():
+    print("=" * 60)
+    print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
+    print("=" * 60)
+    
+    # Credentials
+    client_id = input("\nWarcraftLogs Client ID: ").strip()
+    client_secret = input("WarcraftLogs Client Secret: ").strip()
+    
+    if not client_id or not client_secret:
+        print("[ERROR] Both Client ID and Client Secret are required.")
+        sys.exit(1)
+    
+    # Authenticate
+    print("\n[...] Authenticating with WarcraftLogs...")
+    token = get_access_token(client_id, client_secret)
+    print("[OK] Authenticated successfully.")
+    
+    # Report code
+    report_input = input("\nReport code or URL: ").strip()
+    # Extract code from URL if full URL was pasted
+    if "warcraftlogs.com" in report_input:
+        # URL format: https://www.warcraftlogs.com/reports/XXXXXXXXXXXX
+        parts = report_input.rstrip("/").split("/")
+        report_code = parts[-1].split("#")[0].split("?")[0]
+    else:
+        report_code = report_input
+    
+    print(f"\n[...] Fetching report info for: {report_code}")
+    report_info = fetch_report_info(token, report_code)
+    
+    guild_name = ""
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "")
+    print(f"[OK] Report: {report_info.get('title', 'Untitled')} ({guild_name})")
+    
+    # Show fights and let user pick
+    fights = report_info.get("fights", [])
+    if fights:
+        print(f"\nEncounters found ({len(fights)}):")
+        for f in fights:
+            kill_str = "Kill" if f.get("kill") else "Wipe"
+            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(f.get("difficulty", 0), f"D{f.get('difficulty', '?')}")
+            print(f"  [{f['id']:>3}] {f['name']} — {diff} ({kill_str})")
+        
+        fight_input = input("\nFight IDs to analyze (comma-separated, or 'all'): ").strip()
+        if fight_input.lower() == "all" or fight_input == "":
+            fight_ids = None  # All fights
+        else:
+            fight_ids = [int(x.strip()) for x in fight_input.split(",") if x.strip().isdigit()]
+    else:
+        fight_ids = None
+    
+    print("\n[...] Fetching player gear details...")
+    player_details = fetch_player_details(token, report_code, fight_ids)
+    
+    print("[...] Analyzing crafted gear...")
+    records = analyze_players(player_details)
+    
+    crafted_count = sum(1 for r in records if r["item_id"] != 0)
+    player_count = len(set(r["player"] for r in records))
+    no_craft_count = sum(1 for r in records if r["item_id"] == 0)
+    
+    print(f"[OK] Found {crafted_count} crafted items across {player_count} players.")
+    if no_craft_count > 0:
+        print(f"[!!] {no_craft_count} player(s) have NO detected crafted gear.")
+    
+    # Output
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = f"craft_audit_{report_code}_{timestamp}.xlsx"
+    write_xlsx(records, report_info, report_code, output_path)
+    
+    print(f"\nDone! Open {output_path} to review the audit.\n")
+
+
+if __name__ == "__main__":
+    main()
