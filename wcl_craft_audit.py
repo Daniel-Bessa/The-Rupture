@@ -217,8 +217,53 @@ def fetch_cast_events(token: str, report_code: str, fight_id: int, start_time: f
         next_ts = events.get("nextPageTimestamp")
         if next_ts is None:
             break
-    
+
     return all_data
+
+
+def fetch_death_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch death events for a fight (friendly players only)."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData {
+            report(code: $code) {
+                events(dataType: Deaths, fightIDs: [$fightID], hostilityType: Friendlies, limit: 100) {
+                    data
+                }
+            }
+        }
+    }
+    """
+    result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return result["reportData"]["report"]["events"].get("data", [])
+
+
+# How many deaths before we stop counting (wipe cascade filter)
+WIPE_DEATH_THRESHOLD = 4
+
+
+def analyze_deaths(death_events: list, fight_start_ms: int) -> dict:
+    """Analyze death events, ignoring deaths after the Nth death (wipe cascade).
+    Returns {targetID: [time_str, ...]}
+    """
+    results = {}
+    total_deaths = 0
+
+    for event in sorted(death_events, key=lambda e: e.get("timestamp", 0)):
+        if total_deaths >= WIPE_DEATH_THRESHOLD:
+            break
+        target_id = event.get("targetID")
+        if target_id is None:
+            continue
+        total_deaths += 1
+        ts_ms = event.get("timestamp", 0)
+        relative_sec = (ts_ms - fight_start_ms) / 1000.0
+        minutes = int(relative_sec // 60)
+        seconds = int(relative_sec % 60)
+        time_str = f"{minutes}:{seconds:02d}"
+        results.setdefault(target_id, []).append(time_str)
+
+    return results
 
 
 # ─── Tracked Spells (matched by abilityGameID) ───────────────────────────────
@@ -858,7 +903,117 @@ XLSX_CLASS_BG = {
 }
 
 
-def write_xlsx(records: list, report_info: dict, report_code: str, output_path: str, split_data: dict = None):
+def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor_lookup: dict):
+    """One sheet per boss: rows = chars from both splits, cols = Split | Deaths | Death Times | Notes."""
+    header_font  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    header_fill  = PatternFill("solid", fgColor="1a1a2e")
+    data_font    = Font(name="Arial", size=10, color="000000")
+    bold_font    = Font(name="Arial", size=10, color="000000", bold=True)
+    death_font   = Font(name="Arial", size=10, color="CC0000", bold=True)
+    border       = Border(bottom=Side(style="thin", color="333333"))
+    center       = Alignment(horizontal="center", vertical="center")
+    left         = Alignment(horizontal="left", vertical="center")
+    wrap         = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    notes_fill   = PatternFill("solid", fgColor="F0F0F0")
+    no_death_fill = PatternFill("solid", fgColor="E8F5E9")  # light green = clean
+    death_fill   = PatternFill("solid", fgColor="FFEBEE")   # light red = died
+
+    guild_name  = report_info.get("guild", {}).get("name", "") if report_info.get("guild") else ""
+    report_date = ""
+    if report_info.get("startTime"):
+        report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
+
+    # Title
+    ws.merge_cells("A1:F1")
+    ws["A1"].value = f"{boss_name} — {guild_name} ({report_date})"
+    ws["A1"].font  = Font(name="Arial", bold=True, size=13, color="7289DA")
+    ws.row_dimensions[1].height = 22
+
+    ws["A2"].value = f"Deaths filtered: only first {WIPE_DEATH_THRESHOLD} deaths shown (wipe cascade excluded)"
+    ws["A2"].font  = Font(name="Arial", size=9, color="888888", italic=True)
+
+    # Headers
+    hr = 4
+    cols = ["Player", "Char", "Split", "Deaths", "Death Times", "Notes"]
+    widths = [16, 18, 8, 10, 28, 40]
+    for ci, (h, w) in enumerate(zip(cols, widths), 1):
+        c = ws.cell(row=hr, column=ci, value=h)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+        c.border = border
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[hr].height = 18
+    ws.freeze_panes = "A5"
+
+    # Collect all chars across both splits, tag with split number
+    rows = []
+    for fi, fight in enumerate(fights, 1):
+        split_num = fi
+        for pid, death_times in fight.get("deaths", {}).items():
+            actor = actor_lookup.get(pid, {})
+            char_name = actor.get("name", f"ID-{pid}")
+            cls = actor.get("subType", "Unknown")
+            player_name, _ = lookup_roster(char_name)
+            role = PLAYER_ROLES.get(player_name, "DPS")
+            rows.append({
+                "player": player_name, "char": char_name, "cls": cls,
+                "split": split_num, "role": role,
+                "deaths": len(death_times), "death_times": ", ".join(death_times),
+            })
+        # Also include players with 0 deaths from cast events (they were in the fight)
+        for pid in fight.get("all_player_ids", set()):
+            if pid not in fight.get("deaths", {}):
+                actor = actor_lookup.get(pid, {})
+                char_name = actor.get("name", f"ID-{pid}")
+                cls = actor.get("subType", "Unknown")
+                player_name, _ = lookup_roster(char_name)
+                role = PLAYER_ROLES.get(player_name, "DPS")
+                rows.append({
+                    "player": player_name, "char": char_name, "cls": cls,
+                    "split": split_num, "role": role,
+                    "deaths": 0, "death_times": "",
+                })
+
+    # Sort: role → player name → split
+    rows.sort(key=lambda r: (ROLE_ORDER.get(r["role"], 2), r["player"].lower(), r["split"]))
+
+    row = hr + 1
+    current_role = None
+    for r in rows:
+        if r["role"] != current_role:
+            current_role = r["role"]
+            for ci in range(1, 7):
+                sc = ws.cell(row=row, column=ci)
+                sc.fill = PatternFill("solid", fgColor="111827")
+                sc.border = border
+            ws.cell(row=row, column=1).value = f"── {current_role}s ──"
+            ws.cell(row=row, column=1).font = Font(name="Arial", size=9, bold=True, color="7289DA")
+            row += 1
+
+        cls_fill = PatternFill("solid", fgColor=XLSX_CLASS_BG.get(r["cls"], "77666666"))
+        died = r["deaths"] > 0
+        row_fill = death_fill if died else no_death_fill
+
+        vals = [r["player"], r["char"], f"Split {r['split']}", r["deaths"] or "—", r["death_times"] or "—", ""]
+        fills = [cls_fill, cls_fill, cls_fill, row_fill, row_fill, notes_fill]
+        aligns = [left, left, center, center, wrap, wrap]
+        fonts = [bold_font, data_font, data_font, death_font if died else data_font, data_font, data_font]
+
+        for ci, (val, fill, align, font) in enumerate(zip(vals, fills, aligns, fonts), 1):
+            c = ws.cell(row=row, column=ci, value=val)
+            c.fill = fill
+            c.font = font
+            c.alignment = align
+            c.border = border
+
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+
+def write_xlsx(records: list, report_info: dict, report_code: str, output_path: str, split_data: dict = None, boss_data: dict = None, actors: list = None):
     """Write crafted gear data to XLSX with Mains, Alts, and Split tabs."""
     wb = Workbook()
     
@@ -1044,6 +1199,14 @@ def write_xlsx(records: list, report_info: dict, report_code: str, output_path: 
         for split_name, split_fights in split_data.items():
             ws_split = wb.create_sheet(split_name)
             _build_split_sheet(ws_split, split_name, split_fights, report_info, actors_list=None)
+
+    # Build boss analysis tabs (deaths + notes)
+    if boss_data:
+        actor_lookup = {a["id"]: a for a in (actors or [])}
+        for boss_name, fights in boss_data.items():
+            safe_name = boss_name[:28]  # Excel sheet name limit
+            ws_boss = wb.create_sheet(safe_name)
+            _build_boss_sheet(ws_boss, boss_name, fights, report_info, actor_lookup)
 
     wb.save(output_path)
     print(f"[OK] XLSX report saved to: {output_path}")
@@ -1398,13 +1561,43 @@ def main():
                 print(f"    [WARN] Could not fetch casts for fight {fid}: {e}")
         
         split_data[split_name] = split_fight_data
-    
+
+    # ── Boss analysis: deaths per boss (both splits combined) ──
+    # boss_data: { boss_name: [ {fight, deaths: {pid: [times]}, all_player_ids}, ... ] }
+    boss_data = {}
+    print(f"\n[...] Fetching death events per boss...")
+    for fight in selected_fights:
+        fid   = fight["id"]
+        fname = fight["name"]
+        diff  = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
+        boss_key = f"{fname} ({diff})"
+        try:
+            death_events = fetch_death_events(token, report_code, fid)
+            fight_start  = fight.get("startTime", 0)
+            deaths       = analyze_deaths(death_events, fight_start)
+            # Collect all player IDs present in this fight from cast data
+            all_pids = set()
+            for sdata in split_data.values():
+                for fd in sdata:
+                    if fd.get("fight_id") == fid:
+                        all_pids.update(fd.get("player_casts", {}).keys())
+            if boss_key not in boss_data:
+                boss_data[boss_key] = []
+            boss_data[boss_key].append({
+                "fight_id": fid,
+                "deaths": deaths,
+                "all_player_ids": all_pids,
+            })
+            print(f"  [OK] {fname}: {len(deaths)} death(s) before threshold.")
+        except Exception as e:
+            print(f"  [WARN] Could not fetch deaths for fight {fid}: {e}")
+
     # Output
     html_path = "craft_audit.html"
     write_html(records, report_info, report_code, html_path, split_data=split_data, actors=actors)
 
     xlsx_path = "craft_audit.xlsx"
-    write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data)
+    write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data, boss_data=boss_data, actors=actors)
     
     print(f"\nDone! Refresh craft_audit.html in your browser, or open craft_audit.xlsx.\n")
 
