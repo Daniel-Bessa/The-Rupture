@@ -19,7 +19,7 @@ Requirements:
 import sys
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -617,7 +617,7 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
     report_title = report_info.get("title", report_code)
     report_date = ""
     if report_info.get("startTime"):
-        report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
+        report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
     # ── Gear tab data ──
     players = {}
@@ -859,7 +859,7 @@ def write_xlsx(records: list, report_info: dict, report_code: str, output_path: 
     report_title = report_info.get("title", report_code)
     report_date = ""
     if report_info.get("startTime"):
-        report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
+        report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
     # Group records by player and enrich with roster data
     players = {}
@@ -1059,9 +1059,22 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
         "Defensive": PatternFill("solid", fgColor="774488CC"),
     }
 
-    ws["A1"].value = title
+    guild_name = ""
+    if report_info.get("guild"):
+        guild_name = report_info["guild"].get("name", "")
+    report_title = report_info.get("title", "")
+    report_date = ""
+    if report_info.get("startTime"):
+        report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    full_title = f"{title} — {guild_name} — {report_title} ({report_date})"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=1 + len(fights_data) * 3)
+    ws["A1"].value = full_title
     ws["A1"].font = Font(name="Arial", bold=True, size=13, color="7289DA")
     ws.row_dimensions[1].height = 26
+
+    ws["A2"].value = f"Report: {report_title} ({report_date})"
+    ws["A2"].font = Font(name="Arial", size=9, color="888888", italic=True)
 
     # Collect all unique players across all fights in this split
     all_player_ids = set()
