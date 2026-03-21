@@ -229,9 +229,9 @@ HEALTH_POT_IDS = {
     5512,    # Healthstone
     432112,  # Algari Healing Potion (TWW)
     431924,  # Algari Healing Potion (TWW alternate)
-    241304,  # Midnight health potion
-    241305,  # Midnight health potion (alternate)
-    258138,  # Midnight health potion (alternate)
+    241304,  # Silvermoon Health Potion (Midnight)
+    241305,  # Silvermoon Health Potion (Midnight alternate)
+    258138,  # Silvermoon Health Potion (Midnight alternate)
 }
 
 # Combat Potions
