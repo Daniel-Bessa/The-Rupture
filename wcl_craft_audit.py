@@ -2165,7 +2165,17 @@ def main():
                 "rankings_map": rankings_map,
                 "interrupts": interrupts,
             })
-            print(f"  [OK] {fname}: {len(deaths)} death(s), {len(avoidable)} player(s) with damage hits, {sum(interrupts.values())} total interrupts.")
+            # TEMP SCAN: print unique boss ability names + IDs for this fight
+            unique_ab = {}
+            for ev in damage_events:
+                if ev.get("sourceID") in actor_lookup:
+                    continue
+                aid = ev.get("abilityGameID", 0)
+                unique_ab[aid] = ability_names.get(aid, f"#{aid}")
+            print(f"  [OK] {fname}: {len(deaths)} death(s), {len(avoidable)} player(s), {sum(interrupts.values())} interrupts.")
+            print(f"       Boss abilities in damage events:")
+            for aid, aname in sorted(unique_ab.items(), key=lambda x: x[1]):
+                print(f"         {aid:>10}  {aname}")
         except Exception as e:
             print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
