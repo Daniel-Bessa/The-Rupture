@@ -523,7 +523,9 @@ CLASS_COLORS = {
 
 
 def _build_split_html(split_data: dict, actors: list) -> str:
-    """Build the HTML content for the Split Tracking tab."""
+    """Build the HTML content for the Split Tracking tab.
+    Layout: rows = players, columns = bosses (3 sub-cols each: Health | Combat | Defensive).
+    """
     actor_lookup = {a["id"]: a for a in actors}
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
 
@@ -538,28 +540,28 @@ def _build_split_html(split_data: dict, actors: list) -> str:
         if not fights:
             continue
 
-        # Collect all players across all fights in this split
-        all_pids = sorted(set(
-            pid for fd in fights for pid in fd.get("player_casts", {})
-        ), key=player_sort_key)
+        # All players across all fights in this split
+        all_pids = sorted(
+            set(pid for fd in fights for pid in fd.get("player_casts", {})),
+            key=player_sort_key
+        )
 
         html += f'<div class="split-section"><h2 class="split-title">{escape(split_name)}</h2>'
         html += '<div class="table-wrap"><table>'
 
-        # Header row
-        html += '<thead><tr><th class="player-header">Player</th>'
+        # Row 1: boss names spanning 3 cols each
+        html += '<thead>'
+        html += '<tr><th class="player-header" rowspan="2">Player</th>'
         for fd in fights:
-            fname = fd.get("fight_name", "Boss")
-            html += f'<th class="divider cast-h health-h">⚗ Health</th>'
-            html += f'<th class="cast-h combat-h">⚔ Combat Pot</th>'
-            html += f'<th class="cast-h def-h">🛡 Defensive</th>'
+            html += f'<th colspan="3" class="boss-name divider">{escape(fd.get("fight_name", "Boss"))}</th>'
         html += '</tr>'
 
-        # Boss name spanning row
-        html += '<tr><th class="player-header"></th>'
-        for fd in fights:
-            fname = fd.get("fight_name", "Boss")
-            html += f'<th colspan="3" class="boss-name divider">{escape(fname)}</th>'
+        # Row 2: sub-column headers
+        html += '<tr>'
+        for _ in fights:
+            html += '<th class="cast-h health-h divider">⚗ Health</th>'
+            html += '<th class="cast-h combat-h">⚔ Combat</th>'
+            html += '<th class="cast-h def-h">🛡 Defensive</th>'
         html += '</tr></thead><tbody>'
 
         current_role = None
@@ -577,23 +579,28 @@ def _build_split_html(split_data: dict, actors: list) -> str:
                 html += f'<tr class="role-sep"><td colspan="{colspan}">── {current_role}s ──</td></tr>'
 
             html += f'<tr>'
-            html += f'<td class="player-cell" style="color:{cls_color}"><span class="pname">{escape(pname)}</span><span class="cname"> ({escape(char_name)})</span></td>'
+            html += f'<td class="player-cell" style="color:{cls_color}"><span class="pname">{escape(pname)}</span><br><span class="cname">{escape(char_name)}</span></td>'
 
-            for fi, fd in enumerate(fights):
+            for fd in fights:
                 casts = fd.get("player_casts", {}).get(pid, [])
-                health = [c for c in casts if c["category"] == "Health"]
-                combat = [c for c in casts if c["category"] == "Combat Pot"]
-                defensives = [c for c in casts if c["category"] == "Defensive"]
+                health    = [c for c in casts if c["category"] == "Health"]
+                combat    = [c for c in casts if c["category"] == "Combat Pot"]
+                defensive = [c for c in casts if c["category"] == "Defensive"]
 
-                div = ' divider' if fi == 0 else ' divider'
-
-                for items, cat_cls in [(health, "health-cell"), (combat, "combat-cell"), (defensives, "def-cell")]:
-                    extra = div if cat_cls == "health-cell" else ""
+                for items, cat_cls, is_first in [
+                    (health, "health-cell", True),
+                    (combat, "combat-cell", False),
+                    (defensive, "def-cell", False),
+                ]:
+                    div = " divider" if is_first else ""
                     if items:
-                        lines = "".join(f'<div class="cast-line">{escape(it["spell"])} <span class="cast-time">@ {it["time"]}</span></div>' for it in items)
-                        html += f'<td class="{cat_cls}{extra}">{lines}</td>'
+                        lines = "".join(
+                            f'<div class="cast-line">{escape(it["spell"])} <span class="cast-time">@ {it["time"]}</span></div>'
+                            for it in items
+                        )
+                        html += f'<td class="{cat_cls}{div}">{lines}</td>'
                     else:
-                        html += f'<td class="empty-cast{extra}">—</td>'
+                        html += f'<td class="empty-cast{div}">—</td>'
 
             html += '</tr>'
 
@@ -715,8 +722,8 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 
 /* ── Split tab ── */
 .split-section {{ margin-bottom: 40px; }}
-.split-title {{ font-size: 17px; color: #7289DA; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #2a2a4a; }}
-.boss-name {{ text-align: center; color: #aaa; font-size: 11px; background: #111827; }}
+.split-title {{ font-size: 17px; color: #7289DA; margin-bottom: 14px; padding-bottom: 6px; border-bottom: 1px solid #2a2a4a; }}
+.boss-name {{ text-align: center; color: #c4b0ff; font-size: 12px; background: #111827; padding: 6px 10px; }}
 .cast-h {{ font-size: 10px; padding: 5px 8px; }}
 .health-h {{ color: #e57373; }}
 .combat-h {{ color: #ce93d8; }}
@@ -1296,8 +1303,6 @@ def main():
     
     # Fetch cast events for each split
     split_data = {}
-    report_start = report_info.get("startTime", 0)
-    
     actor_lookup = {a["id"]: a for a in actors}
     
     for split_name, split_fights_list in [("Split 1", split1_fights), ("Split 2", split2_fights)]:
@@ -1315,8 +1320,8 @@ def main():
             
             try:
                 cast_events = fetch_cast_events(token, report_code, fid)
-                # Fight timestamps in events are relative to report start
-                fight_start = report_start + fight.get("startTime", 0)
+                # Event timestamps are relative to report start, same as fight.startTime
+                fight_start = fight.get("startTime", 0)
 
                 player_casts = analyze_fight_casts(cast_events, fight_start, actor_lookup)
 
