@@ -905,6 +905,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
     for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
         table_id = f"boss-tbl-{boss_idx}"
+        boss_name_base = boss_name.rsplit(" (", 1)[0]
+        mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
+        has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
+        total_cols     = 16 + len(mech_defs)  # base 16 + mechanic columns
+
         # Collect all pids across all fights for this boss
         all_pids_set = set()
         for fight in fights:
@@ -958,12 +963,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         html += '<th class="avoid-h">Avoid Hits</th>'
         html += '<th class="avoid-h">&gt;10% HP Hits</th>'
         html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
+        for m in mech_defs:
+            css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
+            html += f'<th class="{css}">{escape(m["label"])}</th>'
         html += '<th>Notes</th>'
         html += '</tr></thead><tbody>'
 
+        PARSE_COLORS = {99:"#E5CC80", 95:"#FF8000", 75:"#A335EE", 50:"#0070DD", 25:"#1EFF00"}
+
         # Group by split, then role, then player
         for fi, fight in enumerate(fights, 1):
-            html += f'<tr class="role-sep"><td colspan="16" style="color:#a0b4ff;font-size:13px;padding:8px 10px;">── Split {fi} ──</td></tr>'
+            html += f'<tr class="role-sep"><td colspan="{total_cols}" style="color:#a0b4ff;font-size:13px;padding:8px 10px;">── Split {fi} ──</td></tr>'
             current_role = None
             for pid in sorted_pids:
                 deaths_map = fight.get("deaths", {})
@@ -978,7 +988,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
                 if role != current_role:
                     current_role = role
-                    html += f'<tr class="role-sep"><td colspan="16">── {current_role}s ──</td></tr>'
+                    html += f'<tr class="role-sep"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
 
                 avoidable    = fight.get("avoidable_damage", {})
                 dmg_taken    = fight.get("dmg_taken", {})
@@ -987,6 +997,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 healing_map  = fight.get("healing_map", {})
                 rankings_map = fight.get("rankings_map", {})
                 fight_dur    = fight.get("fight_dur_ms", 0)
+                fight_mechs  = fight.get("mechanics_data", {})
 
                 death_list = deaths_map.get(pid, [])
                 av = avoidable.get(pid, {})
@@ -996,6 +1007,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 uptime_str = f"{min(active / fight_dur * 100, 100):.0f}%" if fight_dur > 0 and active > 0 else "—"
                 interrupt_count = interrupts.get(pid, 0)
                 interrupt_str = str(interrupt_count) if interrupt_count > 0 else "—"
+                interrupt_style = (
+                    ' style="background:#1A3A1A"' if interrupt_count > 0
+                    else (' style="background:#5D1A1A"' if has_interrupts else "")
+                )
                 hits = av.get("hits", 0) or 0
                 big_hits = av.get("big_hits", 0) or 0
                 details_list = av.get("details", [])
@@ -1003,7 +1018,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
                 # Parse %
                 parse_pct = rankings_map.get(char_name.lower())
-                PARSE_COLORS = {99:"#E5CC80",95:"#FF8000",75:"#A335EE",50:"#0070DD",25:"#1EFF00"}
                 if parse_pct is not None:
                     pc = int(parse_pct)
                     pc_color = next((v for k, v in sorted(PARSE_COLORS.items(), reverse=True) if pc >= k), "#666")
@@ -1011,11 +1025,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 else:
                     parse_cell = "—"
 
-                # Damage done
                 dmg_done_raw = uptime_map.get(pid, {}).get("total", 0) if isinstance(uptime_map.get(pid), dict) else 0
                 dmg_done_str = _hfmt(dmg_done_raw) if dmg_done_raw > 0 else "—"
-
-                # Healing done
                 heal_raw = healing_map.get(pid, 0)
                 heal_str = _hfmt(heal_raw) if heal_raw > 0 else "—"
 
@@ -1023,7 +1034,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 killed_str = "<br>".join(f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)' for d in death_list) or "—"
 
                 row_cls = "boss-death-row" if death_count > 0 else ""
-                interrupt_cls = " interrupt-yes" if interrupt_count > 0 else ""
                 bighit_cls = " bighit-row" if big_hits > 0 else ""
 
                 html += f'<tr class="{row_cls}">'
@@ -1038,11 +1048,19 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 html += f'<td class="death-h">{killed_str}</td>'
                 html += f'<td class="center dmg-h">{dmg_str}</td>'
                 html += f'<td class="center uptime-h">{uptime_str}</td>'
-                html += f'<td class="center interrupt-h{interrupt_cls}">{interrupt_str}</td>'
+                html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
                 html += f'<td class="center avoid-h">{hits if hits else "—"}</td>'
                 html += f'<td class="center avoid-h{bighit_cls}">{big_hits if big_hits else "—"}</td>'
                 html += f'<td class="detail-cell">{details_str}</td>'
-                html += f'<td></td>'
+                pid_mechs = fight_mechs.get(pid, {})
+                for m in mech_defs:
+                    count = pid_mechs.get(m["label"], 0)
+                    if count:
+                        bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                        html += f'<td class="center" style="background:{bg}">{count}</td>'
+                    else:
+                        html += '<td class="center">—</td>'
+                html += '<td></td>'
                 html += '</tr>'
 
         html += '</tbody></table></div>'
@@ -1208,6 +1226,8 @@ td:first-child, th:first-child {{ border-left: none; }}
 .interrupt-h {{ color: #64b5f6; }}
 .avoid-h {{ color: #ce93d8; }}
 .detail-h {{ color: #7289DA; white-space: normal; min-width: 30px; cursor: pointer; user-select: none; }}
+.mech-bad-h {{ color: #ff7070; }}
+.mech-soak-h {{ color: #66bb6a; }}
 .detail-h:hover {{ color: #a0b4ff; }}
 .detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
 .detail-col-hidden .detail-h span.detail-content,
@@ -1481,10 +1501,20 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
         ws.cell(row=3, column=col + 1).alignment = center
     ws.row_dimensions[3].height = 22
 
-    # Headers: Class, Player, Char, Split, Deaths, Killed by (time), Dmg Taken, Uptime %, Interrupts, Avoid Hits, >10% HP Hits, Big Hit Details, Notes
+    # Dynamic columns: base + boss-specific mechanics + Notes
+    boss_name_base = boss_name.rsplit(" (", 1)[0]
+    mech_defs = BOSS_MECHANICS.get(boss_name_base, [])
+    has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
+
     hr = 5
-    cols = ["", "Player", "Char", "Split", "Parse %", "Damage", "Healing", "Deaths", "Killed by (time)", "Dmg Taken", "Uptime %", "Interrupts", "Avoid Hits", ">10% HP Hits", "Big Hit Details", "Notes"]
-    widths = [3, 16, 18, 8, 9, 12, 12, 10, 28, 12, 10, 11, 11, 13, 40, 40]
+    base_cols   = ["", "Player", "Char", "Split", "Parse %", "Damage", "Healing",
+                   "Deaths", "Killed by (time)", "Dmg Taken", "Uptime %",
+                   "Interrupts", "Avoid Hits", ">10% HP Hits", "Big Hit Details"]
+    base_widths = [3, 16, 18, 8, 9, 12, 12, 10, 28, 12, 10, 11, 11, 13, 40]
+    mech_cols   = [m["label"] for m in mech_defs]
+    cols   = base_cols + mech_cols + ["Notes"]
+    widths = base_widths + [11] * len(mech_cols) + [40]
+
     for ci, (h, w) in enumerate(zip(cols, widths), 1):
         c = ws.cell(row=hr, column=ci, value=h)
         c.font = header_font
@@ -1500,13 +1530,14 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
     # Collect all chars across both splits, tag with split number
     rows = []
     for fi, fight in enumerate(fights, 1):
-        split_num  = fi
+        split_num    = fi
         avoidable    = fight.get("avoidable_damage", {})
         dmg_taken    = fight.get("dmg_taken", {})
         uptime_map   = fight.get("uptime_map", {})
         healing_map  = fight.get("healing_map", {})
         rankings_map = fight.get("rankings_map", {})
-        interrupts_map = fight.get("interrupts", {})
+        interrupts_map  = fight.get("interrupts", {})
+        mechanics_data  = fight.get("mechanics_data", {})
         fight_dur    = fight.get("fight_dur_ms", 0)
         seen_pids    = set()
 
@@ -1562,6 +1593,7 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
                 "dmg_hits": av.get("hits", "—"),
                 "big_hits": av.get("big_hits", "—"),
                 "details": details_str,
+                "mechanics": mechanics_data.get(pid, {}),
             })
             seen_pids.add(pid)
         # Also include players with 0 deaths from cast events (they were in the fight)
@@ -1587,6 +1619,7 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
                     "dmg_hits": av.get("hits", "—"),
                     "big_hits": av.get("big_hits", "—"),
                     "details": details_str,
+                    "mechanics": mechanics_data.get(pid, {}),
                 })
 
     # Sort: role → player name → split
@@ -1597,7 +1630,7 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
     for r in rows:
         if r["role"] != current_role:
             current_role = r["role"]
-            for ci in range(1, 17):
+            for ci in range(1, len(cols) + 1):
                 sc = ws.cell(row=row, column=ci)
                 sc.fill = PatternFill("solid", fgColor="111827")
                 sc.border = border
@@ -1610,31 +1643,49 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
         cls_bar_fill = PatternFill("solid", fgColor=cls_hex)
         died = r["deaths"] > 0
         row_fill = death_fill if died else no_death_fill
-        dmg_hits  = r.get("dmg_hits", "—")
-        big_hits  = r.get("big_hits", "—")
-        details   = r.get("details", "")
+        dmg_hits      = r.get("dmg_hits", "—")
+        big_hits      = r.get("big_hits", "—")
+        details       = r.get("details", "")
         interrupt_val = r.get("interrupts", "—")
-        big_fill  = PatternFill("solid", fgColor="5D2D1A") if isinstance(big_hits, int) and big_hits > 0 else row_fill
-        interrupt_fill = PatternFill("solid", fgColor="1A3A1A") if isinstance(interrupt_val, int) and interrupt_val > 0 else row_fill
+        big_fill      = PatternFill("solid", fgColor="5D2D1A") if isinstance(big_hits, int) and big_hits > 0 else row_fill
+        interrupt_fill = (
+            PatternFill("solid", fgColor="1A3A1A") if isinstance(interrupt_val, int) and interrupt_val > 0
+            else PatternFill("solid", fgColor="5D1A1A") if has_interrupts
+            else row_fill
+        )
         char_font = Font(name="Arial", size=10, color=cls_hex, bold=False)
 
-        parse_val   = r.get("parse", "—")
-        parse_fill  = PatternFill("solid", fgColor=_parse_color(parse_val)) if isinstance(parse_val, int) else row_fill
-        parse_font  = Font(name="Arial", size=10, color="000000" if isinstance(parse_val, int) else "FFFFFF", bold=isinstance(parse_val, int))
+        parse_val  = r.get("parse", "—")
+        parse_fill = PatternFill("solid", fgColor=_parse_color(parse_val)) if isinstance(parse_val, int) else row_fill
+        parse_font = Font(name="Arial", size=10, color="000000" if isinstance(parse_val, int) else "FFFFFF", bold=isinstance(parse_val, int))
 
-        vals   = ["", r["player"], r["char"], f"Split {r['split']}",
-                  parse_val, r.get("dps_dmg", "—"), r.get("healing", "—"),
-                  r["deaths"] or "—", r["death_times"] or "—",
-                  r.get("dmg_taken", "—"), r.get("uptime", "—"), interrupt_val,
-                  dmg_hits, big_hits, details or "—", ""]
-        fills  = [cls_bar_fill, row_fill, row_fill, row_fill,
-                  parse_fill, row_fill, row_fill,
-                  row_fill, row_fill, row_fill, row_fill, interrupt_fill, row_fill, big_fill, big_fill, notes_fill]
-        aligns = [left, left, left, center, center, center, center, center, wrap, center, center, center, center, center, wrap, wrap]
-        fonts  = [data_font, bold_font, char_font, data_font,
-                  parse_font, data_font, data_font,
-                  death_font if died else data_font, data_font,
-                  data_font, data_font, data_font, data_font, data_font, data_font, data_font]
+        def _mech_fill(mech, count):
+            if not isinstance(count, int) or count == 0:
+                return row_fill
+            return PatternFill("solid", fgColor="1A3D1A") if mech["type"] == "soak" else PatternFill("solid", fgColor="5D1A1A")
+
+        mech_data  = r.get("mechanics", {})
+        mech_vals  = [mech_data.get(m["label"], 0) or "—" for m in mech_defs]
+        mech_fills = [_mech_fill(m, mech_data.get(m["label"], 0)) for m in mech_defs]
+
+        base_vals  = ["", r["player"], r["char"], f"Split {r['split']}",
+                      parse_val, r.get("dps_dmg", "—"), r.get("healing", "—"),
+                      r["deaths"] or "—", r["death_times"] or "—",
+                      r.get("dmg_taken", "—"), r.get("uptime", "—"), interrupt_val,
+                      dmg_hits, big_hits, details or "—"]
+        base_fills = [cls_bar_fill, row_fill, row_fill, row_fill,
+                      parse_fill, row_fill, row_fill,
+                      row_fill, row_fill, row_fill, row_fill, interrupt_fill, row_fill, big_fill, big_fill]
+        base_aligns = [left, left, left, center, center, center, center, center, wrap, center, center, center, center, center, wrap]
+        base_fonts  = [data_font, bold_font, char_font, data_font,
+                       parse_font, data_font, data_font,
+                       death_font if died else data_font, data_font,
+                       data_font, data_font, data_font, data_font, data_font, data_font]
+
+        vals   = base_vals  + mech_vals  + [""]
+        fills  = base_fills + mech_fills + [notes_fill]
+        aligns = base_aligns + [center] * len(mech_defs) + [wrap]
+        fonts  = base_fonts  + [data_font] * len(mech_defs) + [data_font]
 
         for ci, (val, fill, align, font) in enumerate(zip(vals, fills, aligns, fonts), 1):
             c = ws.cell(row=row, column=ci, value=val)
