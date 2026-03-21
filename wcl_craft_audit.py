@@ -130,6 +130,10 @@ def fetch_report_info(token: str, report_code: str) -> dict:
                         subType
                         server
                     }
+                    abilities {
+                        gameID
+                        name
+                    }
                 }
             }
         }
@@ -242,12 +246,13 @@ def fetch_death_events(token: str, report_code: str, fight_id: int) -> list:
 WIPE_DEATH_THRESHOLD = 4
 
 
-def analyze_deaths(death_events: list, fight_start_ms: int) -> dict:
+def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None) -> dict:
     """Analyze death events, ignoring deaths after the Nth death (wipe cascade).
-    Returns {targetID: [time_str, ...]}
+    Returns {targetID: [{"time": str, "ability": str}, ...]}
     """
     results = {}
     total_deaths = 0
+    ability_names = ability_names or {}
 
     for event in sorted(death_events, key=lambda e: e.get("timestamp", 0)):
         if total_deaths >= WIPE_DEATH_THRESHOLD:
@@ -261,7 +266,9 @@ def analyze_deaths(death_events: list, fight_start_ms: int) -> dict:
         minutes = int(relative_sec // 60)
         seconds = int(relative_sec % 60)
         time_str = f"{minutes}:{seconds:02d}"
-        results.setdefault(target_id, []).append(time_str)
+        killing_id = event.get("killingAbilityGameID", 0)
+        killing_name = ability_names.get(killing_id, f"ID:{killing_id}" if killing_id else "Unknown")
+        results.setdefault(target_id, []).append({"time": time_str, "ability": killing_name})
 
     return results
 
@@ -936,7 +943,7 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
 
     # Headers
     hr = 4
-    cols = ["Player", "Char", "Split", "Deaths", "Death Times", "Notes"]
+    cols = ["Player", "Char", "Split", "Deaths", "Killed by (time)", "Notes"]
     widths = [16, 18, 8, 10, 28, 40]
     for ci, (h, w) in enumerate(zip(cols, widths), 1):
         c = ws.cell(row=hr, column=ci, value=h)
@@ -961,7 +968,8 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
             rows.append({
                 "player": player_name, "char": char_name, "cls": cls,
                 "split": split_num, "role": role,
-                "deaths": len(death_times), "death_times": ", ".join(death_times),
+                "deaths": len(death_times),
+                "death_times": "\n".join(f"{d['ability']} @ {d['time']}" for d in death_times),
             })
         # Also include players with 0 deaths from cast events (they were in the fight)
         for pid in fight.get("all_player_ids", set()):
@@ -1456,6 +1464,12 @@ def main():
     if report_info.get("masterData") and report_info["masterData"].get("actors"):
         actors = report_info["masterData"]["actors"]
     print(f"[OK] Found {len(actors)} player actors in report.")
+
+    # Build ability name lookup from masterData
+    ability_names = {}
+    if report_info.get("masterData") and report_info["masterData"].get("abilities"):
+        for ab in report_info["masterData"]["abilities"]:
+            ability_names[ab["gameID"]] = ab["name"]
     
     # Fetch gear via CombatantInfo events for each fight
     all_combatant_events = []
@@ -1574,7 +1588,7 @@ def main():
         try:
             death_events = fetch_death_events(token, report_code, fid)
             fight_start  = fight.get("startTime", 0)
-            deaths       = analyze_deaths(death_events, fight_start)
+            deaths       = analyze_deaths(death_events, fight_start, ability_names)
             # Collect all player IDs present in this fight from cast data
             all_pids = set()
             for sdata in split_data.values():
