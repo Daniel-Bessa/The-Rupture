@@ -228,8 +228,10 @@ def fetch_cast_events(token: str, report_code: str, fight_id: int, start_time: f
 HEALTH_POT_IDS = {
     5512,    # Healthstone
     432112,  # Algari Healing Potion (TWW)
-    431924,  # Algari Healing Potion (alternate)
-    # Add Midnight health potion IDs here when known
+    431924,  # Algari Healing Potion (TWW alternate)
+    241304,  # Midnight health potion
+    241305,  # Midnight health potion (alternate)
+    258138,  # Midnight health potion (alternate)
 }
 
 # Combat Potions
@@ -238,7 +240,11 @@ COMBAT_POT_IDS = {
     432098,  # Potion of Unwavering Focus (TWW)
     431945,  # Light's Potential (TWW)
     432106,  # Void-Shrouded Tincture (TWW)
-    # Add Midnight combat potion IDs here when known
+    1236616, # Light's Potential (Midnight)
+    245898,  # Light's Potential (Midnight alternate)
+    245897,  # Light's Potential (Midnight alternate)
+    241308,  # Light's Potential (Midnight alternate)
+    241309,  # Light's Potential (Midnight alternate)
 }
 
 # Class Defensives
@@ -311,6 +317,9 @@ SPELL_NAMES = {
     5512: "Healthstone", 432112: "Algari Healing Potion", 431924: "Algari Healing Potion",
     431932: "Tempered Potion", 432098: "Potion of Unwavering Focus",
     431945: "Light's Potential", 432106: "Void-Shrouded Tincture",
+    1236616: "Light's Potential", 245898: "Light's Potential",
+    245897: "Light's Potential", 241308: "Light's Potential", 241309: "Light's Potential",
+    241304: "Health Potion", 241305: "Health Potion", 258138: "Health Potion",
     48792: "Icebound Fortitude", 48707: "Anti-Magic Shell", 55233: "Vampiric Blood", 49028: "Dancing Rune Weapon",
     198589: "Blur", 196718: "Darkness", 196555: "Netherwalk", 187827: "Metamorphosis",
     22812: "Barkskin", 61336: "Survival Instincts", 102342: "Ironbark",
@@ -843,7 +852,7 @@ def lookup_roster(char_name: str):
 XLSX_CLASS_BG = {
     "DeathKnight": "77C41E3A", "DemonHunter": "77A330C9", "Druid": "77FF7C0A",
     "Evoker": "7733937F", "Hunter": "77AAD372", "Mage": "773FC7EB",
-    "Monk": "7700FF98", "Paladin": "77F48CBA", "Priest": "77AAAAAA",
+    "Monk": "7700FF98", "Paladin": "77F48CBA", "Priest": "77FFFFFF",
     "Rogue": "77FFF468", "Shaman": "770070DD", "Warlock": "778788EE",
     "Warrior": "77C69B6D",
 }
@@ -1365,6 +1374,20 @@ def main():
 
                 total_tracked = sum(len(v) for v in player_casts.values())
                 print(f"         Found {total_tracked} tracked spell uses across {len(player_casts)} players.")
+
+                # Debug: dump untracked spell IDs from first fight of Split 1
+                if split_name == "Split 1" and len(split_fight_data) == 0:
+                    from collections import Counter
+                    untracked = Counter(
+                        e["abilityGameID"] for e in cast_events
+                        if e.get("type") == "cast"
+                        and e.get("abilityGameID") not in ALL_TRACKED_IDS
+                        and e.get("sourceID") in actor_lookup
+                    )
+                    debug_spells = sorted(untracked.items(), key=lambda x: -x[1])[:60]
+                    print(f"\n[DEBUG] Top untracked spell IDs in {fname} ({diff}) — check these on Wowhead:")
+                    for sid, count in debug_spells:
+                        print(f"         {sid:>8}  x{count:>3}   https://www.wowhead.com/spell={sid}")
                 
                 split_fight_data.append({
                     "fight_name": f"{fname} ({diff})",
