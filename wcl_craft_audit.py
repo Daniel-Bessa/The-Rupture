@@ -965,7 +965,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
         for m in mech_defs:
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
-            html += f'<th class="{css}">{escape(m["label"])}</th>'
+            tip = escape(m.get("name", m["label"]))
+            html += f'<th class="{css} has-tip" data-tip="{tip}">{escape(m["label"])}</th>'
         html += '<th>Notes</th>'
         html += '</tr></thead><tbody>'
 
@@ -1228,6 +1229,12 @@ td:first-child, th:first-child {{ border-left: none; }}
 .detail-h {{ color: #7289DA; white-space: normal; min-width: 30px; cursor: pointer; user-select: none; }}
 .mech-bad-h {{ color: #ff7070; }}
 .mech-soak-h {{ color: #66bb6a; }}
+.has-tip {{ position: relative; cursor: help; }}
+.has-tip::after {{ content: attr(data-tip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+    background: #1e2a3a; color: #e0e0e0; border: 1px solid #4a5568; border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; font-weight: normal; white-space: nowrap;
+    pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 100; max-width: 340px; white-space: normal; text-align: left; }}
+.has-tip:hover::after {{ opacity: 1; }}
 .detail-h:hover {{ color: #a0b4ff; }}
 .detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
 .detail-col-hidden .detail-h span.detail-content,
@@ -1353,52 +1360,52 @@ def lookup_roster(char_name: str):
 # Per-boss spell tracking. type: "dmg_hits" = bad (red), "soak" = positive (green)
 BOSS_MECHANICS = {
     "Imperator Averzian": [
-        {"label": "Shad.Advance",  "spell_ids": {1253691},                             "type": "dmg_hits"},
-        {"label": "Void Fall",     "spell_ids": {1258883, 1269160},                    "type": "dmg_hits"},
-        {"label": "Obliv.Wrath",   "spell_ids": {1260718},                             "type": "dmg_hits"},
-        {"label": "Umbral Col.",   "spell_ids": {1249262},                             "type": "soak"},
-        {"label": "Gnash.Void",    "spell_ids": {1255683},                             "type": "dmg_hits"},
-        {"label": "Shad.Phalanx",  "spell_ids": {1284786},                             "type": "dmg_hits"},
+        {"label": "Shad.Advance",  "name": "Shadow's Advance — stood within 10y when cast (knockback)",         "spell_ids": {1253691},                             "type": "dmg_hits"},
+        {"label": "Void Fall",     "name": "Void Fall — stood in impact zone (avoidable)",                      "spell_ids": {1258883, 1269160},                    "type": "dmg_hits"},
+        {"label": "Obliv.Wrath",   "name": "Oblivion's Wrath — stood in path (knockback)",                      "spell_ids": {1260718},                             "type": "dmg_hits"},
+        {"label": "Umbral Col.",   "name": "Umbral Collapse — soak mechanic (higher = better)",                  "spell_ids": {1249262},                             "type": "soak"},
+        {"label": "Gnash.Void",    "name": "Gnashing Void — hit by stacking debuff explosion",                  "spell_ids": {1255683},                             "type": "dmg_hits"},
+        {"label": "Shad.Phalanx",  "name": "Shadow Phalanx — death source / avoidable burst",                  "spell_ids": {1284786},                             "type": "dmg_hits"},
     ],
     "Vorasius": [
-        {"label": "Blisterburst",  "spell_ids": {1259186},                             "type": "dmg_hits"},
-        {"label": "Claw Slam",     "spell_ids": {1241808, 1281954, 1281906, 1272328},  "type": "dmg_hits"},
-        {"label": "Parasite Exp.", "spell_ids": {1275558, 1275556},                    "type": "dmg_hits"},
-        {"label": "Void Breath",   "spell_ids": {1257607},                             "type": "dmg_hits"},
+        {"label": "Blisterburst",  "name": "Blisterburst — stood within 8y of explosion (avoidable debuff)",    "spell_ids": {1259186},                             "type": "dmg_hits"},
+        {"label": "Claw Slam",     "name": "Shadowclaw Slam — non-tank avoidable hit",                          "spell_ids": {1241808, 1281954, 1281906, 1272328},  "type": "dmg_hits"},
+        {"label": "Parasite Exp.", "name": "Parasite Expulsion — stood in swirlies (avoidable)",                "spell_ids": {1275558, 1275556},                    "type": "dmg_hits"},
+        {"label": "Void Breath",   "name": "Void Breath — frontal breath (avoidable)",                          "spell_ids": {1257607},                             "type": "dmg_hits"},
     ],
     "Fallen-King Salhadaar": [
-        {"label": "Tort.Extract",  "spell_ids": {1245592},                             "type": "dmg_hits"},
-        {"label": "Umbral Beams",  "spell_ids": {1260030},                             "type": "dmg_hits"},
-        {"label": "Void Exposure", "spell_ids": {1250828},                             "type": "dmg_hits"},
-        {"label": "Twilight Spk.", "spell_ids": {1251213},                             "type": "dmg_hits"},
+        {"label": "Tort.Extract",  "name": "Torturous Extract — stood in puddles (avoidable)",                  "spell_ids": {1245592},                             "type": "dmg_hits"},
+        {"label": "Umbral Beams",  "name": "Umbral Beams — stood in rotating beams (avoidable)",                "spell_ids": {1260030},                             "type": "dmg_hits"},
+        {"label": "Void Exposure", "name": "Void Exposure — touched a Void Orb (avoidable)",                   "spell_ids": {1250828},                             "type": "dmg_hits"},
+        {"label": "Twilight Spk.", "name": "Twilight Spikes — stood in spike zone (avoidable)",                 "spell_ids": {1251213},                             "type": "dmg_hits"},
     ],
     "Vaelgor & Ezzorak": [
-        {"label": "Impale",        "spell_ids": {1265152},                             "type": "dmg_hits"},
-        {"label": "Dread Breath",  "spell_ids": {1244225, 1255979},                    "type": "dmg_hits"},
-        {"label": "Gloomfield",    "spell_ids": {1245421},                             "type": "dmg_hits"},
-        {"label": "Tail Lash",     "spell_ids": {1264467},                             "type": "dmg_hits"},
-        {"label": "Nullbeam",      "spell_ids": {1283856, 1262688},                    "type": "soak"},
+        {"label": "Impale",        "name": "Impale (Rakfang) — avoidable hit, causes stun",                     "spell_ids": {1265152},                             "type": "dmg_hits"},
+        {"label": "Dread Breath",  "name": "Dread Breath — non-tank hit (avoidable), causes fear",              "spell_ids": {1244225, 1255979},                    "type": "dmg_hits"},
+        {"label": "Gloomfield",    "name": "Gloomfield — stood in void zone ticks (avoidable)",                 "spell_ids": {1245421},                             "type": "dmg_hits"},
+        {"label": "Tail Lash",     "name": "Tail Lash (Vaelwing) — avoidable knockback hit",                    "spell_ids": {1264467},                             "type": "dmg_hits"},
+        {"label": "Nullbeam",      "name": "Nullbeam — soak stacks to reduce Nullzone size (higher = better)",  "spell_ids": {1283856, 1262688},                    "type": "soak"},
     ],
     "Lightblinded Vanguard": [
-        {"label": "Final Verdict", "spell_ids": {1251812},                             "type": "dmg_hits"},
-        {"label": "Divine Toll",   "spell_ids": {1248652},                             "type": "dmg_hits"},
-        {"label": "Exec.Sentence", "spell_ids": {1249024},                             "type": "soak"},
-        {"label": "Trampled",      "spell_ids": {1249135},                             "type": "dmg_hits"},
-        {"label": "Div.Hammer",    "spell_ids": {1249047},                             "type": "dmg_hits"},
+        {"label": "Final Verdict", "name": "Final Verdict — avoidable hit after gaining Judgment",              "spell_ids": {1251812},                             "type": "dmg_hits"},
+        {"label": "Divine Toll",   "name": "Divine Toll — stood in path (avoidable, causes silence)",           "spell_ids": {1248652},                             "type": "dmg_hits"},
+        {"label": "Exec.Sentence", "name": "Execution Sentence — soak mechanic (higher = better)",             "spell_ids": {1249024},                             "type": "soak"},
+        {"label": "Trampled",      "name": "Trampled — knocked away / run over (avoidable)",                    "spell_ids": {1249135},                             "type": "dmg_hits"},
+        {"label": "Div.Hammer",    "name": "Divine Hammer — spiraling hammer from Execution Sentence (avoid)",  "spell_ids": {1249047},                             "type": "dmg_hits"},
     ],
     "Crown of the Cosmos": [
-        {"label": "Silverstrike",  "spell_ids": {1233649, 1237729},                    "type": "dmg_hits"},
-        {"label": "Brstng Empty.", "spell_ids": {1255378},                             "type": "dmg_hits"},
-        {"label": "Void Remnants", "spell_ids": {1233826, 1242553},                    "type": "dmg_hits"},
-        {"label": "Singularity",   "spell_ids": {1235631},                             "type": "dmg_hits"},
-        {"label": "Dev.Cosmos",    "spell_ids": {1238882},                             "type": "dmg_hits"},
-        {"label": "Grav.Collapse", "spell_ids": {1239095},                             "type": "dmg_hits"},
+        {"label": "Silverstrike",  "name": "Silverstrike Arrow/Ricochet — hit without void effect (avoidable)", "spell_ids": {1233649, 1237729},                    "type": "dmg_hits"},
+        {"label": "Brstng Empty.", "name": "Bursting Emptiness — stood in path of burst (avoidable)",           "spell_ids": {1255378},                             "type": "dmg_hits"},
+        {"label": "Void Remnants", "name": "Void Remnants/Expulsion — stood in void pool (avoidable)",          "spell_ids": {1233826, 1242553},                    "type": "dmg_hits"},
+        {"label": "Singularity",   "name": "Singularity Eruption — stood in impact zone (avoidable)",           "spell_ids": {1235631},                             "type": "dmg_hits"},
+        {"label": "Dev.Cosmos",    "name": "Devouring Cosmos — stood in zone, 99% reduced healing (avoidable)", "spell_ids": {1238882},                             "type": "dmg_hits"},
+        {"label": "Grav.Collapse", "name": "Gravity Collapse — failed to space Aspect of the End removals",     "spell_ids": {1239095},                             "type": "dmg_hits"},
     ],
     "Chimaerus, the Undreamt God": [
-        {"label": "Alndust Ess.",  "spell_ids": {1245919},                             "type": "dmg_hits"},
-        {"label": "Alndust Uph.",  "spell_ids": {1262305, 1246827},                    "type": "soak"},
-        {"label": "Disc.Roar",     "spell_ids": {1249207},                             "type": "dmg_hits"},
-        {"label": "Rift Emerg.",   "spell_ids": {1258610},                             "type": "dmg_hits"},
+        {"label": "Alndust Ess.",  "name": "Alndust Essence — stood in pool ticks (avoidable)",                 "spell_ids": {1245919},                             "type": "dmg_hits"},
+        {"label": "Alndust Uph.",  "name": "Alndust Upheaval — soak mechanic (higher = better)",                "spell_ids": {1262305, 1246827},                    "type": "soak"},
+        {"label": "Disc.Roar",     "name": "Discordant Roar — avoidable damage from Colossal Horrors",          "spell_ids": {1249207},                             "type": "dmg_hits"},
+        {"label": "Rift Emerg.",   "name": "Rift Emergence — death source / avoidable burst",                   "spell_ids": {1258610},                             "type": "dmg_hits"},
     ],
 }
 
