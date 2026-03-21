@@ -522,8 +522,89 @@ CLASS_COLORS = {
 }
 
 
-def write_html(records: list, report_info: dict, report_code: str, output_path: str):
-    """Write the audit data to a formatted HTML file with horizontal item layout."""
+def _build_split_html(split_data: dict, actors: list) -> str:
+    """Build the HTML content for the Split Tracking tab."""
+    actor_lookup = {a["id"]: a for a in actors}
+    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
+
+    def player_sort_key(pid):
+        name = actor_lookup.get(pid, {}).get("name", "")
+        pname, _ = lookup_roster(name)
+        role = PLAYER_ROLES.get(pname, "DPS")
+        return (ROLE_ORDER.get(role, 2), pname.lower())
+
+    html = ""
+    for split_name, fights in split_data.items():
+        if not fights:
+            continue
+
+        # Collect all players across all fights in this split
+        all_pids = sorted(set(
+            pid for fd in fights for pid in fd.get("player_casts", {})
+        ), key=player_sort_key)
+
+        html += f'<div class="split-section"><h2 class="split-title">{escape(split_name)}</h2>'
+        html += '<div class="table-wrap"><table>'
+
+        # Header row
+        html += '<thead><tr><th class="player-header">Player</th>'
+        for fd in fights:
+            fname = fd.get("fight_name", "Boss")
+            html += f'<th class="divider cast-h health-h">⚗ Health</th>'
+            html += f'<th class="cast-h combat-h">⚔ Combat Pot</th>'
+            html += f'<th class="cast-h def-h">🛡 Defensive</th>'
+        html += '</tr>'
+
+        # Boss name spanning row
+        html += '<tr><th class="player-header"></th>'
+        for fd in fights:
+            fname = fd.get("fight_name", "Boss")
+            html += f'<th colspan="3" class="boss-name divider">{escape(fname)}</th>'
+        html += '</tr></thead><tbody>'
+
+        current_role = None
+        for pid in all_pids:
+            actor = actor_lookup.get(pid, {})
+            char_name = actor.get("name", f"ID-{pid}")
+            cls = actor.get("subType", "Unknown")
+            cls_color = CLASS_COLORS.get(cls, "#ccc")
+            pname, _ = lookup_roster(char_name)
+            role = PLAYER_ROLES.get(pname, "DPS")
+
+            if role != current_role:
+                current_role = role
+                colspan = 1 + len(fights) * 3
+                html += f'<tr class="role-sep"><td colspan="{colspan}">── {current_role}s ──</td></tr>'
+
+            html += f'<tr>'
+            html += f'<td class="player-cell" style="color:{cls_color}"><span class="pname">{escape(pname)}</span><span class="cname"> ({escape(char_name)})</span></td>'
+
+            for fi, fd in enumerate(fights):
+                casts = fd.get("player_casts", {}).get(pid, [])
+                health = [c for c in casts if c["category"] == "Health"]
+                combat = [c for c in casts if c["category"] == "Combat Pot"]
+                defensives = [c for c in casts if c["category"] == "Defensive"]
+
+                div = ' divider' if fi == 0 else ' divider'
+
+                for items, cat_cls in [(health, "health-cell"), (combat, "combat-cell"), (defensives, "def-cell")]:
+                    extra = div if cat_cls == "health-cell" else ""
+                    if items:
+                        lines = "".join(f'<div class="cast-line">{escape(it["spell"])} <span class="cast-time">@ {it["time"]}</span></div>' for it in items)
+                        html += f'<td class="{cat_cls}{extra}">{lines}</td>'
+                    else:
+                        html += f'<td class="empty-cast{extra}">—</td>'
+
+            html += '</tr>'
+
+        html += '</tbody></table></div></div>'
+
+    return html
+
+
+def write_html(records: list, report_info: dict, report_code: str, output_path: str,
+               split_data: dict = None, actors: list = None):
+    """Write the full audit report as a tabbed HTML file."""
     guild_name = "Unknown Guild"
     if report_info.get("guild"):
         guild_name = report_info["guild"].get("name", "Unknown Guild")
@@ -532,7 +613,7 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
     if report_info.get("startTime"):
         report_date = datetime.utcfromtimestamp(report_info["startTime"] / 1000).strftime("%Y-%m-%d")
 
-    # Group records by player: { player_name: { class, items: [...] } }
+    # ── Gear tab data ──
     players = {}
     for rec in records:
         p = rec["player"]
@@ -541,24 +622,20 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
         if rec["item_id"] != 0:
             players[p]["items"].append(rec)
 
-    # Find max crafted items across any player (for column count)
-    max_items = max((len(p["items"]) for p in players.values()), default=0)
-    max_items = max(max_items, 2)  # At least 2 item column groups
-
+    max_items = max((len(p["items"]) for p in players.values()), default=2)
+    max_items = max(max_items, 2)
     total_players = len(players)
     total_crafted = sum(len(p["items"]) for p in players.values())
     no_craft = sum(1 for p in players.values() if len(p["items"]) == 0)
 
-    # Build table rows
-    table_rows = ""
+    # Gear table rows
+    gear_rows = ""
     for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
         cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
         row_class = "no-craft" if not pdata["items"] else ""
-        
         row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
-        
         for i in range(max_items):
-            div = ' divider' if i > 0 else ''  # Add divider class before Item 2, 3, etc.
+            div = ' divider' if i > 0 else ''
             if i < len(pdata["items"]):
                 item = pdata["items"][i]
                 iid = item["item_id"]
@@ -571,98 +648,137 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
                 row += f'<td>{escape(item["craft_rank"])}</td>'
                 row += f'<td class="center {spark_cls}">{spark_txt}</td>'
             else:
-                row += f'<td class="empty{div}">—</td>'
-                row += '<td class="empty">—</td>' * 4
-
+                row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
         row += '</tr>'
-        table_rows += row
+        gear_rows += row
 
-    # Build header groups
-    header_row = '<th class="player-header">Player</th>'
+    gear_header = '<th class="player-header">Player</th>'
     for i in range(max_items):
-        n = i + 1
         div = ' divider' if i > 0 else ''
-        header_row += f'<th class="{div}">Item {n}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+        gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+
+    # ── Split tab data ──
+    split_html = _build_split_html(split_data or {}, actors or [])
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Craft Audit — {escape(guild_name)}</title>
+<title>Raid Audit — {escape(guild_name)}</title>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 20px; }}
 h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
-.subtitle {{ color: #888; font-size: 13px; margin-bottom: 20px; }}
+.subtitle {{ color: #888; font-size: 13px; margin-bottom: 16px; }}
 .subtitle a {{ color: #7289DA; text-decoration: none; }}
-.stats {{ display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }}
-.stat-box {{ background: #16213e; border-radius: 8px; padding: 12px 20px; }}
-.stat-box .num {{ font-size: 26px; font-weight: bold; color: #7289DA; }}
+
+/* ── Tabs ── */
+.tab-bar {{ display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #2a2a4a; padding-bottom: 0; }}
+.tab-btn {{ background: #16213e; color: #888; border: none; padding: 10px 24px; border-radius: 8px 8px 0 0; font-size: 14px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }}
+.tab-btn:hover {{ color: #bbb; background: #1e2d50; }}
+.tab-btn.active {{ color: #7289DA; background: #1a1a2e; border-bottom: 2px solid #7289DA; }}
+.tab-content {{ display: none; }}
+.tab-content.active {{ display: block; }}
+
+/* ── Stats ── */
+.stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
+.stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
+.stat-box .num {{ font-size: 24px; font-weight: bold; color: #7289DA; }}
 .stat-box .label {{ font-size: 11px; color: #888; text-transform: uppercase; }}
 .stat-box.warn .num {{ color: #ffc107; }}
-.search-box {{ margin: 12px 0; }}
-.search-box input {{ background: #16213e; border: 1px solid #333; color: #e0e0e0; padding: 8px 14px; border-radius: 6px; width: 300px; font-size: 14px; }}
+
+/* ── Search ── */
+.search-box {{ margin: 0 0 12px; }}
+.search-box input {{ background: #16213e; border: 1px solid #2a2a4a; color: #e0e0e0; padding: 7px 14px; border-radius: 6px; width: 280px; font-size: 13px; }}
 .search-box input::placeholder {{ color: #555; }}
-.table-wrap {{ overflow-x: auto; border-radius: 8px; }}
+
+/* ── Tables (shared) ── */
+.table-wrap {{ overflow-x: auto; border-radius: 8px; margin-bottom: 28px; }}
 table {{ border-collapse: collapse; min-width: 100%; }}
-th {{ background: #16213e; color: #7289DA; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none; }}
-th:hover {{ background: #1a2a50; }}
-th.player-header {{ position: sticky; left: 0; z-index: 2; background: #16213e; }}
-/* Alternating item group backgrounds */
-th:nth-child(5n+2), th:nth-child(5n+3), th:nth-child(5n+4), th:nth-child(5n+5), th:nth-child(5n+6) {{  }}
+th {{ background: #16213e; color: #7289DA; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; z-index: 1; }}
+th.player-header {{ position: sticky; left: 0; z-index: 2; background: #16213e; min-width: 140px; }}
 td {{ padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; white-space: nowrap; }}
-.player-cell {{ font-weight: bold; position: sticky; left: 0; background: #0f3460; z-index: 1; }}
-tr:hover .player-cell {{ background: #162a50; }}
-tr:hover {{ background: #162a50; }}
-tr.no-craft {{ background: rgba(255,160,0,0.08); }}
-tr.no-craft:hover {{ background: rgba(255,160,0,0.15); }}
-tr.no-craft .player-cell {{ background: rgba(255,160,0,0.08); }}
-tr.no-craft:hover .player-cell {{ background: rgba(255,160,0,0.15); }}
+.player-cell {{ font-weight: bold; position: sticky; left: 0; background: #0d1f3c; z-index: 1; min-width: 140px; }}
+tr:hover td {{ background: rgba(114,137,218,0.07); }}
+tr:hover .player-cell {{ background: #152848; }}
+td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 .center {{ text-align: center; }}
+.empty {{ color: #2a2a4a; text-align: center; }}
+
+/* ── Gear tab ── */
+.no-craft {{ background: rgba(255,160,0,0.05); }}
+.no-craft .player-cell {{ background: rgba(80,50,0,0.4); }}
 .spark-yes {{ color: #4caf50; font-weight: bold; }}
 .item-cell a {{ color: #a48cff; text-decoration: none; }}
-.item-cell a:hover {{ text-decoration: underline; color: #c4b0ff; }}
-.empty {{ color: #333; }}
-/* Item group separators */
-td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.3); }}
-a {{ color: #7289DA; }}
+.item-cell a:hover {{ text-decoration: underline; }}
+
+/* ── Split tab ── */
+.split-section {{ margin-bottom: 40px; }}
+.split-title {{ font-size: 17px; color: #7289DA; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #2a2a4a; }}
+.boss-name {{ text-align: center; color: #aaa; font-size: 11px; background: #111827; }}
+.cast-h {{ font-size: 10px; padding: 5px 8px; }}
+.health-h {{ color: #e57373; }}
+.combat-h {{ color: #ce93d8; }}
+.def-h {{ color: #64b5f6; }}
+.cast-line {{ margin: 2px 0; white-space: nowrap; }}
+.cast-time {{ color: #888; font-size: 11px; }}
+.health-cell {{ background: rgba(229,115,115,0.06); }}
+.combat-cell {{ background: rgba(206,147,216,0.06); }}
+.def-cell {{ background: rgba(100,181,246,0.06); white-space: normal; min-width: 160px; }}
+.empty-cast {{ color: #2a2a4a; text-align: center; }}
+.role-sep td {{ background: #111827; color: #7289DA; font-size: 11px; font-weight: bold; padding: 4px 10px; }}
+.pname {{ font-weight: bold; }}
+.cname {{ color: #888; font-size: 11px; }}
 </style>
-<!-- Wowhead tooltips + icons -->
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>
 <body>
 
-<h1>Crafted Gear Audit — {escape(guild_name)}</h1>
-<div class="subtitle">{escape(report_title)} ({report_date}) · <a href="https://www.warcraftlogs.com/reports/{report_code}" target="_blank">View on WarcraftLogs</a></div>
+<h1>Raid Audit — {escape(guild_name)}</h1>
+<div class="subtitle">{escape(report_title)} · {report_date} · <a href="https://www.warcraftlogs.com/reports/{report_code}" target="_blank">View on WarcraftLogs ↗</a></div>
 
-<div class="stats">
-  <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
-  <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
-  <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('gear', this)">⚙ Gear Audit</button>
+  <button class="tab-btn" onclick="switchTab('splits', this)">📋 Split Tracking</button>
 </div>
 
-<div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterTable(this)"></div>
+<!-- ── GEAR TAB ── -->
+<div id="tab-gear" class="tab-content active">
+  <div class="stats">
+    <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
+    <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
+    <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
+  </div>
+  <div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterGear(this)"></div>
+  <div class="table-wrap">
+    <table id="gear-table">
+      <thead><tr>{gear_header}</tr></thead>
+      <tbody>{gear_rows}</tbody>
+    </table>
+  </div>
+</div>
 
-<div class="table-wrap">
-<table id="main-table">
-<thead><tr>{header_row}</tr></thead>
-<tbody>{table_rows}</tbody>
-</table>
+<!-- ── SPLITS TAB ── -->
+<div id="tab-splits" class="tab-content">
+  {split_html}
 </div>
 
 <script>
-function filterTable(input) {{
+function switchTab(name, btn) {{
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}}
+function filterGear(input) {{
   const filter = input.value.toLowerCase();
-  const rows = document.getElementById('main-table').tBodies[0].rows;
-  for (let row of rows) {{
-    const name = row.cells[0].textContent.toLowerCase();
-    row.style.display = name.includes(filter) ? '' : 'none';
+  for (let row of document.getElementById('gear-table').tBodies[0].rows) {{
+    row.style.display = row.cells[0].textContent.toLowerCase().includes(filter) ? '' : 'none';
   }}
 }}
 </script>
-
 </body>
 </html>"""
 
@@ -1219,7 +1335,7 @@ def main():
     
     # Output
     html_path = "craft_audit.html"
-    write_html(records, report_info, report_code, html_path)
+    write_html(records, report_info, report_code, html_path, split_data=split_data, actors=actors)
 
     xlsx_path = "craft_audit.xlsx"
     write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data)
