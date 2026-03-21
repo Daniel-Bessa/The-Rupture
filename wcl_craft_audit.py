@@ -283,6 +283,33 @@ def analyze_interrupts(interrupt_events: list, actor_lookup: dict) -> dict:
     return totals
 
 
+def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: list) -> dict:
+    """Count per-player hits for each boss mechanic based on spell IDs.
+    Returns {pid: {mechanic_label: count}}
+    """
+    if not mechanics:
+        return {}
+    spell_to_label = {}
+    for mech in mechanics:
+        for sid in mech["spell_ids"]:
+            spell_to_label[sid] = mech["label"]
+    result = {}
+    for event in damage_events:
+        if event.get("type") != "damage":
+            continue
+        pid = event.get("targetID")
+        if pid not in actor_lookup:
+            continue
+        aid = event.get("abilityGameID", 0)
+        label = spell_to_label.get(aid)
+        if label is None:
+            continue
+        if pid not in result:
+            result[pid] = {}
+        result[pid][label] = result[pid].get(label, 0) + 1
+    return result
+
+
 def fetch_damage_taken_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch avoidable damage-taken events for a fight (friendly players only), with pagination."""
     query = """
@@ -1300,6 +1327,66 @@ for player_name, role, chars in _roster_raw:
 def lookup_roster(char_name: str):
     """Look up a character in the roster. Returns (player_name, 'Main'/'Alt') or (char_name, 'Unknown')."""
     return ROSTER.get(char_name.lower(), (char_name, "Unknown"))
+
+
+# ─── Boss Mechanic Definitions ────────────────────────────────────────────────
+# Per-boss spell tracking. type: "dmg_hits" = bad (red), "soak" = positive (green)
+BOSS_MECHANICS = {
+    "Imperator Averzian": [
+        {"label": "Shad.Advance",  "spell_ids": {1253691},                             "type": "dmg_hits"},
+        {"label": "Void Fall",     "spell_ids": {1258883, 1269160},                    "type": "dmg_hits"},
+        {"label": "Obliv.Wrath",   "spell_ids": {1260718},                             "type": "dmg_hits"},
+        {"label": "Umbral Col.",   "spell_ids": {1249262},                             "type": "soak"},
+        {"label": "Gnash.Void",    "spell_ids": {1255683},                             "type": "dmg_hits"},
+        {"label": "Shad.Phalanx",  "spell_ids": {1284786},                             "type": "dmg_hits"},
+    ],
+    "Vorasius": [
+        {"label": "Blisterburst",  "spell_ids": {1259186},                             "type": "dmg_hits"},
+        {"label": "Claw Slam",     "spell_ids": {1241808, 1281954, 1281906, 1272328},  "type": "dmg_hits"},
+        {"label": "Parasite Exp.", "spell_ids": {1275558, 1275556},                    "type": "dmg_hits"},
+        {"label": "Void Breath",   "spell_ids": {1257607},                             "type": "dmg_hits"},
+    ],
+    "Fallen-King Salhadaar": [
+        {"label": "Tort.Extract",  "spell_ids": {1245592},                             "type": "dmg_hits"},
+        {"label": "Umbral Beams",  "spell_ids": {1260030},                             "type": "dmg_hits"},
+        {"label": "Void Exposure", "spell_ids": {1250828},                             "type": "dmg_hits"},
+        {"label": "Twilight Spk.", "spell_ids": {1251213},                             "type": "dmg_hits"},
+    ],
+    "Vaelgor & Ezzorak": [
+        {"label": "Impale",        "spell_ids": {1265152},                             "type": "dmg_hits"},
+        {"label": "Dread Breath",  "spell_ids": {1244225, 1255979},                    "type": "dmg_hits"},
+        {"label": "Gloomfield",    "spell_ids": {1245421},                             "type": "dmg_hits"},
+        {"label": "Tail Lash",     "spell_ids": {1264467},                             "type": "dmg_hits"},
+        {"label": "Nullbeam",      "spell_ids": {1283856, 1262688},                    "type": "soak"},
+    ],
+    "Lightblinded Vanguard": [
+        {"label": "Final Verdict", "spell_ids": {1251812},                             "type": "dmg_hits"},
+        {"label": "Divine Toll",   "spell_ids": {1248652},                             "type": "dmg_hits"},
+        {"label": "Exec.Sentence", "spell_ids": {1249024},                             "type": "soak"},
+        {"label": "Trampled",      "spell_ids": {1249135},                             "type": "dmg_hits"},
+        {"label": "Div.Hammer",    "spell_ids": {1249047},                             "type": "dmg_hits"},
+    ],
+    "Crown of the Cosmos": [
+        {"label": "Silverstrike",  "spell_ids": {1233649, 1237729},                    "type": "dmg_hits"},
+        {"label": "Brstng Empty.", "spell_ids": {1255378},                             "type": "dmg_hits"},
+        {"label": "Void Remnants", "spell_ids": {1233826, 1242553},                    "type": "dmg_hits"},
+        {"label": "Singularity",   "spell_ids": {1235631},                             "type": "dmg_hits"},
+        {"label": "Dev.Cosmos",    "spell_ids": {1238882},                             "type": "dmg_hits"},
+        {"label": "Grav.Collapse", "spell_ids": {1239095},                             "type": "dmg_hits"},
+    ],
+    "Chimaerus, the Undreamt God": [
+        {"label": "Alndust Ess.",  "spell_ids": {1245919},                             "type": "dmg_hits"},
+        {"label": "Alndust Uph.",  "spell_ids": {1262305, 1246827},                    "type": "soak"},
+        {"label": "Disc.Roar",     "spell_ids": {1249207},                             "type": "dmg_hits"},
+        {"label": "Rift Emerg.",   "spell_ids": {1258610},                             "type": "dmg_hits"},
+    ],
+}
+
+# Bosses where 0 interrupts = red (boss has meaningful interruptible abilities)
+BOSS_HAS_INTERRUPTS = {
+    "Imperator Averzian", "Fallen-King Salhadaar", "Vaelgor & Ezzorak",
+    "Lightblinded Vanguard", "Crown of the Cosmos", "Chimaerus, the Undreamt God",
+}
 
 
 # ─── XLSX Output ─────────────────────────────────────────────────────────────
