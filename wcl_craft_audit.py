@@ -462,13 +462,25 @@ def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
 WIPE_DEATH_THRESHOLD = 4
 
 
-def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None, fight_end_ms: int = 0) -> dict:
+def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None,
+                   fight_end_ms: int = 0, damage_events: list = None) -> dict:
     """Analyze death events, ignoring deaths after the Nth death (wipe cascade).
-    Returns {targetID: [{"time": str, "ability": str, "fight_pct": int}, ...]}
+    Returns {targetID: [{"time", "ability", "fight_pct", "timeline"}, ...]}
+    timeline = last 5s of damage hits before death: [{"ability", "amount_k", "sec_before"}, ...]
     """
     results = {}
     total_deaths = 0
     ability_names = ability_names or {}
+
+    # Build per-player damage index for fast 5s window lookup
+    dmg_by_player = {}
+    for ev in (damage_events or []):
+        if ev.get("type") != "damage":
+            continue
+        pid = ev.get("targetID")
+        if pid is None:
+            continue
+        dmg_by_player.setdefault(pid, []).append(ev)
 
     for event in sorted(death_events, key=lambda e: e.get("timestamp", 0)):
         if total_deaths >= WIPE_DEATH_THRESHOLD:
@@ -486,7 +498,23 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
         killing_name = ability_names.get(killing_id, f"ID:{killing_id}" if killing_id else "Unknown")
         fight_elapsed = ts_ms - fight_start_ms
         pct = round(fight_elapsed / fight_end_ms * 100) if fight_end_ms > 0 else 0
-        results.setdefault(target_id, []).append({"time": time_str, "ability": killing_name, "fight_pct": pct})
+
+        # Last 5 seconds of damage events before this death
+        timeline = []
+        window_start = ts_ms - 5000
+        for dev in dmg_by_player.get(target_id, []):
+            dts = dev.get("timestamp", 0)
+            if window_start <= dts <= ts_ms:
+                daid = dev.get("abilityGameID", 0)
+                dname = ability_names.get(daid, f"#{daid}")
+                amt = dev.get("amount", 0)
+                sec_before = (ts_ms - dts) / 1000.0
+                timeline.append({"ability": dname, "amount_k": f"{amt/1000:.0f}k" if amt >= 1000 else str(amt), "sec_before": sec_before})
+        timeline.sort(key=lambda x: x["sec_before"], reverse=True)  # oldest first
+
+        results.setdefault(target_id, []).append({
+            "time": time_str, "ability": killing_name, "fight_pct": pct, "timeline": timeline,
+        })
 
     return results
 
@@ -1034,6 +1062,24 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 death_count = len(death_list)
                 killed_str = "<br>".join(f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)' for d in death_list) or "—"
 
+                # Build pre-death timeline tooltip HTML
+                death_tip_html = ""
+                if death_list:
+                    parts = []
+                    for d in death_list:
+                        tl = d.get("timeline", [])
+                        block = f"<b style='color:#e57373'>☠ {escape(d['ability'])}</b> @ {escape(d['time'])} ({d.get('fight_pct',0)}%)"
+                        if tl:
+                            rows = []
+                            for t in tl:
+                                is_killing = abs(t["sec_before"]) < 0.05
+                                color = "#ff6b6b" if is_killing else "#aaa"
+                                label = " ← killing blow" if is_killing else f"-{t['sec_before']:.1f}s"
+                                rows.append(f"<span style='color:{color}'>{escape(t['ability'])}: {escape(t['amount_k'])} &nbsp;<span style='color:#666;font-size:11px'>{label}</span></span>")
+                            block += "<br>" + "<br>".join(rows)
+                        parts.append(block)
+                    death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
+
                 row_cls = "boss-death-row" if death_count > 0 else ""
                 bighit_cls = " bighit-row" if big_hits > 0 else ""
 
@@ -1045,8 +1091,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 html += f'<td class="center parse-h">{parse_cell}</td>'
                 html += f'<td class="center dmg-h">{dmg_done_str}</td>'
                 html += f'<td class="center heal-h">{heal_str}</td>'
-                html += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
-                html += f'<td class="death-h">{killed_str}</td>'
+                if death_count > 0 and death_tip_html:
+                    tip_attr = death_tip_html.replace("'", "&#39;")
+                    html += f'<td class="center death-h" style="cursor:help" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"><span class="death-num">{death_count}</span></td>'
+                    html += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
+                else:
+                    html += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
+                    html += f'<td class="death-h">{killed_str}</td>'
                 html += f'<td class="center dmg-h">{dmg_str}</td>'
                 html += f'<td class="center uptime-h">{uptime_str}</td>'
                 html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
@@ -1301,6 +1352,29 @@ function toggleDetails(tableId, btn) {{
   const hidden = tbl.classList.toggle('detail-col-hidden');
   btn.textContent = hidden ? '▶ Details' : '▼ Details';
 }}
+const _htip = document.createElement('div');
+_htip.id = 'htip';
+Object.assign(_htip.style, {{
+  position:'fixed', display:'none', pointerEvents:'none', zIndex:'9999',
+  background:'#1a2233', border:'1px solid #4a5568', borderRadius:'8px',
+  padding:'10px 14px', fontSize:'12px', color:'#e0e0e0',
+  maxWidth:'340px', lineHeight:'1.6', boxShadow:'0 4px 16px #0008'
+}});
+document.body.appendChild(_htip);
+document.addEventListener('mousemove', e => {{
+  if (_htip.style.display !== 'none') {{
+    const x = e.clientX + 16, y = e.clientY - 10;
+    _htip.style.left = (x + _htip.offsetWidth > window.innerWidth ? e.clientX - _htip.offsetWidth - 8 : x) + 'px';
+    _htip.style.top  = (y + _htip.offsetHeight > window.innerHeight ? e.clientY - _htip.offsetHeight - 8 : y) + 'px';
+  }}
+}});
+function showHTip(el) {{
+  const d = el.getAttribute('data-htip');
+  if (!d) return;
+  _htip.innerHTML = d;
+  _htip.style.display = 'block';
+}}
+function hideHTip() {{ _htip.style.display = 'none'; }}
 </script>
 </body>
 </html>"""
@@ -2278,7 +2352,7 @@ def main():
             fight_start      = fight.get("startTime", 0)
             fight_end        = fight.get("endTime", 0)
             fight_dur_ms     = fight_end - fight_start
-            deaths           = analyze_deaths(death_events, fight_start, ability_names, fight_end_ms=fight_dur_ms)
+            deaths           = analyze_deaths(death_events, fight_start, ability_names, fight_end_ms=fight_dur_ms, damage_events=damage_events)
             avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start, ability_names, player_max_hp)
             dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
             uptime_map       = fetch_uptime_table(token, report_code, fid)
