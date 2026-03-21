@@ -2227,6 +2227,8 @@ def main():
             healing_map      = fetch_healing_table(token, report_code, fid)
             rankings_map     = fetch_rankings(token, report_code, fid)
             interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
+            mech_defs        = BOSS_MECHANICS.get(fname, [])
+            mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
             # Collect all player IDs: from casts, damage taken, uptime, and deaths
             all_pids = set()
             for sdata in split_data.values():
