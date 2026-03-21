@@ -22,7 +22,8 @@
       "WebFetch(domain:www.archon.gg)",
       "WebFetch(domain:hrothmar.com)",
       "Bash(python -m py_compile wcl_craft_audit.py)",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "WebFetch(domain:nether.wowhead.com)"
     ]
   }
 }
