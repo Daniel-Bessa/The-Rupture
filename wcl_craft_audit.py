@@ -1085,30 +1085,54 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
 
     sorted_players = sorted(all_player_ids, key=player_sort)
 
-    # Headers: Player | Boss 1: Health | Combat | Defensive | Boss 2: Health | ...
-    hr = 3
-    headers = ["Player"]
-    col_widths = [18]
-    for fd in fights_data:
-        fname = fd.get("fight_name", "Boss")
-        headers += [f"{fname}\nHealth Pots", f"{fname}\nCombat Pots", f"{fname}\nDefensives"]
-        col_widths += [20, 20, 28]
+    # Two-row header: row 3 = boss names (merged 3 cols), row 4 = sub-columns
+    hr_boss = 3
+    hr_sub  = 4
 
-    for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
-        cell = ws.cell(row=hr, column=ci, value=h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border
-        ws.column_dimensions[get_column_letter(ci)].width = w
-        # Divider before each boss group
-        if ci > 1 and (ci - 2) % 3 == 0:
-            cell.border = Border(bottom=Side(style="thin", color="333333"), left=Side(style="medium", color="7289DA"))
-    ws.row_dimensions[hr].height = 36
-    ws.freeze_panes = "A4"
+    # "Player" cell spans both header rows
+    ws.merge_cells(start_row=hr_boss, start_column=1, end_row=hr_sub, end_column=1)
+    c = ws.cell(row=hr_boss, column=1, value="Player")
+    c.font = header_font
+    c.fill = header_fill
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    c.border = border
+    ws.column_dimensions["A"].width = 18
+
+    sub_labels = ["Health Pots", "Combat Pots", "Defensives"]
+    col_widths  = [20, 20, 28]
+
+    for fi, fd in enumerate(fights_data):
+        fname   = fd.get("fight_name", "Boss")
+        base_ci = 2 + fi * 3  # first column of this boss group
+
+        # Merge boss name across 3 columns
+        ws.merge_cells(start_row=hr_boss, start_column=base_ci, end_row=hr_boss, end_column=base_ci + 2)
+        bc = ws.cell(row=hr_boss, column=base_ci, value=fname)
+        bc.font = header_font
+        bc.fill = PatternFill("solid", fgColor="111827")
+        bc.alignment = Alignment(horizontal="center", vertical="center")
+        bc.border = Border(bottom=Side(style="thin", color="333333"),
+                           left=Side(style="medium", color="7289DA"))
+
+        # Sub-column headers
+        for j, (label, w) in enumerate(zip(sub_labels, col_widths)):
+            ci = base_ci + j
+            sc = ws.cell(row=hr_sub, column=ci, value=label)
+            sc.font = header_font
+            sc.fill = header_fill
+            sc.alignment = Alignment(horizontal="center", vertical="center")
+            sc.border = border
+            if j == 0:
+                sc.border = Border(bottom=Side(style="thin", color="333333"),
+                                   left=Side(style="medium", color="7289DA"))
+            ws.column_dimensions[get_column_letter(ci)].width = w
+
+    ws.row_dimensions[hr_boss].height = 20
+    ws.row_dimensions[hr_sub].height  = 18
+    ws.freeze_panes = "A5"
 
     # Data rows
-    row = hr + 1
+    row = hr_sub + 1
     for pid in sorted_players:
         actor = actors.get(pid, {})
         char_name = actor.get("name", f"ID-{pid}")
