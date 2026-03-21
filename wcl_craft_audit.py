@@ -522,9 +522,9 @@ CLASS_COLORS = {
 }
 
 
-def _build_split_html(split_data: dict, actors: list) -> str:
-    """Build the HTML content for the Split Tracking tab.
-    Layout: rows = players, columns = bosses (3 sub-cols each: Health | Combat | Defensive).
+def _build_split_html(split_data: dict, actors: list) -> dict:
+    """Build HTML for each split. Returns {split_name: html_string}.
+    Layout: rows = players, columns = bosses (3 sub-cols: Health | Combat | Defensive).
     """
     actor_lookup = {a["id"]: a for a in actors}
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
@@ -535,27 +535,22 @@ def _build_split_html(split_data: dict, actors: list) -> str:
         role = PLAYER_ROLES.get(pname, "DPS")
         return (ROLE_ORDER.get(role, 2), pname.lower())
 
-    html = ""
+    results = {}
     for split_name, fights in split_data.items():
         if not fights:
             continue
 
-        # All players across all fights in this split
         all_pids = sorted(
             set(pid for fd in fights for pid in fd.get("player_casts", {})),
             key=player_sort_key
         )
 
-        html += f'<div class="split-section"><h2 class="split-title">{escape(split_name)}</h2>'
-        html += '<div class="table-wrap"><table>'
-
-        # Row 1: boss names spanning 3 cols each
-        html += '<thead>'
+        html = '<div class="table-wrap"><table><thead>'
+        # Row 1: boss names (3 cols each)
         html += '<tr><th class="player-header" rowspan="2">Player</th>'
         for fd in fights:
             html += f'<th colspan="3" class="boss-name divider">{escape(fd.get("fight_name", "Boss"))}</th>'
         html += '</tr>'
-
         # Row 2: sub-column headers
         html += '<tr>'
         for _ in fights:
@@ -579,7 +574,9 @@ def _build_split_html(split_data: dict, actors: list) -> str:
                 html += f'<tr class="role-sep"><td colspan="{colspan}">── {current_role}s ──</td></tr>'
 
             html += f'<tr>'
-            html += f'<td class="player-cell" style="color:{cls_color}"><span class="pname">{escape(pname)}</span><br><span class="cname">{escape(char_name)}</span></td>'
+            html += (f'<td class="player-cell" style="color:{cls_color}">'
+                     f'<span class="pname">{escape(pname)}</span><br>'
+                     f'<span class="cname">{escape(char_name)}</span></td>')
 
             for fd in fights:
                 casts = fd.get("player_casts", {}).get(pid, [])
@@ -588,14 +585,15 @@ def _build_split_html(split_data: dict, actors: list) -> str:
                 defensive = [c for c in casts if c["category"] == "Defensive"]
 
                 for items, cat_cls, is_first in [
-                    (health, "health-cell", True),
-                    (combat, "combat-cell", False),
-                    (defensive, "def-cell", False),
+                    (health,    "health-cell", True),
+                    (combat,    "combat-cell", False),
+                    (defensive, "def-cell",    False),
                 ]:
                     div = " divider" if is_first else ""
                     if items:
                         lines = "".join(
-                            f'<div class="cast-line">{escape(it["spell"])} <span class="cast-time">@ {it["time"]}</span></div>'
+                            f'<div class="cast-line">{escape(it["spell"])}'
+                            f' <span class="cast-time">@ {it["time"]}</span></div>'
                             for it in items
                         )
                         html += f'<td class="{cat_cls}{div}">{lines}</td>'
@@ -604,9 +602,10 @@ def _build_split_html(split_data: dict, actors: list) -> str:
 
             html += '</tr>'
 
-        html += '</tbody></table></div></div>'
+        html += '</tbody></table></div>'
+        results[split_name] = html
 
-    return html
+    return results
 
 
 def write_html(records: list, report_info: dict, report_code: str, output_path: str,
@@ -664,8 +663,8 @@ def write_html(records: list, report_info: dict, report_code: str, output_path: 
         div = ' divider' if i > 0 else ''
         gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
 
-    # ── Split tab data ──
-    split_html = _build_split_html(split_data or {}, actors or [])
+    # ── Split tabs data (one tab per split) ──
+    split_htmls = _build_split_html(split_data or {}, actors or [])
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -748,7 +747,7 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('gear', this)">⚙ Gear Audit</button>
-  <button class="tab-btn" onclick="switchTab('splits', this)">📋 Split Tracking</button>
+  {''.join(f'<button class="tab-btn" onclick="switchTab(\'split-{i}\', this)">📋 {escape(name)}</button>' for i, name in enumerate(split_htmls))}
 </div>
 
 <!-- ── GEAR TAB ── -->
@@ -767,10 +766,8 @@ td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
   </div>
 </div>
 
-<!-- ── SPLITS TAB ── -->
-<div id="tab-splits" class="tab-content">
-  {split_html}
-</div>
+<!-- ── SPLIT TABS ── -->
+{''.join(f'<div id="tab-split-{i}" class="tab-content">{content}</div>' for i, content in enumerate(split_htmls.values()))}
 
 <script>
 function switchTab(name, btn) {{
