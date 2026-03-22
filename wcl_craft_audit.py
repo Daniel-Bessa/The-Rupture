@@ -2169,20 +2169,18 @@ def _cache_path(report_code: str) -> str:
 
 
 def _fix_int_keys(boss_data: dict) -> dict:
-    """After JSON load, restore integer actor-ID keys in nested dicts."""
-    int_key_fields = ("uptime_map", "dmg_taken", "healing_map", "rankings_map", "interrupts")
-    nested_int_fields = ("mechanics_data", "avoidable")
+    """After JSON load, restore integer actor-ID keys in fields that use actor IDs as keys.
+    rankings_map uses char-name strings as keys — excluded intentionally.
+    """
+    int_key_fields = (
+        "uptime_map", "dmg_taken", "healing_map", "interrupts",
+        "avoidable_damage", "deaths", "mechanics_data",
+    )
     for fights in boss_data.values():
         for fight in fights:
             for field in int_key_fields:
                 if field in fight and isinstance(fight[field], dict):
                     fight[field] = {int(k): v for k, v in fight[field].items()}
-            for field in nested_int_fields:
-                if field in fight and isinstance(fight[field], dict):
-                    fight[field] = {
-                        label: {int(k): v for k, v in counts.items()}
-                        for label, counts in fight[field].items()
-                    }
     return boss_data
 
 
