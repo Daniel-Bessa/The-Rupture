@@ -1012,29 +1012,26 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
         sorted_pids = sorted(all_pids_set, key=pid_sort)
 
-        # ── Fight overview (aggregated across all splits) ──
-        ov_dmg_done = ov_healing = ov_dmg_taken = ov_avoid = ov_dur_ms = 0
-        for fight in fights:
-            for pid, v in fight.get("uptime_map", {}).items():
-                ov_dmg_done += v.get("total", 0) if isinstance(v, dict) else 0
-            for pid, v in fight.get("healing_map", {}).items():
-                ov_healing += v if isinstance(v, int) else 0
-            for pid, v in fight.get("dmg_taken", {}).items():
-                ov_dmg_taken += v if isinstance(v, int) else 0
-            for pid, av in fight.get("avoidable_damage", {}).items():
-                ov_avoid += av.get("hits", 0) if isinstance(av, dict) else 0
-            ov_dur_ms += fight.get("fight_dur_ms", 0)
         def _hfmt(n):
             return f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000 else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k")
-        ov_dur_s = ov_dur_ms / 1000 if ov_dur_ms > 0 else 1
-        ov_dps = ov_dmg_done / ov_dur_s
-        overview_html  = '<div class="boss-overview">'
-        overview_html += f'<span class="ov-item"><span class="ov-label">⚡ Raid DPS</span><span class="ov-val">{_hfmt(ov_dps) if ov_dps else "—"}</span></span>'
-        overview_html += f'<span class="ov-item"><span class="ov-label">⚔ Dmg Done</span><span class="ov-val">{_hfmt(ov_dmg_done) if ov_dmg_done else "—"}</span></span>'
-        overview_html += f'<span class="ov-item"><span class="ov-label">💚 Healing</span><span class="ov-val">{_hfmt(ov_healing) if ov_healing else "—"}</span></span>'
-        overview_html += f'<span class="ov-item"><span class="ov-label">🛡 Dmg Taken</span><span class="ov-val">{_hfmt(ov_dmg_taken) if ov_dmg_taken else "—"}</span></span>'
-        overview_html += f'<span class="ov-item"><span class="ov-label">☠ Avoid Hits</span><span class="ov-val">{ov_avoid if ov_avoid else "—"}</span></span>'
-        overview_html += '</div>'
+
+        def _split_overview_row(fi, fight, total_cols):
+            sp_dmg  = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
+            sp_heal = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
+            sp_taken= sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
+            sp_avoid= sum(av.get("hits", 0) if isinstance(av, dict) else 0 for av in fight.get("avoidable_damage", {}).values())
+            sp_dur_s= fight.get("fight_dur_ms", 0) / 1000 or 1
+            sp_dps  = sp_dmg / sp_dur_s
+            sp_m, sp_s = divmod(int(sp_dur_s), 60)
+            dur_str = f"{sp_m}:{sp_s:02d}"
+            inner = (f'<span class="sov-title">Split {fi}</span>'
+                     f'<span class="sov-dur">{dur_str}</span>'
+                     f'<span class="sov-item"><span class="sov-lbl">⚡ Raid DPS</span> <b>{_hfmt(sp_dps)}</b></span>'
+                     f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
+                     f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
+                     f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>'
+                     f'<span class="sov-item"><span class="sov-lbl">☠ Avoid Hits</span> <b>{sp_avoid if sp_avoid else "—"}</b></span>')
+            return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
 
         # ── Frontal failure summary ──
         all_frontal = []
