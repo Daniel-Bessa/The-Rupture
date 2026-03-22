@@ -1299,7 +1299,7 @@ def write_html(days_data: list, output_path: str):
             split_bd   = splits_boss_data[snum]
             boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"d{di}s{snum}")
             split_html = "".join(
-                f'<div class="boss-section"><div class="boss-section-title">⚔ {escape(bn)}</div>{bh}</div>'
+                f'<div class="boss-section"><div class="boss-section-title" onclick="toggleBoss(this)">⚔ {escape(bn)} <span class="boss-toggle-arrow">▼</span></div><div class="boss-section-body">{bh}</div></div>'
                 for bn, bh in boss_htmls.items()
             )
             # Difficulty label
@@ -1349,7 +1349,11 @@ h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 16px; }}
 .wcl-link:hover {{ text-decoration: underline; }}
 /* ── Boss section ── */
 .boss-section {{ margin-bottom: 36px; }}
-.boss-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #7289DA; }}
+.boss-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #7289DA; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
+.boss-section-title:hover {{ background: #1a2236; }}
+.boss-toggle-arrow {{ font-size: 12px; transition: transform 0.2s; }}
+.boss-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
+.boss-section-body.collapsed {{ display: none; }}
 /* ── Stats ── */
 .stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
 .stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
@@ -1454,6 +1458,10 @@ function switchTab(name, btn) {{
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+}}
+function toggleBoss(titleEl) {{
+  titleEl.classList.toggle('collapsed');
+  titleEl.nextElementSibling.classList.toggle('collapsed');
 }}
 function switchSplit(dayId, splitIdx, btn) {{
   const dayEl = document.getElementById('tab-' + dayId);
