@@ -2358,6 +2358,20 @@ def main():
             uptime_map       = fetch_uptime_table(token, report_code, fid)
             healing_map      = fetch_healing_table(token, report_code, fid)
             rankings_map     = fetch_rankings(token, report_code, fid)
+            # TEMP DEBUG — raw API structure for first fight only
+            if not hasattr(fetch_uptime_table, '_debugged'):
+                fetch_uptime_table._debugged = True
+                q = """query ($code: String!, $fightID: Int!) { reportData { report(code: $code) { table(dataType: DamageDone, fightIDs: [$fightID]) } } }"""
+                raw = query_wcl(token, q, {"code": report_code, "fightID": fid})
+                tbl = raw["reportData"]["report"]["table"]
+                print(f"       RAW table keys: {list(tbl.keys()) if isinstance(tbl, dict) else type(tbl)}")
+                data_val = tbl.get("data") if isinstance(tbl, dict) else None
+                print(f"       table['data'] type: {type(data_val)}, keys: {list(data_val.keys()) if isinstance(data_val, dict) else str(data_val)[:200]}")
+                q2 = """query ($code: String!, $fightID: Int!) { reportData { report(code: $code) { rankings(fightIDs: [$fightID]) } } }"""
+                raw2 = query_wcl(token, q2, {"code": report_code, "fightID": fid})
+                rnk = raw2["reportData"]["report"]["rankings"]
+                rnk_data = rnk.get("data") if isinstance(rnk, dict) else rnk
+                print(f"       rankings['data'] type: {type(rnk_data)}, val: {str(rnk_data)[:300]}")
             interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
