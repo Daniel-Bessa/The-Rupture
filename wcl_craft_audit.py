@@ -981,25 +981,34 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         html = overview_html
         html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
         html += '<tr>'
+        def _sth(col_idx, label, css="", extra=""):
+            return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                    f' onclick="sortBossTable(\'{table_id}\',{col_idx},this)"{extra}>'
+                    f'{label} <span class="sort-arrow">⇅</span></th>')
+
         html += '<th style="width:10px"></th>'
-        html += '<th class="player-header">Player</th>'
-        html += '<th>Char</th>'
+        html += _sth(1, 'Player', 'player-header')
+        html += _sth(2, 'Char')
         html += '<th>Split</th>'
-        html += '<th class="parse-h">Parse %</th>'
-        html += '<th class="dmg-h">Damage</th>'
-        html += '<th class="heal-h">Healing</th>'
-        html += '<th class="death-h">Deaths</th>'
+        html += _sth(4, 'Parse %', 'parse-h')
+        html += _sth(5, 'Damage', 'dmg-h')
+        html += _sth(6, 'Healing', 'heal-h')
+        html += _sth(7, 'Deaths', 'death-h')
         html += '<th class="death-h">Killed by (time)</th>'
-        html += '<th class="dmg-h">Dmg Taken</th>'
-        html += '<th class="uptime-h">Uptime %</th>'
-        html += '<th class="interrupt-h">Interrupts</th>'
-        html += '<th class="avoid-h">Avoid Hits</th>'
-        html += '<th class="avoid-h">&gt;10% HP Hits</th>'
+        html += _sth(9, 'Dmg Taken', 'dmg-h')
+        html += _sth(10, 'Uptime %', 'uptime-h')
+        html += _sth(11, 'Interrupts', 'interrupt-h')
+        html += _sth(12, 'Avoid Hits', 'avoid-h')
+        html += _sth(13, '&gt;10% HP Hits', 'avoid-h')
         html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
-        for m in mech_defs:
+        for mi, m in enumerate(mech_defs):
+            mech_col_idx = 15 + mi
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
             tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
-            html += f'<th class="{css}" style="cursor:help" data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">{escape(m["label"])}</th>'
+            html += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                     f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
+                     f' onclick="sortBossTable(\'{table_id}\',{mech_col_idx},this)">'
+                     f'{escape(m["label"])} <span class="sort-arrow">⇅</span></th>')
         html += '<th>Notes</th>'
         html += '</tr></thead><tbody>'
 
@@ -1306,6 +1315,8 @@ td:first-child, th:first-child {{ border-left: none; }}
 .death-num {{ color: #e57373; font-weight: bold; }}
 .interrupt-yes {{ color: #00FF88; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
+.sort-arrow {{ opacity: 0.35; font-size: 10px; margin-left: 3px; }}
+th[data-sortable]:hover .sort-arrow {{ opacity: 0.7; }}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
@@ -1385,6 +1396,67 @@ function showHTip(el) {{
   _htip.style.display = 'block';
 }}
 function hideHTip() {{ _htip.style.display = 'none'; }}
+function sortBossTable(tableId, colIdx, thEl) {{
+  const tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  const dir = thEl.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+  tbl.querySelectorAll('th[data-sortable]').forEach(th => {{
+    th.dataset.sortDir = '';
+    const a = th.querySelector('.sort-arrow');
+    if (a) a.textContent = '⇅';
+  }});
+  thEl.dataset.sortDir = dir;
+  const arrow = thEl.querySelector('.sort-arrow');
+  if (arrow) arrow.textContent = dir === 'asc' ? '▲' : '▼';
+  const tbody = tbl.tBodies[0];
+  const rows = Array.from(tbody.rows);
+  // Split rows into segments between role-sep rows
+  const segments = [];
+  let cur = null;
+  for (const row of rows) {{
+    if (row.classList.contains('role-sep')) {{
+      if (cur) segments.push(cur);
+      cur = {{ sep: row, rows: [] }};
+    }} else {{
+      if (!cur) cur = {{ sep: null, rows: [] }};
+      cur.rows.push(row);
+    }}
+  }}
+  if (cur) segments.push(cur);
+  function parseVal(cell) {{
+    if (!cell) return null;
+    const text = cell.textContent.trim().replace(/⇅|▲|▼/g, '').trim();
+    if (!text || text === '—') return null;
+    const m = text.replace('%','').match(/^([\d.]+)\s*([MkKBbG]?)$/);
+    if (m) {{
+      let n = parseFloat(m[1]);
+      const s = m[2].toUpperCase();
+      if (s === 'B') n *= 1e9;
+      else if (s === 'M') n *= 1e6;
+      else if (s === 'K') n *= 1e3;
+      return n;
+    }}
+    return text.toLowerCase();
+  }}
+  for (const seg of segments) {{
+    seg.rows.sort((a, b) => {{
+      const va = parseVal(a.cells[colIdx]);
+      const vb = parseVal(b.cells[colIdx]);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === 'number' && typeof vb === 'number')
+        return dir === 'asc' ? va - vb : vb - va;
+      if (va < vb) return dir === 'asc' ? -1 : 1;
+      if (va > vb) return dir === 'asc' ? 1 : -1;
+      return 0;
+    }});
+  }}
+  for (const seg of segments) {{
+    if (seg.sep) tbody.appendChild(seg.sep);
+    for (const row of seg.rows) tbody.appendChild(row);
+  }}
+}}
 </script>
 </body>
 </html>"""
