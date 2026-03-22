@@ -1148,6 +1148,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
                 dmg_done_raw = uptime_map.get(pid, {}).get("total", 0) if isinstance(uptime_map.get(pid), dict) else 0
                 dmg_done_str = _hfmt(dmg_done_raw) if dmg_done_raw > 0 else "—"
+                fight_dur_s  = fight_dur / 1000 if fight_dur > 0 else 1
+                dps_raw      = dmg_done_raw / fight_dur_s if dmg_done_raw > 0 else 0
+                dps_str      = _hfmt(dps_raw) if dps_raw > 0 else "—"
                 heal_raw = healing_map.get(pid, 0)
                 heal_str = _hfmt(heal_raw) if heal_raw > 0 else "—"
 
