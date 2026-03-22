@@ -1121,15 +1121,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
     return results
 
 
-def write_html(days_data: list, output_path: str):
-    """Write the full audit report as a tabbed HTML file (Day → Split → Boss)."""
-    first      = days_data[0]
-    ri_first   = first["report_info"]
-    guild_name = ri_first.get("guild", {}).get("name", "Unknown Guild") if ri_first.get("guild") else "Unknown Guild"
+def write_raid_html(day_data: dict, output_path: str) -> None:
+    """Write a single raid day as a standalone HTML page (Gear + Split tabs)."""
+    ri       = day_data["report_info"]
+    rc       = day_data["report_code"]
+    date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
+    title    = ri.get("title", rc)
 
-    # ── Gear tab (most recent day) ──
+    # ── Gear tab ──
     players = {}
-    for rec in first["records"]:
+    for rec in day_data["records"]:
         p = rec["player"]
         if p not in players:
             players[p] = {"class": rec["class"], "items": []}
@@ -1170,84 +1171,61 @@ def write_html(days_data: list, output_path: str):
         div = ' divider' if i > 0 else ''
         gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
 
-    # ── Build per-day content: Day → Split sub-tabs → Boss tables ──
-    def day_label(day_data):
-        ri = day_data["report_info"]
-        date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%b %d") if ri.get("startTime") else ""
-        title    = ri.get("title", day_data["report_code"])
-        return f"{date_str} · {title}" if date_str else title
+    # ── Build Split tabs (top-level alongside Gear) ──
+    actor_lookup = {a["id"]: a for a in day_data["actors"]}
+    boss_data    = day_data["boss_data"]
 
-    day_divs   = ""
+    splits_boss_data: dict = {}
+    for boss_name, fights in boss_data.items():
+        for fight in fights:
+            snum = fight.get("split_num", 1)
+            splits_boss_data.setdefault(snum, {}).setdefault(boss_name, []).append(fight)
+
     tab_buttons = '<button class="tab-btn active" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
+    split_divs  = ""
+    for snum in sorted(splits_boss_data):
+        split_bd   = splits_boss_data[snum]
+        boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"s{snum}")
+        split_html = "".join(
+            f'<div class="boss-section"><div class="boss-section-title" onclick="toggleBoss(this)">⚔ {escape(bn)} <span class="boss-toggle-arrow">▼</span></div><div class="boss-section-body">{bh}</div></div>'
+            for bn, bh in boss_htmls.items()
+        )
+        diff_tags: set = set()
+        for bn in split_bd:
+            if "(Mythic)" in bn:    diff_tags.add("Mythic")
+            elif "(Heroic)" in bn:  diff_tags.add("Heroic")
+            else:                   diff_tags.add("Normal")
+        diff_label = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
+        slabel     = f"Split {snum} · {diff_label}"
+        tab_buttons += f'<button class="tab-btn" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
+        split_divs  += f'<div id="tab-split-{snum}" class="tab-content">{split_html}</div>\n'
 
-    for di, day_data in enumerate(days_data):
-        actor_lookup = {a["id"]: a for a in day_data["actors"]}
-        boss_data    = day_data["boss_data"]
-        ri           = day_data["report_info"]
-        rc           = day_data["report_code"]
-        date_str     = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
-
-        # Group fights by split_num
-        splits_boss_data = {}
-        for boss_name, fights in boss_data.items():
-            for fight in fights:
-                snum = fight.get("split_num", 1)
-                splits_boss_data.setdefault(snum, {}).setdefault(boss_name, []).append(fight)
-
-        sub_bar  = '<div class="split-tab-bar">'
-        sub_body = ""
-        for idx, snum in enumerate(sorted(splits_boss_data)):
-            split_bd   = splits_boss_data[snum]
-            boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"d{di}s{snum}")
-            split_html = "".join(
-                f'<div class="boss-section"><div class="boss-section-title" onclick="toggleBoss(this)">⚔ {escape(bn)} <span class="boss-toggle-arrow">▼</span></div><div class="boss-section-body">{bh}</div></div>'
-                for bn, bh in boss_htmls.items()
-            )
-            # Difficulty label
-            diff_tags = {f.get("split_num") and ("Heroic" if "(Heroic)" in bn else ("Mythic" if "(Mythic)" in bn else "Normal"))
-                         for bn, fs in boss_data.items() for f in fs if f.get("split_num") == snum}
-            diff_label = "Heroic" if "Heroic" in diff_tags else ("Mythic" if "Mythic" in diff_tags else "Normal")
-            slabel     = f"Split {snum} · {diff_label}"
-            active_cls = "active" if idx == 0 else ""
-            sub_bar  += f'<button class="split-tab-btn {active_cls}" onclick="switchSplit(\'day-{di}\',{idx},this)">{escape(slabel)}</button>'
-            sub_body += f'<div id="day-{di}-split-{idx}" class="split-tab-content {active_cls}">{split_html}</div>'
-        sub_bar += "</div>"
-
-        wcl_link   = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
-        day_header = f'<div class="day-header"><span class="day-title">{escape(ri.get("title", rc))}</span><span class="day-date">{date_str}</span>{wcl_link}</div>'
-        day_divs  += f'<div id="tab-day-{di}" class="tab-content">{day_header}{sub_bar}{sub_body}</div>\n'
-        tab_buttons += f'<button class="tab-btn" onclick="switchTab(\'day-{di}\',this)">📅 {escape(day_label(day_data))}</button>\n'
+    wcl_link = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Raid Audit — {escape(guild_name)}</title>
+<title>{escape(title)} — {date_str} — Raid Audit</title>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 20px; }}
-h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 16px; }}
-/* ── Top tabs ── */
+h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
+.breadcrumb {{ font-size: 12px; color: #555; margin-bottom: 14px; }}
+.breadcrumb a {{ color: #7289DA; text-decoration: none; }}
+.breadcrumb a:hover {{ text-decoration: underline; }}
+.raid-meta {{ display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }}
+.raid-date {{ color: #666; font-size: 13px; }}
+.wcl-link {{ color: #7289DA; font-size: 12px; text-decoration: none; }}
+.wcl-link:hover {{ text-decoration: underline; }}
+/* ── Tabs ── */
 .tab-bar {{ display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #2a2a4a; flex-wrap: wrap; }}
 .tab-btn {{ background: #16213e; color: #888; border: none; padding: 10px 20px; border-radius: 8px 8px 0 0; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }}
 .tab-btn:hover {{ color: #bbb; background: #1e2d50; }}
 .tab-btn.active {{ color: #7289DA; background: #1a1a2e; border-bottom: 2px solid #7289DA; }}
 .tab-content {{ display: none; }}
 .tab-content.active {{ display: block; }}
-/* ── Split sub-tabs ── */
-.split-tab-bar {{ display: flex; gap: 6px; margin: 14px 0 18px; flex-wrap: wrap; }}
-.split-tab-btn {{ background: #0d1525; color: #666; border: 1px solid #1e2a4a; padding: 7px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }}
-.split-tab-btn:hover {{ color: #bbb; border-color: #2a3a6a; }}
-.split-tab-btn.active {{ color: #a0b4ff; background: #16213e; border-color: #4a5d9a; }}
-.split-tab-content {{ display: none; }}
-.split-tab-content.active {{ display: block; }}
-/* ── Day header ── */
-.day-header {{ display: flex; align-items: center; gap: 16px; margin-bottom: 4px; padding: 10px 0; border-bottom: 1px solid #2a2a4a; }}
-.day-title {{ color: #e0e0e0; font-size: 16px; font-weight: 700; }}
-.day-date {{ color: #666; font-size: 13px; }}
-.wcl-link {{ color: #7289DA; font-size: 12px; text-decoration: none; margin-left: auto; }}
-.wcl-link:hover {{ text-decoration: underline; }}
 /* ── Boss section ── */
 .boss-section {{ margin-bottom: 36px; }}
 .boss-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #7289DA; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
@@ -1353,7 +1331,12 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>
 <body>
-<h1>Raid Audit — {escape(guild_name)}</h1>
+<div class="breadcrumb"><a href="index.html">← Overview</a> / {escape(title)}</div>
+<h1>{escape(title)}</h1>
+<div class="raid-meta">
+  <span class="raid-date">{date_str}</span>
+  {wcl_link}
+</div>
 <div class="tab-bar">{tab_buttons}</div>
 
 <!-- ── GEAR TAB ── -->
@@ -1372,8 +1355,8 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
   </div>
 </div>
 
-<!-- ── DAY TABS ── -->
-{day_divs}
+<!-- ── SPLIT TABS ── -->
+{split_divs}
 <script>
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -1384,13 +1367,6 @@ function switchTab(name, btn) {{
 function toggleBoss(titleEl) {{
   titleEl.classList.toggle('collapsed');
   titleEl.nextElementSibling.classList.toggle('collapsed');
-}}
-function switchSplit(dayId, splitIdx, btn) {{
-  const dayEl = document.getElementById('tab-' + dayId);
-  dayEl.querySelectorAll('.split-tab-content').forEach(el => el.classList.remove('active'));
-  dayEl.querySelectorAll('.split-tab-btn').forEach(el => el.classList.remove('active'));
-  document.getElementById(dayId + '-split-' + splitIdx).classList.add('active');
-  btn.classList.add('active');
 }}
 function filterGear(input) {{
   const filter = input.value.toLowerCase();
@@ -1459,7 +1435,97 @@ function sortBossTable(tableId, colIdx, thEl) {{
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"\n[OK] HTML report saved to: {output_path}")
+    print(f"[OK] Raid page saved: {output_path}")
+
+
+def write_index_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write the overview index.html with one card per raid day."""
+
+    def _card(day_data: dict, is_first: bool) -> str:
+        ri  = day_data["report_info"]
+        rc  = day_data["report_code"]
+        bd  = day_data["boss_data"]
+        date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%B %d, %Y") if ri.get("startTime") else ""
+        title    = ri.get("title", rc)
+        filename = f"raid_{rc}.html"
+
+        # Difficulty
+        diff_tags: set = set()
+        for bn in bd:
+            if "(Mythic)" in bn:   diff_tags.add("Mythic")
+            elif "(Heroic)" in bn: diff_tags.add("Heroic")
+            else:                  diff_tags.add("Normal")
+        if "Mythic" in diff_tags:       diff, diff_cls = "Mythic",  "badge-mythic"
+        elif "Heroic" in diff_tags:     diff, diff_cls = "Heroic",  "badge-heroic"
+        else:                           diff, diff_cls = "Normal",  "badge-normal"
+
+        # Boss count + max splits
+        boss_count = len(bd)
+        max_splits = 1
+        for fights in bd.values():
+            for f in fights:
+                max_splits = max(max_splits, f.get("split_num", 1))
+
+        recent_badge = '<span class="badge-recent">Most Recent</span>' if is_first else ""
+        splits_str   = f"{max_splits} split{'s' if max_splits > 1 else ''}" if max_splits > 1 else "1 split"
+        return (
+            f'<a class="raid-card" href="{filename}">'
+            f'  <div class="card-top">'
+            f'    <div class="card-date">{escape(date_str)}</div>'
+            f'    <div class="card-badges"><span class="badge-diff {diff_cls}">{diff}</span>{recent_badge}</div>'
+            f'  </div>'
+            f'  <div class="card-title">{escape(title)}</div>'
+            f'  <div class="card-stats">'
+            f'    <span>&#9876; {boss_count} boss{"es" if boss_count != 1 else ""} killed</span>'
+            f'    <span>&#x21C6; {splits_str}</span>'
+            f'  </div>'
+            f'  <div class="card-link">View Report &#8594;</div>'
+            f'</a>'
+        )
+
+    cards_html = "\n".join(_card(d, i == 0) for i, d in enumerate(days_data))
+    total_raids = len(days_data)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raid Audit — {escape(guild_name)}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
+h1 {{ color: #7289DA; font-size: 24px; margin-bottom: 4px; }}
+.subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
+.raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }}
+.raid-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
+.raid-card:hover {{ border-color: #7289DA; transform: translateY(-2px); }}
+.card-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }}
+.card-date {{ color: #7289DA; font-size: 12px; font-weight: 600; }}
+.card-badges {{ display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }}
+.badge-diff {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }}
+.badge-normal  {{ background: #1a3a1a; color: #4caf50; }}
+.badge-heroic  {{ background: #1a2a4a; color: #64b5f6; }}
+.badge-mythic  {{ background: #2a1a3a; color: #c77dff; }}
+.badge-recent  {{ background: #2a2416; color: #E5CC80; display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }}
+.card-title {{ color: #e0e0e0; font-size: 16px; font-weight: 700; margin-bottom: 12px; }}
+.card-stats {{ display: flex; gap: 14px; color: #888; font-size: 12px; margin-bottom: 14px; flex-wrap: wrap; }}
+.card-link {{ color: #7289DA; font-size: 13px; font-weight: 600; }}
+.raid-card:hover .card-link {{ text-decoration: underline; }}
+</style>
+</head>
+<body>
+<h1>Raid Audit — {escape(guild_name)}</h1>
+<div class="subtitle">{total_raids} raid{"s" if total_raids != 1 else ""} tracked</div>
+<div class="raid-grid">
+{cards_html}
+</div>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Index page saved: {output_path}")
 
 
 # ─── Roster Mapping (The Rupture) ────────────────────────────────────────────
@@ -2439,10 +2505,21 @@ def main():
         print("[ERROR] No reports processed successfully.")
         sys.exit(1)
 
-    # Most recent report first (leftmost tab)
+    # Most recent report first
     days_data.sort(key=lambda d: d["report_info"].get("startTime", 0), reverse=True)
 
-    write_html(days_data, "index.html")
+    # Guild name (from most recent report)
+    ri_first   = days_data[0]["report_info"]
+    guild_name = ri_first.get("guild", {}).get("name", "The Rupture") if ri_first.get("guild") else "The Rupture"
+
+    # Per-raid pages
+    for day_data in days_data:
+        rc            = day_data["report_code"]
+        raid_filename = f"raid_{rc}.html"
+        write_raid_html(day_data, raid_filename)
+
+    # Overview index
+    write_index_html(days_data, "index.html", guild_name=guild_name)
 
     # XLSX: most recent day only
     first = days_data[0]
