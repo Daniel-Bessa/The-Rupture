@@ -353,7 +353,7 @@ def fetch_uptime_table(token: str, report_code: str, fight_id: int) -> dict:
     """
     result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
     table = result["reportData"]["report"]["table"]
-    entries = table.get("entries", []) if isinstance(table, dict) else []
+    entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
     return {e["id"]: {"activeTime": e.get("activeTime", 0), "total": e.get("total", 0)}
             for e in entries if "id" in e}
 
@@ -373,7 +373,7 @@ def fetch_healing_table(token: str, report_code: str, fight_id: int) -> dict:
     """
     result = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
     table = result["reportData"]["report"]["table"]
-    entries = table.get("entries", []) if isinstance(table, dict) else []
+    entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
     return {e["id"]: e.get("total", 0) for e in entries if "id" in e}
 
 
@@ -395,11 +395,13 @@ def fetch_rankings(token: str, report_code: str, fight_id: int) -> dict:
     if not isinstance(rankings, dict):
         return {}
     out = {}
-    for entry in rankings.get("data", []):
-        name = entry.get("name", "").lower()
-        pct = entry.get("rankPercent", 0)
-        if name:
-            out[name] = round(pct)
+    for fight_entry in rankings.get("data", []):
+        for role_data in fight_entry.get("roles", {}).values():
+            for char in role_data.get("characters", []):
+                name = char.get("name", "").lower()
+                pct = char.get("rankPercent", 0)
+                if name and pct:
+                    out[name] = round(pct)
     return out
 
 
@@ -420,14 +422,16 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
 
 def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
                              fight_start_ms: int = 0, ability_names: dict = None,
-                             player_max_hp: dict = None) -> dict:
+                             player_max_hp: dict = None, player_roles: dict = None) -> dict:
     """Count enemy-source damage-taken hits per player (proxy for avoidable damage).
-    Returns {pid: {"hits": int, "big_hits": int, "details": [{"ability": str, "amount_k": str, "time": str}]}}
-    where big_hits = hits > 10% of player's estimated max HP (stamina * 20).
+    Returns {pid: {"hits": int, "big_hits": int, "details": [{"ability", "amount_k", "time"}]}}
+    big_hits threshold: 50% HP for Tanks, 10% HP for everyone else.
+    Melee auto-attacks (abilityGameID == 1) are excluded from details.
     """
     ability_names = ability_names or {}
-    player_max_hp = player_max_hp or {}
-    friendly_ids = set(actor_lookup.keys())
+    player_max_hp  = player_max_hp  or {}
+    player_roles   = player_roles   or {}
+    friendly_ids   = set(actor_lookup.keys())
     results = {}
     for event in sorted(damage_events, key=lambda e: e.get("timestamp", 0)):
         if event.get("type") != "damage":
@@ -435,24 +439,25 @@ def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
         pid = event.get("targetID")
         if pid is None or pid not in actor_lookup:
             continue
-        # Only count hits from non-friendly sources (enemy/boss abilities)
         if event.get("sourceID") in friendly_ids:
+            continue
+        ability_id = event.get("abilityGameID", 0)
+        if ability_id == 1:  # skip melee auto-attacks
             continue
         total_hit = event.get("unmitigatedAmount", 0) or event.get("amount", 0)
         if total_hit == 0:
             continue
-        ability_id = event.get("abilityGameID", 0)
         ability_name = ability_names.get(ability_id, f"#{ability_id}")
         ts = event.get("timestamp", 0)
         elapsed_ms = ts - fight_start_ms
-        minutes = int(elapsed_ms // 60000)
-        seconds = int((elapsed_ms % 60000) // 1000)
-        time_str = f"{minutes}:{seconds:02d}"
+        time_str = f"{int(elapsed_ms // 60000)}:{int((elapsed_ms % 60000) // 1000):02d}"
         amount_k = f"{total_hit / 1000:.1f}k"
         entry = results.setdefault(pid, {"hits": 0, "big_hits": 0, "details": []})
         entry["hits"] += 1
         max_hp = player_max_hp.get(pid, 0)
-        if max_hp > 0 and total_hit >= max_hp * 0.10:
+        role = player_roles.get(pid, "DPS")
+        threshold = 0.50 if role == "Tank" else 0.10
+        if max_hp > 0 and total_hit >= max_hp * threshold:
             entry["big_hits"] += 1
             entry["details"].append({"ability": ability_name, "amount_k": amount_k, "time": time_str})
     return results
@@ -1102,7 +1107,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 html += f'<td class="center uptime-h">{uptime_str}</td>'
                 html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
                 html += f'<td class="center avoid-h">{hits if hits else "—"}</td>'
-                html += f'<td class="center avoid-h{bighit_cls}">{big_hits if big_hits else "—"}</td>'
+                if big_hits and details_list:
+                    bh_tip = "<br>".join(f'<span style="color:#ff8a65">{escape(d["ability"])}</span>: {escape(d["amount_k"])} @ {escape(d["time"])}' for d in details_list)
+                    bh_tip_attr = bh_tip.replace("'", "&#39;")
+                    html += f'<td class="center avoid-h{bighit_cls}" style="cursor:help" data-htip=\'{bh_tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">{big_hits}</td>'
+                else:
+                    html += f'<td class="center avoid-h{bighit_cls}">{big_hits if big_hits else "—"}</td>'
                 html += f'<td class="detail-cell">{details_str}</td>'
                 pid_mechs = fight_mechs.get(pid, {})
                 for m in mech_defs:
@@ -2353,25 +2363,13 @@ def main():
             fight_end        = fight.get("endTime", 0)
             fight_dur_ms     = fight_end - fight_start
             deaths           = analyze_deaths(death_events, fight_start, ability_names, fight_end_ms=fight_dur_ms, damage_events=damage_events)
-            avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start, ability_names, player_max_hp)
+            player_roles_map = {pid: PLAYER_ROLES.get(lookup_roster(actor_lookup[pid]["name"])[0], "DPS")
+                                for pid in actor_lookup if "name" in actor_lookup[pid]}
+            avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start, ability_names, player_max_hp, player_roles_map)
             dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
             uptime_map       = fetch_uptime_table(token, report_code, fid)
             healing_map      = fetch_healing_table(token, report_code, fid)
             rankings_map     = fetch_rankings(token, report_code, fid)
-            # TEMP DEBUG — raw API structure for first fight only
-            if not hasattr(fetch_uptime_table, '_debugged'):
-                fetch_uptime_table._debugged = True
-                q = """query ($code: String!, $fightID: Int!) { reportData { report(code: $code) { table(dataType: DamageDone, fightIDs: [$fightID]) } } }"""
-                raw = query_wcl(token, q, {"code": report_code, "fightID": fid})
-                tbl = raw["reportData"]["report"]["table"]
-                print(f"       RAW table keys: {list(tbl.keys()) if isinstance(tbl, dict) else type(tbl)}")
-                data_val = tbl.get("data") if isinstance(tbl, dict) else None
-                print(f"       table['data'] type: {type(data_val)}, keys: {list(data_val.keys()) if isinstance(data_val, dict) else str(data_val)[:200]}")
-                q2 = """query ($code: String!, $fightID: Int!) { reportData { report(code: $code) { rankings(fightIDs: [$fightID]) } } }"""
-                raw2 = query_wcl(token, q2, {"code": report_code, "fightID": fid})
-                rnk = raw2["reportData"]["report"]["rankings"]
-                rnk_data = rnk.get("data") if isinstance(rnk, dict) else rnk
-                print(f"       rankings['data'] type: {type(rnk_data)}, val: {str(rnk_data)[:300]}")
             interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
