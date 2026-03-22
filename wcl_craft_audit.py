@@ -854,7 +854,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 17 + len(mech_defs)  # base 17 + mechanic columns
+        total_cols     = 13 + len(mech_defs) + (1 if has_interrupts else 0)  # base + optional interrupt + mechs + notes
 
         # Collect all pids across all fights for this boss
         all_pids_set = set()
@@ -974,12 +974,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
         html += '<th class="death-h">Killed by (time)</th>'
         html += _sth(10, 'Dmg Taken', 'dmg-h')
         html += _sth(11, 'Uptime %', 'uptime-h')
-        html += _sth(12, 'Interrupts', 'interrupt-h')
-        html += _sth(13, 'Avoid Hits', 'avoid-h')
-        html += _sth(14, '&gt;10% HP Hits', 'avoid-h')
-        html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
+        if has_interrupts:
+            html += _sth(12, 'Interrupts', 'interrupt-h')
         for mi, m in enumerate(mech_defs):
-            mech_col_idx = 16 + mi
+            mech_col_idx = (13 if has_interrupts else 12) + mi
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
             tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
             html += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
@@ -1010,7 +1008,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                     current_role = role
                     html += f'<tr class="role-sep"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
 
-                avoidable    = fight.get("avoidable_damage", {})
                 dmg_taken    = fight.get("dmg_taken", {})
                 uptime_map   = fight.get("uptime_map", {})
                 interrupts   = fight.get("interrupts", {})
@@ -1020,7 +1017,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                 fight_mechs  = fight.get("mechanics_data", {})
 
                 death_list = deaths_map.get(pid, [])
-                av = avoidable.get(pid, {})
                 d_raw = dmg_taken.get(pid, 0)
                 dmg_str = f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000 else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—")
                 active = uptime_map.get(pid, {}).get("activeTime", 0) if isinstance(uptime_map.get(pid), dict) else 0
@@ -1031,11 +1027,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                     ' style="background:#1A3A1A"' if interrupt_count > 0
                     else (' style="background:#5D1A1A"' if has_interrupts else "")
                 )
-                hits = av.get("hits", 0) or 0
-                big_hits = av.get("big_hits", 0) or 0
-                details_list = av.get("details", [])
-                details_str = "<br>".join(f'{escape(d["ability"])}: {escape(d["amount_k"])} @ {escape(d["time"])}' for d in details_list) or "—"
-
                 # Parse %
                 parse_pct = rankings_map.get(char_name.lower())
                 if parse_pct is not None:
@@ -1075,7 +1066,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                     death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
 
                 row_cls = "boss-death-row" if death_count > 0 else ""
-                bighit_cls = " bighit-row" if big_hits > 0 else ""
 
                 html += f'<tr class="{row_cls}">'
                 html += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
@@ -1095,15 +1085,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                     html += f'<td class="death-h">{killed_str}</td>'
                 html += f'<td class="center dmg-h">{dmg_str}</td>'
                 html += f'<td class="center uptime-h">{uptime_str}</td>'
-                html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
-                html += f'<td class="center avoid-h">{hits if hits else "—"}</td>'
-                if big_hits and details_list:
-                    bh_tip = "<br>".join(f'<span style="color:#ff8a65">{escape(d["ability"])}</span>: {escape(d["amount_k"])} @ {escape(d["time"])}' for d in details_list)
-                    bh_tip_attr = bh_tip.replace("'", "&#39;")
-                    html += f'<td class="center avoid-h{bighit_cls}" style="cursor:help" data-htip=\'{bh_tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">{big_hits}</td>'
-                else:
-                    html += f'<td class="center avoid-h{bighit_cls}">{big_hits if big_hits else "—"}</td>'
-                html += f'<td class="detail-cell">{details_str}</td>'
+                if has_interrupts:
+                    html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
                 pid_mechs = fight_mechs.get(pid, {})
                 for m in mech_defs:
                     count = pid_mechs.get(m["label"], 0)
