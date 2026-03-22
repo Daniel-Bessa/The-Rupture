@@ -1394,6 +1394,15 @@ td:first-child, th:first-child {{ border-left: none; }}
 .death-num {{ color: #e57373; font-weight: bold; }}
 .interrupt-yes {{ color: #00FF88; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
+.split-ov-row td {{ padding: 0 !important; border: none; background: #0d1525; }}
+.split-ov-bar {{
+  display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+  padding: 10px 14px; border-top: 2px solid #2a3a6a; border-bottom: 1px solid #1e2a4a;
+}}
+.sov-title {{ color: #a0b4ff; font-weight: 700; font-size: 14px; min-width: 60px; }}
+.sov-dur {{ color: #666; font-size: 12px; }}
+.sov-item {{ font-size: 12px; color: #ccc; }}
+.sov-lbl {{ color: #666; margin-right: 4px; }}
 .frontal-failures {{
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   margin-bottom: 12px; padding: 10px 14px;
