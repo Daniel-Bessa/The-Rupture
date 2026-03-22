@@ -1,12 +1,15 @@
 # Credentials — never commit these
 wcl_config.txt
 
-# Output files (generated each run)
+# Output files (generated each run) — index.html IS committed (GitHub Pages)
 craft_audit.html
 craft_audit.xlsx
 craft_audit_*.html
 craft_audit_*.xlsx
 wcl_debug_response.json
+
+# JSON cache — local only, not needed for the website
+data/
 
 # Python
 __pycache__/

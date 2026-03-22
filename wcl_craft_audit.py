@@ -2394,7 +2394,7 @@ def main():
     # Most recent report first (leftmost tab)
     days_data.sort(key=lambda d: d["report_info"].get("startTime", 0), reverse=True)
 
-    write_html(days_data, "craft_audit.html")
+    write_html(days_data, "index.html")
 
     # XLSX: most recent day only
     first = days_data[0]
@@ -2402,7 +2402,7 @@ def main():
                "craft_audit.xlsx", split_data=first["split_data"],
                boss_data=first["boss_data"], actors=first["actors"])
 
-    print(f"\nDone! Refresh craft_audit.html in your browser, or open craft_audit.xlsx.\n")
+    print(f"\nDone! Open index.html in your browser, or open craft_audit.xlsx.\n")
 
 
 if __name__ == "__main__":
