@@ -984,7 +984,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         def _sth(col_idx, label, css="", extra=""):
             return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
                     f' onclick="sortBossTable(\'{table_id}\',{col_idx},this)"{extra}>'
-                    f'{label} <span class="sort-arrow">⇅</span></th>')
+                    f'{label} <span class="sort-arrow">▼</span></th>')
 
         html += '<th style="width:10px"></th>'
         html += _sth(1, 'Player', 'player-header')
@@ -1008,7 +1008,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
             html += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
                      f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
                      f' onclick="sortBossTable(\'{table_id}\',{mech_col_idx},this)">'
-                     f'{escape(m["label"])} <span class="sort-arrow">⇅</span></th>')
+                     f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
         html += '<th>Notes</th>'
         html += '</tr></thead><tbody>'
 
@@ -1399,15 +1399,15 @@ function hideHTip() {{ _htip.style.display = 'none'; }}
 function sortBossTable(tableId, colIdx, thEl) {{
   const tbl = document.getElementById(tableId);
   if (!tbl) return;
-  const dir = thEl.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+  const dir = thEl.dataset.sortDir === 'desc' ? 'asc' : 'desc';
   tbl.querySelectorAll('th[data-sortable]').forEach(th => {{
     th.dataset.sortDir = '';
     const a = th.querySelector('.sort-arrow');
-    if (a) a.textContent = '⇅';
+    if (a) a.textContent = '▼';
   }});
   thEl.dataset.sortDir = dir;
   const arrow = thEl.querySelector('.sort-arrow');
-  if (arrow) arrow.textContent = dir === 'asc' ? '▲' : '▼';
+  if (arrow) arrow.textContent = dir === 'desc' ? '▼' : '▲';
   const tbody = tbl.tBodies[0];
   const rows = Array.from(tbody.rows);
   // Split rows into segments between role-sep rows
