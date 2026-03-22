@@ -1315,8 +1315,8 @@ td:first-child, th:first-child {{ border-left: none; }}
 .death-num {{ color: #e57373; font-weight: bold; }}
 .interrupt-yes {{ color: #00FF88; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
-.sort-arrow {{ opacity: 0.35; font-size: 10px; margin-left: 3px; }}
-th[data-sortable]:hover .sort-arrow {{ opacity: 0.7; }}
+.sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
+th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
