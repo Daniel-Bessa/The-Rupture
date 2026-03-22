@@ -919,7 +919,42 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                             f'<div class="ff-body open">{rows}</div>'
                             f'</div>')
 
-        html = frontal_html
+        # ── Avoid failure summary ──
+        avoid_defs = [m for m in mech_defs if m.get("type") == "avoid"]
+        avoid_html = ""
+        if avoid_defs:
+            avoid_labels = {m["label"] for m in avoid_defs}
+            # Aggregate per label → {pid: total_hits} across all fights
+            label_hits = {}  # label -> {pid: count}
+            for fight in fights:
+                for pid, label_counts in fight.get("mechanics_data", {}).items():
+                    for label, count in label_counts.items():
+                        if label in avoid_labels:
+                            label_hits.setdefault(label, {})
+                            label_hits[label][pid] = label_hits[label].get(pid, 0) + count
+            if label_hits:
+                rows = ""
+                for m in avoid_defs:
+                    label = m["label"]
+                    if label not in label_hits:
+                        continue
+                    player_hits = sorted(label_hits[label].items(), key=lambda x: -x[1])
+                    parts = " · ".join(
+                        f'<span class="av-player">{escape(actor_lookup.get(pid, {}).get("name", f"?{pid}"))}</span>'
+                        f'<span class="av-count"> ×{count}</span>'
+                        for pid, count in player_hits
+                    )
+                    rows += f'<div class="av-item"><span class="av-label">{escape(label)}</span> → {parts}</div>'
+                if rows:
+                    avoid_html = (f'<div class="avoid-failures">'
+                                  f'<div class="av-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                                  f'<span class="av-title">⚡ Avoidable Hits</span>'
+                                  f'<span class="av-chevron">▼</span>'
+                                  f'</div>'
+                                  f'<div class="av-body open">{rows}</div>'
+                                  f'</div>')
+
+        html = frontal_html + avoid_html
         html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
         html += '<tr>'
         def _sth(col_idx, label, css="", extra=""):
@@ -1297,6 +1332,19 @@ td:first-child, th:first-child {{ border-left: none; }}
 .ff-primary {{ color: #f4a742; font-weight: 700; }}
 .ff-sep {{ color: #555; margin: 0 6px; }}
 .ff-players {{ color: #e06c6c; }}
+/* ── Avoidable Hits ── */
+.avoid-failures {{ margin-bottom: 10px; background: rgba(244,167,66,0.07); border: 1px solid rgba(244,167,66,0.3); border-radius: 8px; overflow: hidden; }}
+.av-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
+.av-header:hover {{ background: rgba(244,167,66,0.12); }}
+.av-title {{ color: #f4a742; font-weight: 700; font-size: 13px; }}
+.av-chevron {{ color: #f4a742; font-size: 11px; transition: transform 0.2s; }}
+.av-header.open .av-chevron {{ transform: rotate(180deg); }}
+.av-body {{ display: none; padding: 4px 0 8px; }}
+.av-body.open {{ display: block; }}
+.av-item {{ padding: 3px 14px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.04); }}
+.av-label {{ color: #f4a742; font-weight: 600; margin-right: 4px; }}
+.av-player {{ color: #e0e0e0; }}
+.av-count {{ color: #e06c6c; font-weight: 700; margin-right: 8px; }}
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
