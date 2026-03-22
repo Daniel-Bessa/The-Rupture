@@ -1181,6 +1181,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                 html += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
                 html += f'<td class="center">Split {fi}</td>'
                 html += f'<td class="center parse-h">{parse_cell}</td>'
+                html += f'<td class="center dmg-h">{dps_str}</td>'
                 html += f'<td class="center dmg-h">{dmg_done_str}</td>'
                 html += f'<td class="center heal-h">{heal_str}</td>'
                 if death_count > 0 and death_tip_html:
