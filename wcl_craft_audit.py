@@ -17,6 +17,7 @@ Requirements:
 """
 
 import sys
+import os
 import json
 import requests
 from datetime import datetime, timezone
@@ -24,6 +25,10 @@ from html import escape
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+from boss_mechanics import BOSS_MECHANICS, BOSS_HAS_INTERRUPTS
+from tracked_spells import (HEALTHSTONE_IDS, HEALTH_POT_IDS, COMBAT_POT_IDS,
+                             CLASS_DEFENSIVE_IDS, SPELL_NAMES)
 
 # ─── Midnight Season 1 Constants ─────────────────────────────────────────────
 
@@ -638,126 +643,9 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
     return results
 
 
-# ─── Tracked Spells (matched by abilityGameID) ───────────────────────────────
-# WCL cast events return abilityGameID (numeric), not ability names.
+# ─── Tracked Spells — loaded from tracked_spells.py ─────────────────────────
 
-# Healthstone (tracked separately from health pots)
-HEALTHSTONE_IDS = {
-    5512,    # Healthstone
-    6262,    # Healthstone (Midnight)
-}
-
-# Health Potions
-HEALTH_POT_IDS = {
-    432112,  # Algari Healing Potion (TWW)
-    431924,  # Algari Healing Potion (TWW alternate)
-    241304,  # Silvermoon Health Potion (Midnight)
-    241305,  # Silvermoon Health Potion (Midnight alternate)
-    258138,  # Silvermoon Health Potion (Midnight alternate)
-    1234768, # Silvermoon Health Potion (Midnight)
-}
-
-# Combat Potions
-COMBAT_POT_IDS = {
-    431932,  # Tempered Potion (TWW)
-    432098,  # Potion of Unwavering Focus (TWW)
-    431945,  # Light's Potential (TWW)
-    432106,  # Void-Shrouded Tincture (TWW)
-    1236616, # Light's Potential (Midnight)
-    245898,  # Light's Potential (Midnight alternate)
-    245897,  # Light's Potential (Midnight alternate)
-    241308,  # Light's Potential (Midnight alternate)
-    241309,  # Light's Potential (Midnight alternate)
-}
-
-# Class Defensives
-CLASS_DEFENSIVE_IDS = {
-    # Death Knight
-    48792,   # Icebound Fortitude
-    48707,   # Anti-Magic Shell
-    55233,   # Vampiric Blood
-    49028,   # Dancing Rune Weapon
-    # Demon Hunter
-    198589,  # Blur
-    196718,  # Darkness
-    196555,  # Netherwalk
-    187827,  # Metamorphosis (Vengeance)
-    # Druid
-    22812,   # Barkskin
-    61336,   # Survival Instincts
-    102342,  # Ironbark
-    # Evoker
-    363916,  # Obsidian Scales
-    374348,  # Renewing Blaze
-    # Hunter
-    186265,  # Aspect of the Turtle
-    109304,  # Exhilaration
-    264735,  # Survival of the Fittest
-    # Mage
-    45438,   # Ice Block
-    55342,   # Mirror Image
-    108978,  # Alter Time
-    110959,  # Greater Invisibility
-    # Monk
-    115203,  # Fortifying Brew
-    122783,  # Diffuse Magic
-    131645,  # Zen Meditation
-    122278,  # Dampen Harm
-    # Paladin
-    642,     # Divine Shield
-    31850,   # Ardent Defender
-    86659,   # Guardian of Ancient Kings
-    184662,  # Shield of Vengeance
-    # Priest
-    19236,   # Desperate Prayer
-    47585,   # Dispersion
-    586,     # Fade
-    15286,   # Vampiric Embrace
-    # Rogue
-    31224,   # Cloak of Shadows
-    5277,    # Evasion
-    1966,    # Feint
-    1856,    # Vanish
-    # Shaman
-    108271,  # Astral Shift
-    98008,   # Spirit Link Totem
-    # Warlock
-    104773,  # Unending Resolve
-    108416,  # Dark Pact
-    6789,    # Mortal Coil
-    # Warrior
-    871,     # Shield Wall
-    118038,  # Die by the Sword
-    184364,  # Enraged Regeneration
-    97462,   # Rallying Cry
-    23920,   # Spell Reflection
-}
-
-ALL_TRACKED_IDS = HEALTHSTONE_IDS | HEALTH_POT_IDS | COMBAT_POT_IDS | CLASS_DEFENSIVE_IDS
-
-# ID → display name
-SPELL_NAMES = {
-    5512: "Healthstone", 6262: "Healthstone", 432112: "Health Potion", 431924: "Health Potion",
-    431932: "Tempered Potion", 432098: "Potion of Unwavering Focus",
-    431945: "Light's Potential", 432106: "Void-Shrouded Tincture",
-    1236616: "Light's Potential", 245898: "Light's Potential",
-    245897: "Light's Potential", 241308: "Light's Potential", 241309: "Light's Potential",
-    241304: "Health Potion", 241305: "Health Potion", 258138: "Health Potion", 1234768: "Health Potion",
-    48792: "Icebound Fortitude", 48707: "Anti-Magic Shell", 55233: "Vampiric Blood", 49028: "Dancing Rune Weapon",
-    198589: "Blur", 196718: "Darkness", 196555: "Netherwalk", 187827: "Metamorphosis",
-    22812: "Barkskin", 61336: "Survival Instincts", 102342: "Ironbark",
-    363916: "Obsidian Scales", 374348: "Renewing Blaze",
-    186265: "Aspect of the Turtle", 109304: "Exhilaration", 264735: "Survival of the Fittest",
-    45438: "Ice Block", 55342: "Mirror Image", 108978: "Alter Time", 110959: "Greater Invisibility",
-    115203: "Fortifying Brew", 122783: "Diffuse Magic", 131645: "Zen Meditation", 122278: "Dampen Harm",
-    642: "Divine Shield", 31850: "Ardent Defender", 86659: "Guardian of Ancient Kings", 184662: "Shield of Vengeance",
-    19236: "Desperate Prayer", 47585: "Dispersion", 586: "Fade", 15286: "Vampiric Embrace",
-    31224: "Cloak of Shadows", 5277: "Evasion", 1966: "Feint", 1856: "Vanish",
-    108271: "Astral Shift", 98008: "Spirit Link Totem",
-    104773: "Unending Resolve", 108416: "Dark Pact", 6789: "Mortal Coil",
-    871: "Shield Wall", 118038: "Die by the Sword", 184364: "Enraged Regeneration",
-    97462: "Rallying Cry", 23920: "Spell Reflection",
-}
+# (imported at top of file from tracked_spells.py)
 
 
 def classify_spell(ability_game_id: int) -> str | None:
@@ -1530,41 +1418,39 @@ function sortBossTable(tableId, colIdx, thEl) {{
 
 # Maps character name (lowercase) -> (Player name, "Main" or "Alt")
 ROSTER = {}
-# (Player, [(char_name, Main/Alt)])
-# Role is determined per-player, not per-char
-_roster_raw = [
-    ("Nope",        "Tank",    [("NopeDK","Alt"), ("Nopebrew","Main"), ("Nøpæ","Main")]),
-    ("Phyxius",     "Tank",    [("Phyxius","Main"), ("Phyxy","Alt")]),
-    ("Toshiko",     "Healer",  [("Toshiko","Main"), ("Evokenooblal","Alt")]),
-    ("Minxy",       "Healer",  [("Minxymender","Alt"), ("Minxycat","Main")]),
-    ("Hipe",        "Healer",  [("Cype","Alt"), ("Wype","Main")]),
-    ("Zush",        "Healer",  [("Zush","Main"), ("Züsh","Main"), ("Ryukho","Alt"), ("Ryuhko","Alt")]),
-    ("Jimy",        "DPS",     [("jaime","Main"), ("Käz","Alt"), ("Madhmag","Alt")]),
-    ("Ice",         "DPS",     [("Icecoldleap","Main"), ("Chocoice","Alt")]),
-    ("Zodiacos",    "DPS",     [("Zodiacos","Alt")]),
-    ("Kutcher",     "DPS",     [("Kutcherdhtwo","Alt"), ("Kutchersplit","Alt")]),
-    ("Hypno",       "DPS",     [("Hypno","Main"), ("Hypnodh","Alt")]),
-    ("Brunaine",    "DPS",     [("Brunainevoke","Alt"), ("Brunainehunt","Alt")]),
-    ("Beldryk",     "DPS",     [("beldrýk","Main"), ("Beldrýk","Main"), ("beldryc","Alt")]),
-    ("Potrenu",     "DPS",     [("Potrenu","Main"), ("Potrenuu","Alt")]),
-    ("Shamishan",   "DPS",     [("Samdracson","Alt"), ("Shamishan","Main")]),
-    ("Madonis",     "DPS",     [("Madonis","Alt"), ("Madonisvoker","Alt")]),
-    ("Kaze",        "DPS",     [("Kazeofscales","Main"), ("Kazeoflight","Alt")]),
-    ("Upyeah",      "DPS",     [("upyeah","Alt"), ("Upyeah","Alt"), ("upyeäh","Alt")]),
-    ("Mindhacker",  "DPS",     [("Mindrage","Alt"), ("Mindhacker","Main")]),
-    ("Uncleyoinky", "DPS",     [("allblues","Alt"), ("Allblues","Alt"), ("uncleyoinky","Main")]),
-    ("Nizze",       "DPS",     [("Nizzedk","Alt"), ("Nizze","Main")]),
-    ("Mostbanned",  "DPS",     [("Mosta","Alt"), ("Mostbanned","Alt")]),
-    ("Malheiro",    "DPS",     [("Rödinhas","Alt"), ("Malheiro","Main")]),
-    ("Bolters",     "DPS",     [("Schmosba","Main"), ("Ipala","Alt"), ("Devert","Alt")]),
-    ("Tinet",       "DPS",     [("Pingveryhigh","Alt"), ("Guldanrämsay","Alt")]),
-    ("Doomkry",     "DPS",     [("Doomkry","Main"), ("Lockry","Alt")]),
-]
 PLAYER_ROLES = {}  # player_name -> "Tank"/"Healer"/"DPS"
-for player_name, role, chars in _roster_raw:
-    PLAYER_ROLES[player_name] = role
-    for char_name, main_alt in chars:
-        ROSTER[char_name.lower()] = (player_name, main_alt)
+
+
+def load_roster(path="roster.txt"):
+    """Load player roster from roster.txt. Format: PlayerName | Role | CharName:Main/Alt, ..."""
+    global ROSTER, PLAYER_ROLES
+    ROSTER = {}
+    PLAYER_ROLES = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) < 3:
+                    continue
+                player_name, role, chars_raw = parts[0], parts[1], parts[2]
+                PLAYER_ROLES[player_name] = role
+                for char_entry in chars_raw.split(","):
+                    char_entry = char_entry.strip()
+                    if not char_entry:
+                        continue
+                    if ":" in char_entry:
+                        char_name, main_alt = char_entry.rsplit(":", 1)
+                    else:
+                        char_name, main_alt = char_entry, "Main"
+                    ROSTER[char_name.strip().lower()] = (player_name, main_alt.strip())
+    except FileNotFoundError:
+        print("[WARN] roster.txt not found — player role/name lookup will be unavailable.")
+
+
+load_roster()
 
 
 def lookup_roster(char_name: str):
@@ -1572,65 +1458,9 @@ def lookup_roster(char_name: str):
     return ROSTER.get(char_name.lower(), (char_name, "Unknown"))
 
 
-# ─── Boss Mechanic Definitions ────────────────────────────────────────────────
-# Per-boss spell tracking. type: "dmg_hits" = bad (red), "soak" = positive (green)
-BOSS_MECHANICS = {
-    "Imperator Averzian": [
-        {"label": "Shad.Advance",  "name": "Shadow's Advance: Averzian summons Abyssal Voidshapers. They inflict Shadow damage to players within 10 yards and knock them away.",                                                                                    "spell_ids": {1253691},                             "type": "dmg_hits"},
-        {"label": "Void Fall",     "name": "Void Fall: Averzian knocks back players and rains destruction at several destinations, inflicting Shadow damage to players within 7 yards of the impact locations.",                                                    "spell_ids": {1258883, 1269160},                    "type": "dmg_hits"},
-        {"label": "Obliv.Wrath",   "name": "Oblivion's Wrath: Averzian launches void lances outward, inflicting Shadow damage to players in their path and knocking them back.",                                                                                    "spell_ids": {1260718},                             "type": "dmg_hits"},
-        {"label": "Umbral Col.",   "name": "Umbral Collapse (SOAK): Averzian collapses void energy around his target. Damage is reduced by the number of players within 10 yards. Stack up to soak! Higher = better.",                                            "spell_ids": {1249262},                             "type": "soak"},
-        {"label": "Gnash.Void",    "name": "Gnashing Void: The Voidmaw's melee attacks inflict Shadow damage every 1 sec for 10 sec. This effect stacks.",                                                                                                        "spell_ids": {1255683},                             "type": "dmg_hits"},
-        {"label": "Shad.Phalanx",  "name": "Shadow Phalanx: A column of Averzian's troops march across the field, inflicting Shadow damage every 1 sec to players in their path.",                                                                                "spell_ids": {1284786},                             "type": "dmg_hits"},
-    ],
-    "Vorasius": [
-        {"label": "Blisterburst",  "name": "Blisterburst: The Blistercreep explodes upon death, inflicting Shadow damage to players within 8 yards, increasing their damage taken by 100% for 30 sec and knocking them away.",                                     "spell_ids": {1259186},                             "type": "dmg_hits"},
-        {"label": "Claw Slam",     "name": "Shadowclaw Slam: Vorasius slams a giant claw into the ground. If the central impact fails to hit at least 1 player, Vorasius inflicts massive Shadow damage to all players instead.",                                  "spell_ids": {1241808, 1281954, 1281906, 1272328},  "type": "dmg_hits"},
-        {"label": "Parasite Exp.", "name": "Parasite Expulsion: Vorasius shakes off parasitic Blistercreeps, spraying the battlefield with globs of dark ichor that inflict Shadow damage to players within 3 yards upon impact.",                                 "spell_ids": {1275558, 1275556},                    "type": "dmg_hits"},
-        {"label": "Void Breath",   "name": "Void Breath: Vorasius sweeps a deadly beam across the battlefield, inflicting massive Shadow damage to all players in front of him and Shadow damage every 1 sec to players caught in its path.",                      "spell_ids": {1257607},                             "type": "dmg_hits"},
-    ],
-    "Fallen-King Salhadaar": [
-        {"label": "Tort.Extract",  "name": "Torturous Extract: Lingering void energy that inflicts Shadow damage every 1 sec to players within it.",                                                                                                               "spell_ids": {1245592},                             "type": "dmg_hits"},
-        {"label": "Umbral Beams",  "name": "Umbral Beams: Beams of pure void radiate from Salhadaar, inflicting Shadow damage every 0.3 sec to players within them.",                                                                                             "spell_ids": {1260030},                             "type": "dmg_hits"},
-        {"label": "Void Exposure", "name": "Void Exposure: Exposes players to an excessive amount of void energy, inflicting Shadow damage every 1 sec to players within it. Triggered by touching a Void Orb.",                                                  "spell_ids": {1250828},                             "type": "dmg_hits"},
-        {"label": "Twilight Spk.", "name": "Twilight Spikes: Dark energy erupts from the ground, inflicting Shadow damage every 2 sec to players within it.",                                                                                                      "spell_ids": {1251213},                             "type": "dmg_hits"},
-    ],
-    "Vaelgor & Ezzorak": [
-        {"label": "Impale",        "name": "Impale: Ezzorak slams targets within a 35 yard rear cone, bleeding for Physical damage plus additional Physical damage every 1 sec and stunning for 3 sec. Occurs immediately after Rakfang.",                         "spell_ids": {1265152},                             "type": "dmg_hits"},
-        {"label": "Dread Breath",  "name": "Dread Breath: Vaelgor roars toward a targeted player, fearing players in a massive frontal cone. Inflicts Shadow damage and an additional Shadow damage every 3 sec, fearing them for 21 sec.",                       "spell_ids": {1244225, 1255979},                    "type": "frontal"},
-        {"label": "Gloomfield",    "name": "Gloomfield: Galactic emptiness engulfs a massive location in darkness for 2.5 min, inflicting Shadow damage every 0.5 sec and reducing movement speed by 75%.",                                                       "spell_ids": {1245421},                             "type": "dmg_hits"},
-        {"label": "Tail Lash",     "name": "Tail Lash: Vaelgor knocks away players within a 35 yard rear cone, bleeding for Physical damage plus additional Physical damage every 0.5 sec for 4 sec.",                                                            "spell_ids": {1264467},                             "type": "dmg_hits"},
-        {"label": "Nullbeam",      "name": "Nullbeam (SOAK): Vaelgor expels crystalline spacetime in a frontal direction. Nullzone's pull magnitude weakens as Nullbeam stacks, up to 12 times. Higher = better.",                                               "spell_ids": {1283856, 1262688},                    "type": "soak"},
-    ],
-    "Lightblinded Vanguard": [
-        {"label": "Final Verdict", "name": "Final Verdict: Lightblood unleashes a devastating strike on his current target that inflicts Holy damage.",                                                                                                             "spell_ids": {1251812},                             "type": "dmg_hits"},
-        {"label": "Divine Toll",   "name": "Divine Toll: Bellamy unleashes a volley of holy shields every 2 sec for 18 sec. Shields that hit players inflict Holy damage and silence them for 6 sec.",                                                            "spell_ids": {1248652},                             "type": "dmg_hits"},
-        {"label": "Exec.Sentence", "name": "Execution Sentence (SOAK): Commander Venel Lightblood attempts to execute his target — damage is split evenly between players within 8 yards. Stack up! Higher = better.",                                           "spell_ids": {1249024},                             "type": "soak"},
-        {"label": "Trampled",      "name": "Trampled: Senn charges forward on her mighty elekk, inflicting Physical damage to players in her path.",                                                                                                               "spell_ids": {1249135},                             "type": "dmg_hits"},
-        {"label": "Div.Hammer",    "name": "Divine Hammer: Holy hammers spiral outward from Execution Sentence, inflicting Holy damage to players in their path.",                                                                                                 "spell_ids": {1249047},                             "type": "dmg_hits"},
-    ],
-    "Crown of the Cosmos": [
-        {"label": "Silverstrike",  "name": "Silverstrike Arrow/Ricochet: Alleria marks a player, firing a silver-lined arrow that inflicts Arcane damage in a line and removes Void effects from players struck. Being hit without a Void effect is avoidable.",  "spell_ids": {1233649, 1237729},                    "type": "dmg_hits"},
-        {"label": "Brstng Empty.", "name": "Bursting Emptiness: A backlash of magic blasts out from each obelisk, inflicting Shadow damage to all players struck.",                                                                                                "spell_ids": {1255378},                             "type": "dmg_hits"},
-        {"label": "Void Remnants", "name": "Void Remnants: Alleria calls down a celestial body near a player. This energy crashes into the ground and inflicts Shadow damage to all players.",                                                                     "spell_ids": {1233826, 1242553},                    "type": "dmg_hits"},
-        {"label": "Singularity",   "name": "Singularity Eruption: Wild pockets of gravity surge from Alleria, inflicting Shadow damage to players within 6 yards of each impact and knocking them away.",                                                         "spell_ids": {1235631},                             "type": "dmg_hits"},
-        {"label": "Dev.Cosmos",    "name": "Devouring Cosmos: Alleria calls upon the unending cosmos to consume her foes. Players caught within suffer Shadow damage every 1 sec and receive 99% reduced healing and absorbs.",                                    "spell_ids": {1238882},                             "type": "dmg_hits"},
-        {"label": "Grav.Collapse", "name": "Gravity Collapse: Reverberating darkness knocks the target upwards and increases their Physical damage taken by 300% for 12 sec. Also inflicts Shadow damage to all other players.",                                   "spell_ids": {1239095},                             "type": "dmg_hits"},
-    ],
-    "Chimaerus, the Undreamt God": [
-        {"label": "Alndust Ess.",  "name": "Alndust Essence: A pool of essence that inflicts Nature damage every 1 sec to players within it and reduces movement speed by 50%.",                                                                                   "spell_ids": {1245919},                             "type": "dmg_hits"},
-        {"label": "Alndust Uph.",  "name": "Alndust Upheaval (SOAK): Chimaerus tears a hole in Reality, inflicting massive Nature damage split evenly between players within 10 yards of the impact. Stack up! Higher = better.",                                 "spell_ids": {1262305, 1246827},                    "type": "soak"},
-        {"label": "Disc.Roar",     "name": "Discordant Roar: The Colossal Horror unleashes a dreadful roar, inflicting Physical damage to all players. Ignores Armor.",                                                                                           "spell_ids": {1249207},                             "type": "dmg_hits"},
-        {"label": "Rift Emerg.",   "name": "Rift Emergence: Chimaerus unleashes an unearthly roar, inflicting Nature damage to all players and causing Manifestations to emerge throughout the Rift.",                                                             "spell_ids": {1258610},                             "type": "dmg_hits"},
-    ],
-}
+# ─── Boss Mechanic Definitions — loaded from boss_mechanics.py ───────────────
 
-# Bosses where 0 interrupts = red (boss has meaningful interruptible abilities)
-BOSS_HAS_INTERRUPTS = {
-    "Imperator Averzian", "Fallen-King Salhadaar", "Vaelgor & Ezzorak",
-    "Lightblinded Vanguard", "Crown of the Cosmos", "Chimaerus, the Undreamt God",
-}
-
+# (imported at top of file from boss_mechanics.py)
 
 # ─── XLSX Output ─────────────────────────────────────────────────────────────
 
@@ -2296,20 +2126,30 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
         row += 1
 
 def load_config(path="wcl_config.txt"):
-    """Load credentials from a config file. Supports multiple REPORT_URL_N entries."""
+    """Load credentials from a config file.
+    Supports multiple REPORT_URL= lines (same key, repeated).
+    Inline comments are stripped: REPORT_URL=https://... # my comment
+    """
     config = {}
     report_urls = []
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    key, val = line.split("=", 1)
-                    key, val = key.strip(), val.strip()
-                    if key.startswith("REPORT_URL"):
-                        report_urls.append(val)
-                    else:
-                        config[key] = val
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                # Strip inline comments (space + #)
+                val = val.split(" #")[0].strip()
+                if not val:
+                    continue
+                if key.startswith("REPORT_URL"):
+                    report_urls.append(val)
+                else:
+                    config[key] = val
     except FileNotFoundError:
         pass
     config["REPORT_URLS"] = report_urls
@@ -2323,8 +2163,39 @@ def _extract_report_code(url: str) -> str:
     return url
 
 
+def _cache_path(report_code: str) -> str:
+    os.makedirs("data", exist_ok=True)
+    return os.path.join("data", f"raid_{report_code}.json")
+
+
+def _fix_int_keys(boss_data: dict) -> dict:
+    """After JSON load, restore integer actor-ID keys in nested dicts."""
+    int_key_fields = ("uptime_map", "dmg_taken", "healing_map", "rankings_map", "interrupts")
+    nested_int_fields = ("mechanics_data", "avoidable")
+    for fights in boss_data.values():
+        for fight in fights:
+            for field in int_key_fields:
+                if field in fight and isinstance(fight[field], dict):
+                    fight[field] = {int(k): v for k, v in fight[field].items()}
+            for field in nested_int_fields:
+                if field in fight and isinstance(fight[field], dict):
+                    fight[field] = {
+                        label: {int(k): v for k, v in counts.items()}
+                        for label, counts in fight[field].items()
+                    }
+    return boss_data
+
+
 def process_report(token: str, report_code: str, fight_input: str = "all") -> dict:
-    """Fetch and process one WCL report. Returns all data needed for HTML/XLSX output."""
+    """Fetch and process one WCL report. Loads from cache if available."""
+    cache = _cache_path(report_code)
+    if os.path.exists(cache):
+        print(f"\n[CACHE] Loading {report_code} from cache (delete data/raid_{report_code}.json to re-fetch).")
+        with open(cache, encoding="utf-8") as f:
+            result = json.load(f)
+        result["boss_data"] = _fix_int_keys(result["boss_data"])
+        return result
+
     print(f"\n[...] Fetching report info for: {report_code}")
     report_info = fetch_report_info(token, report_code)
     guild_name = report_info.get("guild", {}).get("name", "") if report_info.get("guild") else ""
@@ -2467,12 +2338,17 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
         except Exception as e:
             print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
-    return {
+    result = {
         "report_code": report_code, "report_info": report_info,
         "records": records, "split_data": split_data,
         "boss_data": boss_data, "actors": actors,
         "max_splits": max_splits,
     }
+    cache = _cache_path(report_code)
+    with open(cache, "w", encoding="utf-8") as f:
+        json.dump(result, f, default=list)
+    print(f"[CACHE] Saved to {cache}")
+    return result
 
 
 def main():

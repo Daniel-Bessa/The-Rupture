@@ -1,0 +1,33 @@
+# roster.txt
+# ─────────────────────────────────────────────────────────────────────────────
+# Format: PlayerName | Role | CharName:Main/Alt, CharName:Main/Alt, ...
+# Roles: Tank, Healer, DPS
+# Add new players or alts here — no code changes needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Nope        | Tank   | NopeDK:Alt, Nopebrew:Main, Nøpæ:Main
+Phyxius     | Tank   | Phyxius:Main, Phyxy:Alt
+Toshiko     | Healer | Toshiko:Main, Evokenooblal:Alt
+Minxy       | Healer | Minxymender:Alt, Minxycat:Main
+Hipe        | Healer | Cype:Alt, Wype:Main
+Zush        | Healer | Zush:Main, Züsh:Main, Ryukho:Alt, Ryuhko:Alt
+Jimy        | DPS    | jaime:Main, Käz:Alt, Madhmag:Alt
+Ice         | DPS    | Icecoldleap:Main, Chocoice:Alt
+Zodiacos    | DPS    | Zodiacos:Alt
+Kutcher     | DPS    | Kutcherdhtwo:Alt, Kutchersplit:Alt
+Hypno       | DPS    | Hypno:Main, Hypnodh:Alt
+Brunaine    | DPS    | Brunainevoke:Alt, Brunainehunt:Alt
+Beldryk     | DPS    | beldrýk:Main, Beldrýk:Main, beldryc:Alt
+Potrenu     | DPS    | Potrenu:Main, Potrenuu:Alt
+Shamishan   | DPS    | Samdracson:Alt, Shamishan:Main
+Madonis     | DPS    | Madonis:Alt, Madonisvoker:Alt
+Kaze        | DPS    | Kazeofscales:Main, Kazeoflight:Alt
+Upyeah      | DPS    | upyeah:Alt, Upyeah:Alt, upyeäh:Alt
+Mindhacker  | DPS    | Mindrage:Alt, Mindhacker:Main
+Uncleyoinky | DPS    | allblues:Alt, Allblues:Alt, uncleyoinky:Main
+Nizze       | DPS    | Nizzedk:Alt, Nizze:Main
+Mostbanned  | DPS    | Mosta:Alt, Mostbanned:Alt
+Malheiro    | DPS    | Rödinhas:Alt, Malheiro:Main
+Bolters     | DPS    | Schmosba:Main, Ipala:Alt, Devert:Alt
+Tinet       | DPS    | Pingveryhigh:Alt, Guldanrämsay:Alt
+Doomkry     | DPS    | Doomkry:Main, Lockry:Alt
