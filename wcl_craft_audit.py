@@ -396,7 +396,7 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
     return failures
 
 
-def fetch_cast_events(token: str, report_code: str, fight_id: int) -> list:
+def fetch_boss_cast_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch enemy cast events for a fight (boss casts), with pagination."""
     query = """
     query ($code: String!, $fightID: Int!, $startTime: Float) {
@@ -956,95 +956,6 @@ CLASS_COLORS = {
 }
 
 
-def _build_split_html(split_data: dict, actors: list) -> dict:
-    """Build HTML for each split. Returns {split_name: html_string}.
-    Layout: rows = players, columns = bosses (4 sub-cols: Health | Healthstone | Combat | Defensive).
-    """
-    actor_lookup = {a["id"]: a for a in actors}
-    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
-
-    def player_sort_key(pid):
-        name = actor_lookup.get(pid, {}).get("name", "")
-        pname, _ = lookup_roster(name)
-        role = PLAYER_ROLES.get(pname, "DPS")
-        return (ROLE_ORDER.get(role, 2), pname.lower())
-
-    results = {}
-    for split_name, fights in split_data.items():
-        if not fights:
-            continue
-
-        all_pids = sorted(
-            set(pid for fd in fights for pid in fd.get("player_casts", {})),
-            key=player_sort_key
-        )
-
-        html = '<div class="table-wrap"><table><thead>'
-        # Row 1: boss names (4 cols each)
-        html += '<tr><th class="player-header" rowspan="2">Player</th>'
-        for fd in fights:
-            html += f'<th colspan="4" class="boss-name divider">{escape(fd.get("fight_name", "Boss"))}</th>'
-        html += '</tr>'
-        # Row 2: sub-column headers
-        html += '<tr>'
-        for _ in fights:
-            html += '<th class="cast-h health-h divider">⚗ Health</th>'
-            html += '<th class="cast-h health-h">💚 Stone</th>'
-            html += '<th class="cast-h combat-h">⚔ Combat</th>'
-            html += '<th class="cast-h def-h">🛡 Defensive</th>'
-        html += '</tr></thead><tbody>'
-
-        current_role = None
-        for pid in all_pids:
-            actor = actor_lookup.get(pid, {})
-            char_name = actor.get("name", f"ID-{pid}")
-            cls = actor.get("subType", "Unknown")
-            cls_color = CLASS_COLORS.get(cls, "#ccc")
-            pname, _ = lookup_roster(char_name)
-            role = PLAYER_ROLES.get(pname, "DPS")
-
-            if role != current_role:
-                current_role = role
-                colspan = 1 + len(fights) * 4
-                html += f'<tr class="role-sep"><td colspan="{colspan}">── {current_role}s ──</td></tr>'
-
-            html += f'<tr>'
-            html += (f'<td class="player-cell" style="color:{cls_color}">'
-                     f'<span class="pname">{escape(pname)}</span><br>'
-                     f'<span class="cname">{escape(char_name)}</span></td>')
-
-            for fd in fights:
-                casts = fd.get("player_casts", {}).get(pid, [])
-                health      = [c for c in casts if c["category"] == "Health"]
-                healthstone = [c for c in casts if c["category"] == "Healthstone"]
-                combat      = [c for c in casts if c["category"] == "Combat Pot"]
-                defensive   = [c for c in casts if c["category"] == "Defensive"]
-
-                for items, cat_cls, is_first in [
-                    (health,      "health-cell", True),
-                    (healthstone, "health-cell", False),
-                    (combat,      "combat-cell", False),
-                    (defensive,   "def-cell",    False),
-                ]:
-                    div = " divider" if is_first else ""
-                    if items:
-                        lines = "".join(
-                            f'<div class="cast-line">{escape(it["spell"])}'
-                            f' <span class="cast-time">@ {it["time"]}</span></div>'
-                            for it in items
-                        )
-                        html += f'<td class="{cat_cls}{div}">{lines}</td>'
-                    else:
-                        html += f'<td class="empty-cast{div}">—</td>'
-
-            html += '</tr>'
-
-        html += '</tbody></table></div>'
-        results[split_name] = html
-
-    return results
-
-
 def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
@@ -1349,7 +1260,6 @@ def write_html(days_data: list, output_path: str):
     for di, day_data in enumerate(days_data):
         actor_lookup = {a["id"]: a for a in day_data["actors"]}
         boss_data    = day_data["boss_data"]
-        max_splits   = day_data["max_splits"]
         ri           = day_data["report_info"]
         rc           = day_data["report_code"]
         date_str     = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
@@ -2520,7 +2430,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             death_events     = fetch_death_events(token, report_code, fid)
             damage_events    = fetch_damage_taken_events(token, report_code, fid)
             interrupt_events = fetch_interrupt_events(token, report_code, fid)
-            cast_events      = fetch_cast_events(token, report_code, fid)
+            cast_events      = fetch_boss_cast_events(token, report_code, fid)
             fight_start      = fight.get("startTime", 0)
             fight_dur_ms     = fight.get("endTime", 0) - fight_start
             deaths           = analyze_deaths(death_events, fight_start, ability_names,
