@@ -1052,7 +1052,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
                                  f'</span>')
             frontal_html += '</div>'
 
-        html = overview_html + frontal_html
+        html = frontal_html
         html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
         html += '<tr>'
         def _sth(col_idx, label, css="", extra=""):
@@ -1091,7 +1091,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
 
         # Group by split, then role, then player
         for fi, fight in enumerate(fights, 1):
-            html += f'<tr class="role-sep"><td colspan="{total_cols}" style="color:#a0b4ff;font-size:13px;padding:8px 10px;">── Split {fi} ──</td></tr>'
+            html += _split_overview_row(fi, fight, total_cols)
             current_role = None
             for pid in sorted_pids:
                 deaths_map = fight.get("deaths", {})
