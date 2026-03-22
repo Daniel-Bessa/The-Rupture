@@ -995,7 +995,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 16 + len(mech_defs)  # base 16 + mechanic columns
+        total_cols     = 17 + len(mech_defs)  # base 17 + mechanic columns
 
         # Collect all pids across all fights for this boss
         all_pids_set = set()
