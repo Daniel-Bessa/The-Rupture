@@ -878,7 +878,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
             sp_dmg  = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
             sp_heal = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
             sp_taken= sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
-            sp_avoid= sum(av.get("hits", 0) if isinstance(av, dict) else 0 for av in fight.get("avoidable_damage", {}).values())
             sp_dur_s= fight.get("fight_dur_ms", 0) / 1000 or 1
             sp_dps  = sp_dmg / sp_dur_s
             sp_m, sp_s = divmod(int(sp_dur_s), 60)
@@ -888,8 +887,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                      f'<span class="sov-item"><span class="sov-lbl">⚡ Raid DPS</span> <b>{_hfmt(sp_dps)}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
-                     f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>'
-                     f'<span class="sov-item"><span class="sov-lbl">☠ Avoid Hits</span> <b>{sp_avoid if sp_avoid else "—"}</b></span>')
+                     f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>')
             return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
 
         # ── Frontal failure summary ──
