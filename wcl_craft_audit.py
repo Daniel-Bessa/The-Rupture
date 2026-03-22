@@ -1068,18 +1068,19 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         html += _sth(2, 'Char')
         html += '<th>Split</th>'
         html += _sth(4, 'Parse %', 'parse-h')
-        html += _sth(5, 'Damage', 'dmg-h')
-        html += _sth(6, 'Healing', 'heal-h')
-        html += _sth(7, 'Deaths', 'death-h')
+        html += _sth(5, 'DPS', 'dmg-h')
+        html += _sth(6, 'Damage', 'dmg-h')
+        html += _sth(7, 'Healing', 'heal-h')
+        html += _sth(8, 'Deaths', 'death-h')
         html += '<th class="death-h">Killed by (time)</th>'
-        html += _sth(9, 'Dmg Taken', 'dmg-h')
-        html += _sth(10, 'Uptime %', 'uptime-h')
-        html += _sth(11, 'Interrupts', 'interrupt-h')
-        html += _sth(12, 'Avoid Hits', 'avoid-h')
-        html += _sth(13, '&gt;10% HP Hits', 'avoid-h')
+        html += _sth(10, 'Dmg Taken', 'dmg-h')
+        html += _sth(11, 'Uptime %', 'uptime-h')
+        html += _sth(12, 'Interrupts', 'interrupt-h')
+        html += _sth(13, 'Avoid Hits', 'avoid-h')
+        html += _sth(14, '&gt;10% HP Hits', 'avoid-h')
         html += f'<th class="detail-h" onclick="toggleDetails(\'{table_id}\', this)" title="Click to expand/collapse">▶ Details</th>'
         for mi, m in enumerate(mech_defs):
-            mech_col_idx = 15 + mi
+            mech_col_idx = 16 + mi
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
             tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
             html += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
