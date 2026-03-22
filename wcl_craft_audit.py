@@ -310,6 +310,60 @@ def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: l
     return result
 
 
+def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics: list,
+                              fight_start_ms: int = 0, window_ms: int = 2000) -> list:
+    """Detect frontal failures: 2+ friendly players hit by the same frontal cast.
+    Only checks mechanics with type='frontal'.
+    Returns list of {time_str, mechanic_label, players: [name, ...], hit_count}.
+    """
+    frontal_mechs = [m for m in mechanics if m.get("type") == "frontal"]
+    if not frontal_mechs:
+        return []
+
+    spell_to_label = {}
+    for m in frontal_mechs:
+        for sid in m["spell_ids"]:
+            spell_to_label[sid] = m["label"]
+
+    friendly_ids = set(actor_lookup.keys())
+    hits = []
+    for event in damage_events:
+        if event.get("type") != "damage":
+            continue
+        aid = event.get("abilityGameID", 0)
+        if aid not in spell_to_label:
+            continue
+        pid = event.get("targetID")
+        if pid not in friendly_ids:
+            continue
+        hits.append({"ts": event.get("timestamp", 0), "pid": pid, "label": spell_to_label[aid]})
+
+    if not hits:
+        return []
+
+    hits.sort(key=lambda h: h["ts"])
+
+    failures = []
+    i = 0
+    while i < len(hits):
+        win_start = hits[i]["ts"]
+        label     = hits[i]["label"]
+        pids_hit  = set()
+        j = i
+        while j < len(hits) and hits[j]["ts"] - win_start <= window_ms and hits[j]["label"] == label:
+            pids_hit.add(hits[j]["pid"])
+            j += 1
+        if len(pids_hit) >= 2:
+            elapsed = (win_start - fight_start_ms) / 1000
+            m, s    = divmod(int(elapsed), 60)
+            time_str = f"{m}:{s:02d}"
+            players  = sorted(actor_lookup.get(pid, {}).get("name", f"ID-{pid}") for pid in pids_hit)
+            failures.append({"time_str": time_str, "label": label, "players": players, "hit_count": len(pids_hit)})
+        i = j if j > i else i + 1
+
+    return failures
+
+
 def fetch_damage_taken_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch avoidable damage-taken events for a fight (friendly players only), with pagination."""
     query = """
