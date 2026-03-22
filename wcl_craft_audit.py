@@ -348,6 +348,7 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
     while i < len(hits):
         win_start = hits[i]["ts"]
         label     = hits[i]["label"]
+        first_pid = hits[i]["pid"]
         pids_hit  = set()
         j = i
         while j < len(hits) and hits[j]["ts"] - win_start <= window_ms and hits[j]["label"] == label:
@@ -356,9 +357,12 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
         if len(pids_hit) >= 2:
             elapsed = (win_start - fight_start_ms) / 1000
             m, s    = divmod(int(elapsed), 60)
-            time_str = f"{m}:{s:02d}"
-            players  = sorted(actor_lookup.get(pid, {}).get("name", f"ID-{pid}") for pid in pids_hit)
-            failures.append({"time_str": time_str, "label": label, "players": players, "hit_count": len(pids_hit)})
+            time_str     = f"{m}:{s:02d}"
+            first_player = actor_lookup.get(first_pid, {}).get("name", f"ID-{first_pid}")
+            others       = sorted(actor_lookup.get(pid, {}).get("name", f"ID-{pid}") for pid in pids_hit if pid != first_pid)
+            failures.append({"time_str": time_str, "label": label,
+                             "first_player": first_player, "others": others,
+                             "hit_count": len(pids_hit)})
         i = j if j > i else i + 1
 
     return failures
@@ -1035,21 +1039,23 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
 
         # ── Frontal failure summary ──
         all_frontal = []
-        for fi, fight in enumerate(fights, 1):
+        for fight in fights:
+            snum = fight.get("split_num", 1)
             for f in fight.get("frontal_failures", []):
-                all_frontal.append((fi, f))
+                all_frontal.append((snum, f))
 
         frontal_html = ""
         if all_frontal:
             frontal_html = '<div class="frontal-failures"><span class="ff-title">⚠ Frontal Failures</span>'
-            for fi, f in all_frontal:
-                players_str = ", ".join(escape(p) for p in f["players"])
+            for snum, f in all_frontal:
+                others_str = ", ".join(escape(p) for p in f["others"])
                 frontal_html += (f'<span class="ff-item">'
-                                 f'<span class="ff-split">Split {fi}</span> '
+                                 f'<span class="ff-split">Split {snum}</span> '
                                  f'<span class="ff-time">{escape(f["time_str"])}</span> '
                                  f'<span class="ff-label">{escape(f["label"])}</span> → '
-                                 f'<span class="ff-players">{players_str}</span>'
-                                 f'</span>')
+                                 f'<span class="ff-primary">{escape(f["first_player"])}</span>'
+                                 + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
+                                 + f'</span>')
             frontal_html += '</div>'
 
         html = frontal_html
@@ -1420,6 +1426,9 @@ td:first-child, th:first-child {{ border-left: none; }}
 .ff-title {{ color: #e57373; font-weight: 700; font-size: 13px; margin-right: 4px; }}
 .ff-item {{ background: rgba(0,0,0,0.3); border-radius: 5px; padding: 4px 10px; font-size: 12px; }}
 .ff-split {{ color: #888; }}
+.ff-primary {{ color: #f4a742; font-weight: 700; }}
+.ff-sep {{ color: #555; margin: 0 4px; }}
+.ff-players {{ color: #e06c6c; }}
 .ff-time {{ color: #a0b4ff; font-weight: 600; margin: 0 4px; }}
 .ff-label {{ color: #e57373; font-weight: 600; }}
 .ff-players {{ color: #ffb74d; }}
