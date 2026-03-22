@@ -311,10 +311,12 @@ def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: l
 
 
 def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics: list,
-                              fight_start_ms: int = 0, window_ms: int = 2000) -> list:
+                              fight_start_ms: int = 0, window_ms: int = 2000,
+                              cast_events: list = None) -> list:
     """Detect frontal failures: 2+ friendly players hit by the same frontal cast.
+    Uses cast event targetID (if available) to identify who had the ability.
     Only checks mechanics with type='frontal'.
-    Returns list of {time_str, mechanic_label, players: [name, ...], hit_count}.
+    Returns list of {time_str, label, primary_player, others, hit_count}.
     """
     frontal_mechs = [m for m in mechanics if m.get("type") == "frontal"]
     if not frontal_mechs:
@@ -324,6 +326,18 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
     for m in frontal_mechs:
         for sid in m["spell_ids"]:
             spell_to_label[sid] = m["label"]
+
+    # Build cast-target lookup: spell_id -> sorted list of (timestamp, targetID)
+    cast_targets = {}  # spell_id -> [(ts, targetID)]
+    for event in (cast_events or []):
+        aid = event.get("abilityGameID", 0)
+        if aid not in spell_to_label:
+            continue
+        tid = event.get("targetID")
+        if tid and tid in actor_lookup:
+            cast_targets.setdefault(aid, []).append((event.get("timestamp", 0), tid))
+    for v in cast_targets.values():
+        v.sort()
 
     friendly_ids = set(actor_lookup.keys())
     hits = []
@@ -336,19 +350,30 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
         pid = event.get("targetID")
         if pid not in friendly_ids:
             continue
-        hits.append({"ts": event.get("timestamp", 0), "pid": pid, "label": spell_to_label[aid]})
+        hits.append({"ts": event.get("timestamp", 0), "pid": pid, "label": spell_to_label[aid], "aid": aid})
 
     if not hits:
         return []
 
     hits.sort(key=lambda h: h["ts"])
 
+    def _cast_target_at(aid, ts):
+        """Find the cast targetID closest before ts for this spell."""
+        candidates = cast_targets.get(aid, [])
+        result = None
+        for c_ts, c_tid in candidates:
+            if c_ts <= ts + window_ms:
+                result = c_tid
+            else:
+                break
+        return result
+
     failures = []
     i = 0
     while i < len(hits):
         win_start = hits[i]["ts"]
         label     = hits[i]["label"]
-        first_pid = hits[i]["pid"]
+        aid       = hits[i]["aid"]
         pids_hit  = set()
         j = i
         while j < len(hits) and hits[j]["ts"] - win_start <= window_ms and hits[j]["label"] == label:
@@ -357,15 +382,46 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
         if len(pids_hit) >= 2:
             elapsed = (win_start - fight_start_ms) / 1000
             m, s    = divmod(int(elapsed), 60)
-            time_str     = f"{m}:{s:02d}"
-            first_player = actor_lookup.get(first_pid, {}).get("name", f"ID-{first_pid}")
-            others       = sorted(actor_lookup.get(pid, {}).get("name", f"ID-{pid}") for pid in pids_hit if pid != first_pid)
+            time_str = f"{m}:{s:02d}"
+            # Prefer cast targetID as primary; fall back to first hit
+            primary_pid  = _cast_target_at(aid, win_start) or hits[i]["pid"]
+            primary_name = actor_lookup.get(primary_pid, {}).get("name", f"ID-{primary_pid}")
+            others = sorted(actor_lookup.get(pid, {}).get("name", f"ID-{pid}")
+                            for pid in pids_hit if pid != primary_pid)
             failures.append({"time_str": time_str, "label": label,
-                             "first_player": first_player, "others": others,
+                             "primary_player": primary_name, "others": others,
                              "hit_count": len(pids_hit)})
         i = j if j > i else i + 1
 
     return failures
+
+
+def fetch_cast_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch enemy cast events for a fight (boss casts), with pagination."""
+    query = """
+    query ($code: String!, $fightID: Int!, $startTime: Float) {
+        reportData {
+            report(code: $code) {
+                events(dataType: Casts, fightIDs: [$fightID], hostilityType: Enemies,
+                       limit: 10000, startTime: $startTime) {
+                    data
+                    nextPageTimestamp
+                }
+            }
+        }
+    }
+    """
+    all_events = []
+    variables = {"code": report_code, "fightID": fight_id, "startTime": None}
+    while True:
+        result = query_wcl(token, query, variables)
+        page = result["reportData"]["report"]["events"]
+        all_events.extend(page.get("data", []))
+        next_ts = page.get("nextPageTimestamp")
+        if not next_ts:
+            break
+        variables = {"code": report_code, "fightID": fight_id, "startTime": next_ts}
+    return all_events
 
 
 def fetch_damage_taken_events(token: str, report_code: str, fight_id: int) -> list:
@@ -1046,17 +1102,23 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
 
         frontal_html = ""
         if all_frontal:
-            frontal_html = '<div class="frontal-failures"><span class="ff-title">⚠ Frontal Failures</span>'
+            rows = ""
             for snum, f in all_frontal:
                 others_str = ", ".join(escape(p) for p in f["others"])
-                frontal_html += (f'<span class="ff-item">'
-                                 f'<span class="ff-split">Split {snum}</span> '
-                                 f'<span class="ff-time">{escape(f["time_str"])}</span> '
-                                 f'<span class="ff-label">{escape(f["label"])}</span> → '
-                                 f'<span class="ff-primary">{escape(f["first_player"])}</span>'
-                                 + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
-                                 + f'</span>')
-            frontal_html += '</div>'
+                rows += (f'<div class="ff-item">'
+                         f'<span class="ff-split">Split {snum}</span> '
+                         f'<span class="ff-time">{escape(f["time_str"])}</span> '
+                         f'<span class="ff-label">{escape(f["label"])}</span> → '
+                         f'<span class="ff-primary">{escape(f["primary_player"])}</span>'
+                         + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
+                         + f'</div>')
+            frontal_html = (f'<div class="frontal-failures">'
+                            f'<div class="ff-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                            f'<span class="ff-title">⚠ Frontal Failures</span>'
+                            f'<span class="ff-chevron">▼</span>'
+                            f'</div>'
+                            f'<div class="ff-body open">{rows}</div>'
+                            f'</div>')
 
         html = frontal_html
         html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
@@ -1422,16 +1484,21 @@ td:first-child, th:first-child {{ border-left: none; }}
 .death-num {{ color: #e57373; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
 /* ── Frontal failures ── */
-.frontal-failures {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px 14px; background: rgba(229,115,115,0.08); border: 1px solid rgba(229,115,115,0.3); border-radius: 8px; }}
-.ff-title {{ color: #e57373; font-weight: 700; font-size: 13px; margin-right: 4px; }}
-.ff-item {{ background: rgba(0,0,0,0.3); border-radius: 5px; padding: 4px 10px; font-size: 12px; }}
-.ff-split {{ color: #888; }}
+.frontal-failures {{ margin-bottom: 12px; background: rgba(229,115,115,0.08); border: 1px solid rgba(229,115,115,0.3); border-radius: 8px; overflow: hidden; }}
+.ff-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
+.ff-header:hover {{ background: rgba(229,115,115,0.12); }}
+.ff-title {{ color: #e57373; font-weight: 700; font-size: 13px; }}
+.ff-chevron {{ color: #e57373; font-size: 11px; transition: transform 0.2s; }}
+.ff-header.open .ff-chevron {{ transform: rotate(180deg); }}
+.ff-body {{ display: none; padding: 4px 0 8px; }}
+.ff-body.open {{ display: block; }}
+.ff-item {{ padding: 3px 14px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.04); }}
+.ff-split {{ color: #888; margin-right: 6px; }}
+.ff-time {{ color: #a0b4ff; font-weight: 600; margin-right: 6px; }}
+.ff-label {{ color: #e57373; font-weight: 600; margin-right: 4px; }}
 .ff-primary {{ color: #f4a742; font-weight: 700; }}
-.ff-sep {{ color: #555; margin: 0 4px; }}
+.ff-sep {{ color: #555; margin: 0 6px; }}
 .ff-players {{ color: #e06c6c; }}
-.ff-time {{ color: #a0b4ff; font-weight: 600; margin: 0 4px; }}
-.ff-label {{ color: #e57373; font-weight: 600; }}
-.ff-players {{ color: #ffb74d; }}
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
@@ -2453,6 +2520,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             death_events     = fetch_death_events(token, report_code, fid)
             damage_events    = fetch_damage_taken_events(token, report_code, fid)
             interrupt_events = fetch_interrupt_events(token, report_code, fid)
+            cast_events      = fetch_cast_events(token, report_code, fid)
             fight_start      = fight.get("startTime", 0)
             fight_dur_ms     = fight.get("endTime", 0) - fight_start
             deaths           = analyze_deaths(death_events, fight_start, ability_names,
@@ -2466,7 +2534,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
-            frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start)
+            frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start,
+                                                        cast_events=cast_events)
             all_pids = set()
             for sdata in split_data.values():
                 for fd in sdata:
