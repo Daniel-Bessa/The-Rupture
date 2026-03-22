@@ -103,8 +103,8 @@ def query_wcl(token: str, query: str, variables: dict = None) -> dict:
         sys.exit(1)
     data = resp.json()
     if "errors" in data:
-        print(f"[ERROR] GraphQL errors: {json.dumps(data['errors'], indent=2)}")
-        sys.exit(1)
+        msgs = [e.get("message", "") for e in data["errors"]]
+        raise RuntimeError(f"GraphQL error: {'; '.join(msgs)}")
     return data["data"]
 
 
