@@ -1268,12 +1268,54 @@ def write_html(days_data: list, output_path: str):
         div = ' divider' if i > 0 else ''
         gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
 
-    # ── Split tabs data (one tab per split) ──
-    split_htmls = _build_split_html(split_data or {}, actors or [])
+    # ── Build per-day content: Day → Split sub-tabs → Boss tables ──
+    def day_label(day_data):
+        ri = day_data["report_info"]
+        date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%b %d") if ri.get("startTime") else ""
+        title    = ri.get("title", day_data["report_code"])
+        return f"{date_str} · {title}" if date_str else title
 
-    # ── Boss tabs data ──
-    _boss_actor_lookup = {a["id"]: a for a in (actors or [])}
-    boss_htmls = _build_boss_html(boss_data or {}, _boss_actor_lookup)
+    day_divs   = ""
+    tab_buttons = '<button class="tab-btn active" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
+
+    for di, day_data in enumerate(days_data):
+        actor_lookup = {a["id"]: a for a in day_data["actors"]}
+        boss_data    = day_data["boss_data"]
+        max_splits   = day_data["max_splits"]
+        ri           = day_data["report_info"]
+        rc           = day_data["report_code"]
+        date_str     = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
+
+        # Group fights by split_num
+        splits_boss_data = {}
+        for boss_name, fights in boss_data.items():
+            for fight in fights:
+                snum = fight.get("split_num", 1)
+                splits_boss_data.setdefault(snum, {}).setdefault(boss_name, []).append(fight)
+
+        sub_bar  = '<div class="split-tab-bar">'
+        sub_body = ""
+        for idx, snum in enumerate(sorted(splits_boss_data)):
+            split_bd   = splits_boss_data[snum]
+            boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"d{di}s{snum}")
+            split_html = "".join(
+                f'<div class="boss-section"><div class="boss-section-title">⚔ {escape(bn)}</div>{bh}</div>'
+                for bn, bh in boss_htmls.items()
+            )
+            # Difficulty label
+            diff_tags = {f.get("split_num") and ("Heroic" if "(Heroic)" in bn else ("Mythic" if "(Mythic)" in bn else "Normal"))
+                         for bn, fs in boss_data.items() for f in fs if f.get("split_num") == snum}
+            diff_label = "Heroic" if "Heroic" in diff_tags else ("Mythic" if "Mythic" in diff_tags else "Normal")
+            slabel     = f"Split {snum} · {diff_label}"
+            active_cls = "active" if idx == 0 else ""
+            sub_bar  += f'<button class="split-tab-btn {active_cls}" onclick="switchSplit(\'day-{di}\',{idx},this)">{escape(slabel)}</button>'
+            sub_body += f'<div id="day-{di}-split-{idx}" class="split-tab-content {active_cls}">{split_html}</div>'
+        sub_bar += "</div>"
+
+        wcl_link   = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
+        day_header = f'<div class="day-header"><span class="day-title">{escape(ri.get("title", rc))}</span><span class="day-date">{date_str}</span>{wcl_link}</div>'
+        day_divs  += f'<div id="tab-day-{di}" class="tab-content">{day_header}{sub_bar}{sub_body}</div>\n'
+        tab_buttons += f'<button class="tab-btn" onclick="switchTab(\'day-{di}\',this)">📅 {escape(day_label(day_data))}</button>\n'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1284,31 +1326,41 @@ def write_html(days_data: list, output_path: str):
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 20px; }}
-h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
-.subtitle {{ color: #888; font-size: 13px; margin-bottom: 16px; }}
-.subtitle a {{ color: #7289DA; text-decoration: none; }}
-
-/* ── Tabs ── */
-.tab-bar {{ display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #2a2a4a; padding-bottom: 0; }}
-.tab-btn {{ background: #16213e; color: #888; border: none; padding: 10px 24px; border-radius: 8px 8px 0 0; font-size: 14px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }}
+h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 16px; }}
+/* ── Top tabs ── */
+.tab-bar {{ display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #2a2a4a; flex-wrap: wrap; }}
+.tab-btn {{ background: #16213e; color: #888; border: none; padding: 10px 20px; border-radius: 8px 8px 0 0; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }}
 .tab-btn:hover {{ color: #bbb; background: #1e2d50; }}
 .tab-btn.active {{ color: #7289DA; background: #1a1a2e; border-bottom: 2px solid #7289DA; }}
 .tab-content {{ display: none; }}
 .tab-content.active {{ display: block; }}
-
+/* ── Split sub-tabs ── */
+.split-tab-bar {{ display: flex; gap: 6px; margin: 14px 0 18px; flex-wrap: wrap; }}
+.split-tab-btn {{ background: #0d1525; color: #666; border: 1px solid #1e2a4a; padding: 7px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }}
+.split-tab-btn:hover {{ color: #bbb; border-color: #2a3a6a; }}
+.split-tab-btn.active {{ color: #a0b4ff; background: #16213e; border-color: #4a5d9a; }}
+.split-tab-content {{ display: none; }}
+.split-tab-content.active {{ display: block; }}
+/* ── Day header ── */
+.day-header {{ display: flex; align-items: center; gap: 16px; margin-bottom: 4px; padding: 10px 0; border-bottom: 1px solid #2a2a4a; }}
+.day-title {{ color: #e0e0e0; font-size: 16px; font-weight: 700; }}
+.day-date {{ color: #666; font-size: 13px; }}
+.wcl-link {{ color: #7289DA; font-size: 12px; text-decoration: none; margin-left: auto; }}
+.wcl-link:hover {{ text-decoration: underline; }}
+/* ── Boss section ── */
+.boss-section {{ margin-bottom: 36px; }}
+.boss-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #7289DA; }}
 /* ── Stats ── */
 .stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
 .stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
 .stat-box .num {{ font-size: 24px; font-weight: bold; color: #7289DA; }}
 .stat-box .label {{ font-size: 11px; color: #888; text-transform: uppercase; }}
 .stat-box.warn .num {{ color: #ffc107; }}
-
 /* ── Search ── */
 .search-box {{ margin: 0 0 12px; }}
 .search-box input {{ background: #16213e; border: 1px solid #2a2a4a; color: #e0e0e0; padding: 7px 14px; border-radius: 6px; width: 280px; font-size: 13px; }}
 .search-box input::placeholder {{ color: #555; }}
-
-/* ── Tables (shared) ── */
+/* ── Tables ── */
 .table-wrap {{ overflow-x: auto; border-radius: 8px; margin-bottom: 28px; }}
 table {{ border-collapse: collapse; min-width: 100%; }}
 th {{ background: #16213e; color: #7289DA; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; z-index: 1; }}
@@ -1320,48 +1372,26 @@ tr:hover .player-cell {{ background: #152848; }}
 td.divider, th.divider {{ border-left: 2px solid rgba(114,137,218,0.25); }}
 .center {{ text-align: center; }}
 .empty {{ color: #2a2a4a; text-align: center; }}
-
-/* ── Gear tab ── */
+td, th {{ border-left: 1px solid rgba(255,255,255,0.07); }}
+td:first-child, th:first-child {{ border-left: none; }}
+/* ── Gear ── */
 .no-craft {{ background: rgba(255,160,0,0.05); }}
 .no-craft .player-cell {{ background: rgba(80,50,0,0.4); }}
 .spark-yes {{ color: #4caf50; font-weight: bold; }}
 .item-cell a {{ color: #a48cff; text-decoration: none; }}
 .item-cell a:hover {{ text-decoration: underline; }}
-
-/* ── Split tab ── */
-.split-section {{ margin-bottom: 40px; }}
-.split-title {{ font-size: 17px; color: #7289DA; margin-bottom: 14px; padding-bottom: 6px; border-bottom: 1px solid #2a2a4a; }}
-.boss-name {{ text-align: center; color: #c4b0ff; font-size: 12px; background: #111827; padding: 6px 10px; }}
-.cast-h {{ font-size: 10px; padding: 5px 8px; }}
-.health-h {{ color: #e57373; }}
-.combat-h {{ color: #ce93d8; }}
-.def-h {{ color: #64b5f6; }}
-.cast-line {{ margin: 2px 0; white-space: nowrap; }}
-.cast-time {{ color: #888; font-size: 11px; }}
-.health-cell {{ background: rgba(229,115,115,0.06); }}
-.combat-cell {{ background: rgba(206,147,216,0.06); }}
-.def-cell {{ background: rgba(100,181,246,0.06); white-space: normal; min-width: 160px; }}
-.empty-cast {{ color: #2a2a4a; text-align: center; }}
+/* ── Roles ── */
 .role-sep td {{ background: #111827; color: #7289DA; font-size: 11px; font-weight: bold; padding: 4px 10px; }}
 .pname {{ font-weight: bold; }}
 .cname {{ color: #888; font-size: 11px; }}
-
-/* ── Column borders ── */
-td, th {{ border-left: 1px solid rgba(255,255,255,0.07); }}
-td:first-child, th:first-child {{ border-left: none; }}
-
-/* ── Boss overview bar ── */
-.boss-overview {{
-  display: flex; flex-wrap: wrap; gap: 12px;
-  margin-bottom: 14px; padding: 10px 14px;
-  background: rgba(255,255,255,0.04); border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.08);
-}}
-.ov-item {{ display: flex; flex-direction: column; align-items: center; min-width: 90px; }}
-.ov-label {{ font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: .05em; }}
-.ov-val {{ font-size: 16px; font-weight: 700; color: #e0e0e0; margin-top: 2px; }}
-
-/* ── Boss tabs ── */
+/* ── Split overview row ── */
+.split-ov-row td {{ padding: 0 !important; border: none; background: #0d1525; }}
+.split-ov-bar {{ display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 10px 14px; border-top: 2px solid #2a3a6a; border-bottom: 1px solid #1e2a4a; }}
+.sov-title {{ color: #a0b4ff; font-weight: 700; font-size: 14px; min-width: 60px; }}
+.sov-dur {{ color: #666; font-size: 12px; }}
+.sov-item {{ font-size: 12px; color: #ccc; }}
+.sov-lbl {{ color: #666; margin-right: 4px; }}
+/* ── Boss columns ── */
 .death-h {{ color: #e57373; }}
 .dmg-h {{ color: #ffb74d; }}
 .heal-h {{ color: #81c784; }}
@@ -1370,15 +1400,9 @@ td:first-child, th:first-child {{ border-left: none; }}
 .interrupt-h {{ color: #64b5f6; }}
 .avoid-h {{ color: #ce93d8; }}
 .detail-h {{ color: #7289DA; white-space: normal; min-width: 30px; cursor: pointer; user-select: none; }}
+.detail-h:hover {{ color: #a0b4ff; }}
 .mech-bad-h {{ color: #ff7070; }}
 .mech-soak-h {{ color: #66bb6a; }}
-.has-tip {{ position: relative; cursor: help; }}
-.has-tip::after {{ content: attr(data-tip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
-    background: #1e2a3a; color: #e0e0e0; border: 1px solid #4a5568; border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; font-weight: normal; white-space: nowrap;
-    pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 100; max-width: 340px; white-space: normal; text-align: left; }}
-.has-tip:hover::after {{ opacity: 1; }}
-.detail-h:hover {{ color: #a0b4ff; }}
 .detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
 .detail-col-hidden .detail-h span.detail-content,
 .detail-col-hidden .detail-cell {{ display: none; }}
@@ -1386,29 +1410,16 @@ td:first-child, th:first-child {{ border-left: none; }}
 .boss-death-row td {{ background: rgba(61,16,16,0.4); }}
 .boss-death-row .player-cell {{ background: rgba(80,10,10,0.6); }}
 .death-num {{ color: #e57373; font-weight: bold; }}
-.interrupt-yes {{ color: #00FF88; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
-.split-ov-row td {{ padding: 0 !important; border: none; background: #0d1525; }}
-.split-ov-bar {{
-  display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
-  padding: 10px 14px; border-top: 2px solid #2a3a6a; border-bottom: 1px solid #1e2a4a;
-}}
-.sov-title {{ color: #a0b4ff; font-weight: 700; font-size: 14px; min-width: 60px; }}
-.sov-dur {{ color: #666; font-size: 12px; }}
-.sov-item {{ font-size: 12px; color: #ccc; }}
-.sov-lbl {{ color: #666; margin-right: 4px; }}
-.frontal-failures {{
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  margin-bottom: 12px; padding: 10px 14px;
-  background: rgba(229,115,115,0.08); border: 1px solid rgba(229,115,115,0.3);
-  border-radius: 8px;
-}}
+/* ── Frontal failures ── */
+.frontal-failures {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px 14px; background: rgba(229,115,115,0.08); border: 1px solid rgba(229,115,115,0.3); border-radius: 8px; }}
 .ff-title {{ color: #e57373; font-weight: 700; font-size: 13px; margin-right: 4px; }}
 .ff-item {{ background: rgba(0,0,0,0.3); border-radius: 5px; padding: 4px 10px; font-size: 12px; }}
 .ff-split {{ color: #888; }}
 .ff-time {{ color: #a0b4ff; font-weight: 600; margin: 0 4px; }}
 .ff-label {{ color: #e57373; font-weight: 600; }}
 .ff-players {{ color: #ffb74d; }}
+/* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 </style>
@@ -1416,15 +1427,8 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>
 <body>
-
 <h1>Raid Audit — {escape(guild_name)}</h1>
-<div class="subtitle">{escape(report_title)} · {report_date} · <a href="https://www.warcraftlogs.com/reports/{report_code}" target="_blank">View on WarcraftLogs ↗</a></div>
-
-<div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('gear', this)">⚙ Gear Audit</button>
-  {''.join(f'<button class="tab-btn" onclick="switchTab(\'split-{i}\', this)">📋 {escape(name)}</button>' for i, name in enumerate(split_htmls))}
-  {''.join(f'<button class="tab-btn" onclick="switchTab(\'boss-{i}\', this)">⚔ {escape(name)}</button>' for i, name in enumerate(boss_htmls))}
-</div>
+<div class="tab-bar">{tab_buttons}</div>
 
 <!-- ── GEAR TAB ── -->
 <div id="tab-gear" class="tab-content active">
@@ -1442,12 +1446,8 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
   </div>
 </div>
 
-<!-- ── SPLIT TABS ── -->
-{''.join(f'<div id="tab-split-{i}" class="tab-content">{content}</div>' for i, content in enumerate(split_htmls.values()))}
-
-<!-- ── BOSS TABS ── -->
-{''.join(f'<div id="tab-boss-{i}" class="tab-content">{content}</div>' for i, content in enumerate(boss_htmls.values()))}
-
+<!-- ── DAY TABS ── -->
+{day_divs}
 <script>
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -1455,11 +1455,17 @@ function switchTab(name, btn) {{
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
 }}
+function switchSplit(dayId, splitIdx, btn) {{
+  const dayEl = document.getElementById('tab-' + dayId);
+  dayEl.querySelectorAll('.split-tab-content').forEach(el => el.classList.remove('active'));
+  dayEl.querySelectorAll('.split-tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById(dayId + '-split-' + splitIdx).classList.add('active');
+  btn.classList.add('active');
+}}
 function filterGear(input) {{
   const filter = input.value.toLowerCase();
-  for (let row of document.getElementById('gear-table').tBodies[0].rows) {{
+  for (let row of document.getElementById('gear-table').tBodies[0].rows)
     row.style.display = row.cells[0].textContent.toLowerCase().includes(filter) ? '' : 'none';
-  }}
 }}
 function toggleDetails(tableId, btn) {{
   const tbl = document.getElementById(tableId);
@@ -1469,12 +1475,9 @@ function toggleDetails(tableId, btn) {{
 }}
 const _htip = document.createElement('div');
 _htip.id = 'htip';
-Object.assign(_htip.style, {{
-  position:'fixed', display:'none', pointerEvents:'none', zIndex:'9999',
+Object.assign(_htip.style, {{ position:'fixed', display:'none', pointerEvents:'none', zIndex:'9999',
   background:'#1a2233', border:'1px solid #4a5568', borderRadius:'8px',
-  padding:'10px 14px', fontSize:'12px', color:'#e0e0e0',
-  maxWidth:'340px', lineHeight:'1.6', boxShadow:'0 4px 16px #0008'
-}});
+  padding:'10px 14px', fontSize:'12px', color:'#e0e0e0', maxWidth:'340px', lineHeight:'1.6', boxShadow:'0 4px 16px #0008' }});
 document.body.appendChild(_htip);
 document.addEventListener('mousemove', e => {{
   if (_htip.style.display !== 'none') {{
@@ -1483,38 +1486,22 @@ document.addEventListener('mousemove', e => {{
     _htip.style.top  = (y + _htip.offsetHeight > window.innerHeight ? e.clientY - _htip.offsetHeight - 8 : y) + 'px';
   }}
 }});
-function showHTip(el) {{
-  const d = el.getAttribute('data-htip');
-  if (!d) return;
-  _htip.innerHTML = d;
-  _htip.style.display = 'block';
-}}
+function showHTip(el) {{ const d = el.getAttribute('data-htip'); if (!d) return; _htip.innerHTML = d; _htip.style.display = 'block'; }}
 function hideHTip() {{ _htip.style.display = 'none'; }}
 function sortBossTable(tableId, colIdx, thEl) {{
   const tbl = document.getElementById(tableId);
   if (!tbl) return;
   const dir = thEl.dataset.sortDir === 'desc' ? 'asc' : 'desc';
-  tbl.querySelectorAll('th[data-sortable]').forEach(th => {{
-    th.dataset.sortDir = '';
-    const a = th.querySelector('.sort-arrow');
-    if (a) a.textContent = '▼';
-  }});
+  tbl.querySelectorAll('th[data-sortable]').forEach(th => {{ th.dataset.sortDir = ''; const a = th.querySelector('.sort-arrow'); if (a) a.textContent = '▼'; }});
   thEl.dataset.sortDir = dir;
   const arrow = thEl.querySelector('.sort-arrow');
   if (arrow) arrow.textContent = dir === 'desc' ? '▼' : '▲';
   const tbody = tbl.tBodies[0];
   const rows = Array.from(tbody.rows);
-  // Split rows into segments between role-sep rows
-  const segments = [];
-  let cur = null;
+  const segments = []; let cur = null;
   for (const row of rows) {{
-    if (row.classList.contains('role-sep')) {{
-      if (cur) segments.push(cur);
-      cur = {{ sep: row, rows: [] }};
-    }} else {{
-      if (!cur) cur = {{ sep: null, rows: [] }};
-      cur.rows.push(row);
-    }}
+    if (row.classList.contains('role-sep')) {{ if (cur) segments.push(cur); cur = {{ sep: row, rows: [] }}; }}
+    else {{ if (!cur) cur = {{ sep: null, rows: [] }}; cur.rows.push(row); }}
   }}
   if (cur) segments.push(cur);
   function parseVal(cell) {{
@@ -1522,34 +1509,19 @@ function sortBossTable(tableId, colIdx, thEl) {{
     const text = cell.textContent.trim().replace(/⇅|▲|▼/g, '').trim();
     if (!text || text === '—') return null;
     const m = text.replace('%','').match(/^([\d.]+)\s*([MkKBbG]?)$/);
-    if (m) {{
-      let n = parseFloat(m[1]);
-      const s = m[2].toUpperCase();
-      if (s === 'B') n *= 1e9;
-      else if (s === 'M') n *= 1e6;
-      else if (s === 'K') n *= 1e3;
-      return n;
-    }}
+    if (m) {{ let n = parseFloat(m[1]); const s = m[2].toUpperCase();
+      if (s==='B') n*=1e9; else if (s==='M') n*=1e6; else if (s==='K') n*=1e3; return n; }}
     return text.toLowerCase();
   }}
   for (const seg of segments) {{
     seg.rows.sort((a, b) => {{
-      const va = parseVal(a.cells[colIdx]);
-      const vb = parseVal(b.cells[colIdx]);
-      if (va === null && vb === null) return 0;
-      if (va === null) return 1;
-      if (vb === null) return -1;
-      if (typeof va === 'number' && typeof vb === 'number')
-        return dir === 'asc' ? va - vb : vb - va;
-      if (va < vb) return dir === 'asc' ? -1 : 1;
-      if (va > vb) return dir === 'asc' ? 1 : -1;
-      return 0;
+      const va = parseVal(a.cells[colIdx]), vb = parseVal(b.cells[colIdx]);
+      if (va===null && vb===null) return 0; if (va===null) return 1; if (vb===null) return -1;
+      if (typeof va==='number' && typeof vb==='number') return dir==='asc' ? va-vb : vb-va;
+      if (va<vb) return dir==='asc'?-1:1; if (va>vb) return dir==='asc'?1:-1; return 0;
     }});
   }}
-  for (const seg of segments) {{
-    if (seg.sep) tbody.appendChild(seg.sep);
-    for (const row of seg.rows) tbody.appendChild(row);
-  }}
+  for (const seg of segments) {{ if (seg.sep) tbody.appendChild(seg.sep); for (const row of seg.rows) tbody.appendChild(row); }}
 }}
 </script>
 </body>
