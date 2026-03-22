@@ -985,13 +985,13 @@ def _build_split_html(split_data: dict, actors: list) -> dict:
     return results
 
 
-def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
+def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
     results = {}
 
     for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
-        table_id = f"boss-tbl-{boss_idx}"
+        table_id = f"boss-tbl-{id_prefix}-{boss_idx}"
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
@@ -1219,33 +1219,27 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
     return results
 
 
-def write_html(records: list, report_info: dict, report_code: str, output_path: str,
-               split_data: dict = None, actors: list = None, boss_data: dict = None):
-    """Write the full audit report as a tabbed HTML file."""
-    guild_name = "Unknown Guild"
-    if report_info.get("guild"):
-        guild_name = report_info["guild"].get("name", "Unknown Guild")
-    report_title = report_info.get("title", report_code)
-    report_date = ""
-    if report_info.get("startTime"):
-        report_date = datetime.fromtimestamp(report_info["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+def write_html(days_data: list, output_path: str):
+    """Write the full audit report as a tabbed HTML file (Day → Split → Boss)."""
+    first      = days_data[0]
+    ri_first   = first["report_info"]
+    guild_name = ri_first.get("guild", {}).get("name", "Unknown Guild") if ri_first.get("guild") else "Unknown Guild"
 
-    # ── Gear tab data ──
+    # ── Gear tab (most recent day) ──
     players = {}
-    for rec in records:
+    for rec in first["records"]:
         p = rec["player"]
         if p not in players:
             players[p] = {"class": rec["class"], "items": []}
         if rec["item_id"] != 0:
             players[p]["items"].append(rec)
 
-    max_items = max((len(p["items"]) for p in players.values()), default=2)
-    max_items = max(max_items, 2)
+    max_items     = max((len(p["items"]) for p in players.values()), default=2)
+    max_items     = max(max_items, 2)
     total_players = len(players)
     total_crafted = sum(len(p["items"]) for p in players.values())
-    no_craft = sum(1 for p in players.values() if len(p["items"]) == 0)
+    no_craft      = sum(1 for p in players.values() if len(p["items"]) == 0)
 
-    # Gear table rows
     gear_rows = ""
     for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
         cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
@@ -2336,208 +2330,146 @@ def _build_split_sheet(ws, title, fights_data, report_info, actors_list):
         row += 1
 
 def load_config(path="wcl_config.txt"):
-    """Load credentials from a config file if it exists."""
+    """Load credentials from a config file. Supports multiple REPORT_URL_N entries."""
     config = {}
+    report_urls = []
     try:
         with open(path, "r") as f:
             for line in f:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
                     key, val = line.split("=", 1)
-                    config[key.strip()] = val.strip()
+                    key, val = key.strip(), val.strip()
+                    if key.startswith("REPORT_URL"):
+                        report_urls.append(val)
+                    else:
+                        config[key] = val
     except FileNotFoundError:
         pass
+    config["REPORT_URLS"] = report_urls
     return config
 
 
-def main():
-    print("=" * 60)
-    print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
-    print("=" * 60)
-    
-    # Try loading from config file
-    config = load_config()
-    
-    if config.get("CLIENT_ID") and config.get("CLIENT_SECRET"):
-        client_id = config["CLIENT_ID"]
-        client_secret = config["CLIENT_SECRET"]
-        print(f"\n[OK] Loaded credentials from wcl_config.txt (Client ID: {client_id[:8]}...)")
-    else:
-        client_id = input("\nWarcraftLogs Client ID: ").strip()
-        client_secret = input("WarcraftLogs Client Secret: ").strip()
-    
-    if not client_id or not client_secret:
-        print("[ERROR] Both Client ID and Client Secret are required.")
-        sys.exit(1)
-    
-    # Authenticate
-    print("\n[...] Authenticating with WarcraftLogs...")
-    token = get_access_token(client_id, client_secret)
-    print("[OK] Authenticated successfully.")
-    
-    # Report code — check config first
-    if config.get("REPORT_URL"):
-        report_input = config["REPORT_URL"]
-        print(f"[OK] Loaded report URL from config: {report_input}")
-    else:
-        report_input = input("\nReport code or URL: ").strip()
-    # Extract code from URL if full URL was pasted
-    if "warcraftlogs.com" in report_input:
-        # URL format: https://www.warcraftlogs.com/reports/XXXXXXXXXXXX
-        parts = report_input.rstrip("/").split("/")
-        report_code = parts[-1].split("#")[0].split("?")[0]
-    else:
-        report_code = report_input
-    
+def _extract_report_code(url: str) -> str:
+    if "warcraftlogs.com" in url:
+        parts = url.rstrip("/").split("/")
+        return parts[-1].split("#")[0].split("?")[0]
+    return url
+
+
+def process_report(token: str, report_code: str, fight_input: str = "all") -> dict:
+    """Fetch and process one WCL report. Returns all data needed for HTML/XLSX output."""
     print(f"\n[...] Fetching report info for: {report_code}")
     report_info = fetch_report_info(token, report_code)
-    
-    guild_name = ""
-    if report_info.get("guild"):
-        guild_name = report_info["guild"].get("name", "")
+    guild_name = report_info.get("guild", {}).get("name", "") if report_info.get("guild") else ""
     print(f"[OK] Report: {report_info.get('title', 'Untitled')} ({guild_name})")
-    
-    print("\n[...] Fetching players from ALL fights...")
-    
-    # Get all fights, filter to boss encounters (encounterID > 0) with kills
+
     all_raw_fights = report_info.get("fights", [])
-    fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
-    all_fights = fights if fights else []
-    selected_fights = all_fights  # Default to all
-    
+    all_fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
+    selected_fights = all_fights
+
     if all_fights:
         print(f"\nBoss kills found ({len(all_fights)}):")
         for f in all_fights:
-            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(f.get("difficulty", 0), f"D{f.get('difficulty', '?')}")
+            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(f.get("difficulty", 0), f"D{f.get('difficulty','?')}")
             print(f"  [{f['id']:>3}] {f['name']} — {diff} (Kill)")
-        
-        fight_input = input("\nFight IDs to analyze (comma-separated, or 'all'): ").strip()
+        if fight_input == "interactive":
+            fight_input = input("\nFight IDs to analyze (comma-separated, or 'all'): ").strip()
         if fight_input.lower() != "all" and fight_input != "":
-            selected_ids = [int(x.strip()) for x in fight_input.split(",") if x.strip().isdigit()]
+            selected_ids = {int(x.strip()) for x in fight_input.split(",") if x.strip().isdigit()}
             selected_fights = [f for f in all_fights if f["id"] in selected_ids]
-    
-    # Get actors from masterData (player names, classes, servers)
-    actors = []
-    if report_info.get("masterData") and report_info["masterData"].get("actors"):
-        actors = report_info["masterData"]["actors"]
-    print(f"[OK] Found {len(actors)} player actors in report.")
 
-    # Build ability name lookup from masterData
-    ability_names = {}
-    if report_info.get("masterData") and report_info["masterData"].get("abilities"):
-        for ab in report_info["masterData"]["abilities"]:
-            ability_names[ab["gameID"]] = ab["name"]
-    
-    # Fetch gear via CombatantInfo events for each fight
+    actors = report_info.get("masterData", {}).get("actors", [])
+    print(f"[OK] Found {len(actors)} player actors in report.")
+    ability_names = {ab["gameID"]: ab["name"] for ab in report_info.get("masterData", {}).get("abilities", [])}
+    actor_lookup = {a["id"]: a for a in actors}
+
+    # Gear
     all_combatant_events = []
     for fight in selected_fights:
-        fid = fight["id"]
-        fname = fight["name"]
+        fid, fname = fight["id"], fight["name"]
         print(f"  [...] Fetching gear from fight {fid}: {fname}...")
         try:
             events = fetch_combatant_info_events(token, report_code, fid)
             all_combatant_events.extend(events)
             print(f"         Got {len(events)} players' gear.")
         except Exception as e:
-            print(f"    [WARN] Could not fetch gear events for fight {fid}: {e}")
-    
-    # Build player max HP lookup from combatant info (stamina * 20 approximation)
+            print(f"    [WARN] Gear fetch failed for fight {fid}: {e}")
+
     player_max_hp = {}
     for ce in all_combatant_events:
-        pid = ce.get("sourceID")
-        stamina = ce.get("stamina", 0)
+        pid, stamina = ce.get("sourceID"), ce.get("stamina", 0)
         if pid and stamina:
-            hp = stamina * 20
-            player_max_hp[pid] = max(player_max_hp.get(pid, 0), hp)
+            player_max_hp[pid] = max(player_max_hp.get(pid, 0), stamina * 20)
 
     print("\n[...] Analyzing crafted gear...")
     records = analyze_players(actors, all_combatant_events)
-    
     crafted_count = sum(1 for r in records if r["item_id"] != 0)
-    player_count = len(set(r["player"] for r in records))
-    no_craft_count = sum(1 for r in records if r["item_id"] == 0)
-    
+    player_count  = len(set(r["player"] for r in records))
+    no_craft_count= sum(1 for r in records if r["item_id"] == 0)
     print(f"[OK] Found {crafted_count} crafted items across {player_count} players.")
     if no_craft_count > 0:
         print(f"[!!] {no_craft_count} player(s) have NO detected crafted gear.")
-    
-    # ── Split detection & cast tracking ──
-    # Group kills by encounter — first kill = Split 1, second = Split 2
+
+    # Split detection — group by encounter, order of kills = split number
     encounter_kills = {}
     for fight in selected_fights:
         eid = fight.get("encounterID", 0)
-        if eid not in encounter_kills:
-            encounter_kills[eid] = []
-        encounter_kills[eid].append(fight)
-    
-    split1_fights = []
-    split2_fights = []
-    for eid, kills in encounter_kills.items():
-        kills.sort(key=lambda f: f["id"])
-        if len(kills) >= 1:
-            split1_fights.append(kills[0])
-        if len(kills) >= 2:
-            split2_fights.append(kills[1])
-    
-    print(f"\n[...] Detected {len(split1_fights)} Split 1 fights, {len(split2_fights)} Split 2 fights.")
-    
-    # Fetch cast events for each split
+        encounter_kills.setdefault(eid, []).append(fight)
+    max_splits = max((len(v) for v in encounter_kills.values()), default=1)
+    split_fights = {i + 1: [] for i in range(max_splits)}
+    for kills in encounter_kills.values():
+        for i, kill in enumerate(sorted(kills, key=lambda f: f["id"])):
+            split_fights[i + 1].append(kill)
+
+    print(f"\n[...] Detected {max_splits} split(s).")
+
+    # Cast events per split
     split_data = {}
-    actor_lookup = {a["id"]: a for a in actors}
-    
-    for split_name, split_fights_list in [("Split 1", split1_fights), ("Split 2", split2_fights)]:
-        if not split_fights_list:
-            continue
-        
+    for split_num, sfl in split_fights.items():
+        split_name = f"Split {split_num}"
         print(f"\n[...] Fetching spell usage for {split_name}...")
         split_fight_data = []
-        
-        for fight in split_fights_list:
-            fid = fight["id"]
+        for fight in sfl:
+            fid   = fight["id"]
             fname = fight["name"]
-            diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
+            diff  = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
             print(f"  [...] Fetching casts for {fname} ({diff})...")
-            
             try:
-                cast_events = fetch_cast_events(token, report_code, fid)
-                # Event timestamps are relative to report start, same as fight.startTime
-                fight_start = fight.get("startTime", 0)
-
-                player_casts = analyze_fight_casts(cast_events, fight_start, actor_lookup)
-
-                total_tracked = sum(len(v) for v in player_casts.values())
-                print(f"         Found {total_tracked} tracked spell uses across {len(player_casts)} players.")
-
-                split_fight_data.append({
-                    "fight_name": f"{fname} ({diff})",
-                    "fight_id": fid,
-                    "player_casts": player_casts,
-                })
+                cast_events  = fetch_cast_events(token, report_code, fid)
+                player_casts = analyze_fight_casts(cast_events, fight.get("startTime", 0), actor_lookup)
+                total        = sum(len(v) for v in player_casts.values())
+                print(f"         Found {total} tracked spell uses across {len(player_casts)} players.")
+                split_fight_data.append({"fight_name": f"{fname} ({diff})", "fight_id": fid, "player_casts": player_casts})
             except Exception as e:
-                print(f"    [WARN] Could not fetch casts for fight {fid}: {e}")
-        
+                print(f"    [WARN] Casts fetch failed for fight {fid}: {e}")
         split_data[split_name] = split_fight_data
 
-    # ── Boss analysis: deaths + avoidable damage per boss (both splits combined) ──
-    # boss_data: { boss_name: [ {fight_id, deaths, all_player_ids, avoidable_damage}, ... ] }
+    # Boss analysis — one fight dict per fight, tagged with split_num
     boss_data = {}
+    encounter_kill_count = {}
     print(f"\n[...] Fetching death + damage events per boss...")
+    player_roles_map = {pid: PLAYER_ROLES.get(lookup_roster(actor_lookup[pid]["name"])[0], "DPS")
+                        for pid in actor_lookup if "name" in actor_lookup[pid]}
+
     for fight in selected_fights:
-        fid   = fight["id"]
-        fname = fight["name"]
-        diff  = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
+        fid  = fight["id"]
+        fname= fight["name"]
+        eid  = fight.get("encounterID", 0)
+        diff = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
         boss_key = f"{fname} ({diff})"
+        encounter_kill_count[eid] = encounter_kill_count.get(eid, 0) + 1
+        split_num = encounter_kill_count[eid]
         try:
             death_events     = fetch_death_events(token, report_code, fid)
             damage_events    = fetch_damage_taken_events(token, report_code, fid)
             interrupt_events = fetch_interrupt_events(token, report_code, fid)
             fight_start      = fight.get("startTime", 0)
-            fight_end        = fight.get("endTime", 0)
-            fight_dur_ms     = fight_end - fight_start
-            deaths           = analyze_deaths(death_events, fight_start, ability_names, fight_end_ms=fight_dur_ms, damage_events=damage_events)
-            player_roles_map = {pid: PLAYER_ROLES.get(lookup_roster(actor_lookup[pid]["name"])[0], "DPS")
-                                for pid in actor_lookup if "name" in actor_lookup[pid]}
-            avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start, ability_names, player_max_hp, player_roles_map)
+            fight_dur_ms     = fight.get("endTime", 0) - fight_start
+            deaths           = analyze_deaths(death_events, fight_start, ability_names,
+                                              fight_end_ms=fight_dur_ms, damage_events=damage_events)
+            avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start,
+                                                        ability_names, player_max_hp, player_roles_map)
             dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
             uptime_map       = fetch_uptime_table(token, report_code, fid)
             healing_map      = fetch_healing_table(token, report_code, fid)
@@ -2546,7 +2478,6 @@ def main():
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
             frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start)
-            # Collect all player IDs: from casts, damage taken, uptime, and deaths
             all_pids = set()
             for sdata in split_data.values():
                 for fd in sdata:
@@ -2555,35 +2486,80 @@ def main():
             all_pids.update(dmg_taken.keys())
             all_pids.update(uptime_map.keys())
             all_pids.update(deaths.keys())
-            # Only keep actual player actors
             all_pids = {pid for pid in all_pids if pid in actor_lookup}
-            if boss_key not in boss_data:
-                boss_data[boss_key] = []
-            boss_data[boss_key].append({
-                "fight_id": fid,
-                "fight_dur_ms": fight_dur_ms,
-                "deaths": deaths,
-                "all_player_ids": all_pids,
-                "avoidable_damage": avoidable,
-                "dmg_taken": dmg_taken,
-                "uptime_map": uptime_map,
-                "healing_map": healing_map,
-                "rankings_map": rankings_map,
-                "interrupts": interrupts,
-                "mechanics_data": mechanics_data,
-                "frontal_failures": frontal_failures,
+            boss_data.setdefault(boss_key, []).append({
+                "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
+                "deaths": deaths, "all_player_ids": all_pids,
+                "avoidable_damage": avoidable, "dmg_taken": dmg_taken,
+                "uptime_map": uptime_map, "healing_map": healing_map,
+                "rankings_map": rankings_map, "interrupts": interrupts,
+                "mechanics_data": mechanics_data, "frontal_failures": frontal_failures,
             })
-            print(f"  [OK] {fname}: {len(deaths)} death(s), {len(avoidable)} player(s), {sum(interrupts.values())} interrupts.")
+            print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
             print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
-    # Output
-    html_path = "craft_audit.html"
-    write_html(records, report_info, report_code, html_path, split_data=split_data, actors=actors, boss_data=boss_data)
+    return {
+        "report_code": report_code, "report_info": report_info,
+        "records": records, "split_data": split_data,
+        "boss_data": boss_data, "actors": actors,
+        "max_splits": max_splits,
+    }
 
-    xlsx_path = "craft_audit.xlsx"
-    write_xlsx(records, report_info, report_code, xlsx_path, split_data=split_data, boss_data=boss_data, actors=actors)
-    
+
+def main():
+    print("=" * 60)
+    print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
+    print("=" * 60)
+
+    config = load_config()
+
+    if config.get("CLIENT_ID") and config.get("CLIENT_SECRET"):
+        client_id, client_secret = config["CLIENT_ID"], config["CLIENT_SECRET"]
+        print(f"\n[OK] Loaded credentials from wcl_config.txt (Client ID: {client_id[:8]}...)")
+    else:
+        client_id     = input("\nWarcraftLogs Client ID: ").strip()
+        client_secret = input("WarcraftLogs Client Secret: ").strip()
+
+    if not client_id or not client_secret:
+        print("[ERROR] Both Client ID and Client Secret are required.")
+        sys.exit(1)
+
+    print("\n[...] Authenticating with WarcraftLogs...")
+    token = get_access_token(client_id, client_secret)
+    print("[OK] Authenticated successfully.")
+
+    report_urls = config.get("REPORT_URLS", [])
+    if not report_urls:
+        report_urls = [input("\nReport code or URL: ").strip()]
+    else:
+        print(f"[OK] Loaded {len(report_urls)} report URL(s) from config.")
+
+    report_codes = [_extract_report_code(u) for u in report_urls]
+    fight_mode   = "interactive" if len(report_codes) == 1 else "all"
+
+    days_data = []
+    for code in report_codes:
+        try:
+            days_data.append(process_report(token, code, fight_input=fight_mode))
+        except Exception as e:
+            print(f"[ERROR] Failed to process report {code}: {e}")
+
+    if not days_data:
+        print("[ERROR] No reports processed successfully.")
+        sys.exit(1)
+
+    # Most recent report first (leftmost tab)
+    days_data.sort(key=lambda d: d["report_info"].get("startTime", 0), reverse=True)
+
+    write_html(days_data, "craft_audit.html")
+
+    # XLSX: most recent day only
+    first = days_data[0]
+    write_xlsx(first["records"], first["report_info"], first["report_code"],
+               "craft_audit.xlsx", split_data=first["split_data"],
+               boss_data=first["boss_data"], actors=first["actors"])
+
     print(f"\nDone! Refresh craft_audit.html in your browser, or open craft_audit.xlsx.\n")
 
 
