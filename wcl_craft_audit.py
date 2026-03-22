@@ -1032,7 +1032,26 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict) -> dict:
         overview_html += f'<span class="ov-item"><span class="ov-label">☠ Avoid Hits</span><span class="ov-val">{ov_avoid if ov_avoid else "—"}</span></span>'
         overview_html += '</div>'
 
-        html = overview_html
+        # ── Frontal failure summary ──
+        all_frontal = []
+        for fi, fight in enumerate(fights, 1):
+            for f in fight.get("frontal_failures", []):
+                all_frontal.append((fi, f))
+
+        frontal_html = ""
+        if all_frontal:
+            frontal_html = '<div class="frontal-failures"><span class="ff-title">⚠ Frontal Failures</span>'
+            for fi, f in all_frontal:
+                players_str = ", ".join(escape(p) for p in f["players"])
+                frontal_html += (f'<span class="ff-item">'
+                                 f'<span class="ff-split">Split {fi}</span> '
+                                 f'<span class="ff-time">{escape(f["time_str"])}</span> '
+                                 f'<span class="ff-label">{escape(f["label"])}</span> → '
+                                 f'<span class="ff-players">{players_str}</span>'
+                                 f'</span>')
+            frontal_html += '</div>'
+
+        html = overview_html + frontal_html
         html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
         html += '<tr>'
         def _sth(col_idx, label, css="", extra=""):
@@ -1369,6 +1388,18 @@ td:first-child, th:first-child {{ border-left: none; }}
 .death-num {{ color: #e57373; font-weight: bold; }}
 .interrupt-yes {{ color: #00FF88; font-weight: bold; }}
 .bighit-row {{ color: #ff8a65; font-weight: bold; }}
+.frontal-failures {{
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-bottom: 12px; padding: 10px 14px;
+  background: rgba(229,115,115,0.08); border: 1px solid rgba(229,115,115,0.3);
+  border-radius: 8px;
+}}
+.ff-title {{ color: #e57373; font-weight: 700; font-size: 13px; margin-right: 4px; }}
+.ff-item {{ background: rgba(0,0,0,0.3); border-radius: 5px; padding: 4px 10px; font-size: 12px; }}
+.ff-split {{ color: #888; }}
+.ff-time {{ color: #a0b4ff; font-weight: 600; margin: 0 4px; }}
+.ff-label {{ color: #e57373; font-weight: 600; }}
+.ff-players {{ color: #ffb74d; }}
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 </style>
@@ -1591,7 +1622,7 @@ BOSS_MECHANICS = {
     ],
     "Vaelgor & Ezzorak": [
         {"label": "Impale",        "name": "Impale: Ezzorak slams targets within a 35 yard rear cone, bleeding for Physical damage plus additional Physical damage every 1 sec and stunning for 3 sec. Occurs immediately after Rakfang.",                         "spell_ids": {1265152},                             "type": "dmg_hits"},
-        {"label": "Dread Breath",  "name": "Dread Breath: Vaelgor roars toward a targeted player, fearing players in a massive frontal cone. Inflicts Shadow damage and an additional Shadow damage every 3 sec, fearing them for 21 sec.",                       "spell_ids": {1244225, 1255979},                    "type": "dmg_hits"},
+        {"label": "Dread Breath",  "name": "Dread Breath: Vaelgor roars toward a targeted player, fearing players in a massive frontal cone. Inflicts Shadow damage and an additional Shadow damage every 3 sec, fearing them for 21 sec.",                       "spell_ids": {1244225, 1255979},                    "type": "frontal"},
         {"label": "Gloomfield",    "name": "Gloomfield: Galactic emptiness engulfs a massive location in darkness for 2.5 min, inflicting Shadow damage every 0.5 sec and reducing movement speed by 75%.",                                                       "spell_ids": {1245421},                             "type": "dmg_hits"},
         {"label": "Tail Lash",     "name": "Tail Lash: Vaelgor knocks away players within a 35 yard rear cone, bleeding for Physical damage plus additional Physical damage every 0.5 sec for 4 sec.",                                                            "spell_ids": {1264467},                             "type": "dmg_hits"},
         {"label": "Nullbeam",      "name": "Nullbeam (SOAK): Vaelgor expels crystalline spacetime in a frontal direction. Nullzone's pull magnitude weakens as Nullbeam stacks, up to 12 times. Higher = better.",                                               "spell_ids": {1283856, 1262688},                    "type": "soak"},
@@ -2499,6 +2530,7 @@ def main():
             interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
+            frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start)
             # Collect all player IDs: from casts, damage taken, uptime, and deaths
             all_pids = set()
             for sdata in split_data.values():
@@ -2524,6 +2556,7 @@ def main():
                 "rankings_map": rankings_map,
                 "interrupts": interrupts,
                 "mechanics_data": mechanics_data,
+                "frontal_failures": frontal_failures,
             })
             print(f"  [OK] {fname}: {len(deaths)} death(s), {len(avoidable)} player(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
