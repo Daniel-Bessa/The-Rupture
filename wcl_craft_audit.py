@@ -2126,7 +2126,7 @@ h1 {{ color: #7289DA; font-size: 24px; }}
 </style>
 </head>
 <body>
-<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}</div>
+<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}<a href="roster.html" class="roster-link" title="Guild Roster">👥</a></div>
 <div class="subtitle">{total_cards} entr{"ies" if total_cards != 1 else "y"} tracked</div>
 <div class="raid-grid">
 {cards_html}
