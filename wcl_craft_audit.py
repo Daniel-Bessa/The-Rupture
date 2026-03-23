@@ -2106,6 +2106,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe 
 h1 {{ color: #7289DA; font-size: 24px; }}
 .gear-link {{ color: #4caf50; font-size: 20px; text-decoration: none; line-height: 1; }}
 .gear-link:hover {{ color: #81c784; }}
+.roster-link {{ color: #7289DA; font-size: 20px; text-decoration: none; line-height: 1; }}
 .subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
 .raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }}
 .raid-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
