@@ -1856,6 +1856,173 @@ function sortBossTable(tableId, colIdx, thEl) {{
     print(f"[OK] Raid page saved: {output_path}")
 
 
+def build_player_profiles(days_data: list) -> dict:
+    """Aggregate per-player stats across all reports/raids.
+    Returns {pname: {chars, class, role, appearances: [{boss_key, difficulty, date_str, parse, deaths, dmg_taken, uptime_pct, interrupts, def_count, mechanics}]}}
+    """
+    from datetime import datetime, timezone
+    profiles = {}
+    for day_data in days_data:
+        actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
+        ri = day_data.get("report_info", {})
+        start_ts = ri.get("startTime", 0)
+        date_str = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if start_ts else "Unknown"
+        difficulty = day_data.get("difficulty", "")
+
+        for boss_key, fights in day_data.get("boss_data", {}).items():
+            boss_display = boss_key.rsplit(" (", 1)[0]
+            for fight in fights:
+                fight_dur = fight.get("fight_dur_ms", 1) or 1
+                for pid in fight.get("all_player_ids", set()):
+                    actor = actor_lookup.get(pid, {})
+                    char_name = actor.get("name", "")
+                    cls = actor.get("subType", "Unknown")
+                    if not char_name:
+                        continue
+                    pname, _ = lookup_roster(char_name)
+                    role = (fight.get("spec_roles", {}).get(pid)
+                            or PLAYER_ROLES.get(pname, "DPS"))
+
+                    if pname not in profiles:
+                        profiles[pname] = {"chars": set(), "class": cls, "role": role, "appearances": []}
+                    p = profiles[pname]
+                    p["chars"].add(char_name)
+                    p["class"] = cls
+                    p["role"] = role
+
+                    rmap = fight.get("rankings_map", {}).get(pid, {})
+                    parse = rmap.get("rankPercent", 0)
+                    deaths = len(fight.get("deaths", {}).get(pid, []))
+                    dmg_taken = fight.get("dmg_taken", {}).get(pid, 0)
+                    uptime = fight.get("uptime_map", {}).get(pid, {})
+                    uptime_pct = (min(uptime.get("activeTime", 0) / fight_dur * 100, 100)
+                                  if isinstance(uptime, dict) else 0)
+                    interrupts = fight.get("interrupts", {}).get(pid, 0)
+                    def_count = len(fight.get("defensive_casts", {}).get(pid, []))
+                    mechanics = dict(fight.get("mechanics_data", {}).get(pid, {}))
+
+                    p["appearances"].append({
+                        "boss": boss_display,
+                        "difficulty": difficulty,
+                        "date": date_str,
+                        "parse": parse,
+                        "deaths": deaths,
+                        "dmg_taken": dmg_taken,
+                        "uptime_pct": uptime_pct,
+                        "interrupts": interrupts,
+                        "def_count": def_count,
+                        "mechanics": mechanics,
+                    })
+    return profiles
+
+
+def write_player_pages(days_data: list, output_dir: str = ".") -> None:
+    """Generate one player_{slug}.html profile page per known player."""
+    from html import escape as _esc
+    profiles = build_player_profiles(days_data)
+
+    for pname, p in profiles.items():
+        slug = _player_slug(pname)
+        cls = p.get("class", "Unknown")
+        role = p.get("role", "DPS")
+        cls_color = CLASS_COLORS.get(cls, "#ccc")
+        role_color = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}.get(role, "#ccc")
+        chars_html = "".join(
+            f'<span class="char-chip" style="color:{cls_color}">{_esc(c)}</span>'
+            for c in sorted(p["chars"])
+        )
+
+        # Build appearances table rows, grouped by boss
+        by_boss: dict = {}
+        for a in p["appearances"]:
+            by_boss.setdefault(a["boss"], []).append(a)
+
+        rows_html = ""
+        for boss, apps in sorted(by_boss.items()):
+            for a in sorted(apps, key=lambda x: x["date"]):
+                parse = a["parse"]
+                if parse >= 99:   parse_color = "#E5CC80"
+                elif parse >= 95: parse_color = "#FF8000"
+                elif parse >= 75: parse_color = "#A335EE"
+                elif parse >= 50: parse_color = "#0070DD"
+                elif parse >= 25: parse_color = "#1EFF00"
+                else:              parse_color = "#aaa"
+                parse_str = f'<span style="color:{parse_color};font-weight:bold">{parse:.0f}%</span>' if parse else "—"
+                dmg = a["dmg_taken"]
+                dmg_str = (f"{dmg/1_000_000:.1f}M" if dmg >= 1_000_000
+                           else (f"{dmg/1000:.0f}k" if dmg > 0 else "—"))
+                uptime_str = f'{a["uptime_pct"]:.0f}%' if a["uptime_pct"] > 0 else "—"
+                death_str = f'<span style="color:#e57373;font-weight:bold">{a["deaths"]}</span>' if a["deaths"] else "—"
+                int_str = str(a["interrupts"]) if a["interrupts"] else "—"
+                def_str = str(a["def_count"]) if a["def_count"] else "—"
+                mech_parts = [f'{k}:{v}' for k, v in a["mechanics"].items() if v]
+                mech_str = ", ".join(mech_parts) if mech_parts else "—"
+                rows_html += (
+                    f'<tr>'
+                    f'<td>{_esc(boss)}</td>'
+                    f'<td style="color:#888">{_esc(a["difficulty"])}</td>'
+                    f'<td style="color:#666">{_esc(a["date"])}</td>'
+                    f'<td class="center">{parse_str}</td>'
+                    f'<td class="center">{death_str}</td>'
+                    f'<td class="center">{dmg_str}</td>'
+                    f'<td class="center">{uptime_str}</td>'
+                    f'<td class="center">{int_str}</td>'
+                    f'<td class="center" style="color:#64b5f6">{def_str}</td>'
+                    f'<td style="color:#e57373;font-size:11px">{mech_str}</td>'
+                    f'</tr>'
+                )
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_esc(pname)} — The Rupture</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px}}
+a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
+h1{{font-size:28px;font-weight:700;margin-bottom:4px}}
+h2{{font-size:15px;color:#7289DA;margin:24px 0 10px;letter-spacing:0.5px;text-transform:uppercase}}
+.role-badge{{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold;color:#0d1117;background:{role_color};margin-left:10px;vertical-align:middle}}
+.class-badge{{font-size:13px;color:{cls_color};margin-left:8px}}
+.chars-list{{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}}
+.char-chip{{background:#1a2233;border:1px solid #2a3a6a;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600}}
+table{{width:100%;border-collapse:collapse;background:#0d1525}}
+th{{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}}
+td{{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}}
+tr:hover td{{background:#111827}}
+.center{{text-align:center}}
+.back{{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">← Back to Raids</a>
+<h1 style="color:{cls_color}">{_esc(pname)}<span class="role-badge">{_esc(role)}</span><span class="class-badge">{_esc(cls)}</span></h1>
+
+<h2>Characters</h2>
+<div class="chars-list">{chars_html}</div>
+
+<h2>Boss Performance</h2>
+<table>
+<thead><tr>
+<th>Boss</th><th>Difficulty</th><th>Date</th>
+<th class="center">Parse%</th><th class="center">Deaths</th>
+<th class="center">Dmg Taken</th><th class="center">Uptime%</th>
+<th class="center">Interrupts</th><th class="center">Def Used</th>
+<th>Mechanics</th>
+</tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+</body>
+</html>"""
+
+        out_path = os.path.join(output_dir, f"player_{slug}.html")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(html)
+    print(f"[OK] Player pages saved: {len(profiles)} player(s).")
+
+
 def write_index_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write the overview index.html.
     Normal splits are expanded into individual cards (numbered Run 1, Run 2, …).
