@@ -2207,7 +2207,6 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         for pname, data in players:
             slug = _player_slug(pname)
             cc = data["cls_color"]
-            cls_name = data["class"]
 
             # Build char pills — each char gets its own class color
             chars_html = ""
