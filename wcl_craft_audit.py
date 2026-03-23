@@ -1607,7 +1607,8 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .item-cell a:hover {{ text-decoration: underline; }}
 /* ── Roles ── */
 .role-sep td {{ background: #111827; color: #7289DA; font-size: 11px; font-weight: bold; padding: 4px 10px; }}
-.pname {{ font-weight: bold; }}
+.pname {{ font-weight: bold; text-decoration: none; }}
+.pname:hover {{ text-decoration: underline; opacity: 0.85; }}
 .cname {{ color: #888; font-size: 11px; }}
 /* ── Split overview row ── */
 .split-ov-row td {{ padding: 0 !important; border: none; background: #0d1525; }}
@@ -3374,6 +3375,7 @@ def main():
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
+    write_player_pages(days_data)
 
     # XLSX: most recent day only
     first = days_data[0]
