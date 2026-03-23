@@ -1074,7 +1074,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
 
                 if role != current_role:
                     current_role = role
-                    html += f'<tr class="role-sep"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
+                    html += f'<tr class="role-sep" data-role="{current_role}"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
 
                 dmg_taken    = fight.get("dmg_taken", {})
                 uptime_map   = fight.get("uptime_map", {})
@@ -1135,7 +1135,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
 
                 row_cls = "boss-death-row" if death_count > 0 else ""
 
-                html += f'<tr class="{row_cls}">'
+                html += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
                 html += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
                 html += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
                 html += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
@@ -1170,6 +1170,155 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
         results[boss_name] = html
 
     return results
+
+
+_FILTER_BAR_CSS = """/* ── Filter bar ── */
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; padding: 10px 14px; background: #0d1525; border-radius: 8px; border: 1px solid #2a2a4a; }
+.filter-label { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; margin-right: 2px; }
+.filter-tag { background: #16213e; color: #888; border: 1px solid #2a2a4a; padding: 3px 10px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.filter-tag:hover { color: #bbb; border-color: #4a5568; }
+.filter-tag.active { background: #2a3a6a; color: #7289DA; border-color: #7289DA; font-weight: 600; }
+.filter-divider { width: 1px; height: 20px; background: #2a2a4a; margin: 0 4px; flex-shrink: 0; }
+.chip-input-area { position: relative; }
+.chip-input-wrap { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; background: #16213e; border: 1px solid #2a2a4a; border-radius: 6px; padding: 4px 8px; min-width: 180px; cursor: text; }
+.chip-input-wrap:focus-within { border-color: #7289DA; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: #2a3a6a; color: #a0b4ff; border-radius: 20px; padding: 2px 8px 2px 10px; font-size: 12px; }
+.chip-remove { background: none; border: none; color: #7289DA; cursor: pointer; font-size: 13px; padding: 0; line-height: 1; }
+.chip-remove:hover { color: #e57373; }
+.chip-text-input { background: none; border: none; color: #e0e0e0; font-size: 12px; outline: none; min-width: 90px; padding: 1px 0; }
+.chip-text-input::placeholder { color: #555; }
+.chip-dropdown { position: absolute; top: 100%; left: 0; min-width: 180px; background: #1a2233; border: 1px solid #4a5568; border-radius: 6px; z-index: 100; margin-top: 2px; box-shadow: 0 4px 12px #0008; }
+.chip-dd-item { padding: 6px 12px; font-size: 12px; color: #e0e0e0; cursor: pointer; }
+.chip-dd-item:hover { background: #2a3a6a; color: #a0b4ff; }
+.filter-clear { background: none; border: 1px solid #3a2a2a; color: #666; padding: 3px 10px; border-radius: 20px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.filter-clear:hover { color: #e57373; border-color: #e57373; }
+"""
+
+_FILTER_BAR_JS = """
+const _CLASS_COLORS_FB = {DeathKnight:'#C41E3A',DemonHunter:'#A330C9',Druid:'#FF7C0A',Evoker:'#33937F',Hunter:'#AAD372',Mage:'#3FC7EB',Monk:'#00FF98',Paladin:'#F48CBA',Priest:'#FFFFFF',Rogue:'#FFF468',Shaman:'#0070DD',Warlock:'#8788EE',Warrior:'#C69B3A'};
+function buildClassTags(splitId) {
+  const tab = document.getElementById('tab-' + splitId);
+  const ct = document.getElementById('class-tags-' + splitId);
+  if (!tab || !ct || ct.children.length) return;
+  const classes = [...new Set([...tab.querySelectorAll('tr[data-class]')].map(r => r.dataset.class))].sort();
+  classes.forEach(cls => {
+    const btn = document.createElement('button');
+    btn.className = 'filter-tag'; btn.dataset.ftype = 'class'; btn.dataset.fval = cls;
+    btn.style.cssText = 'border-left:3px solid ' + (_CLASS_COLORS_FB[cls] || '#aaa') + ';';
+    btn.textContent = cls;
+    btn.onclick = () => { btn.classList.toggle('active'); applyFilters(splitId); };
+    ct.appendChild(btn);
+  });
+}
+function toggleTag(btn, splitId) { btn.classList.toggle('active'); applyFilters(splitId); }
+function addChip(splitId, value) {
+  value = value.trim().toLowerCase();
+  if (!value) return;
+  const ct = document.getElementById('chips-' + splitId);
+  if (!ct || [...ct.querySelectorAll('.chip')].some(c => c.dataset.val === value)) return;
+  const chip = document.createElement('span');
+  chip.className = 'chip'; chip.dataset.val = value;
+  chip.textContent = value;
+  const rm = document.createElement('button');
+  rm.className = 'chip-remove'; rm.title = 'Remove'; rm.textContent = '\u00d7';
+  rm.onclick = () => { chip.remove(); applyFilters(splitId); };
+  chip.appendChild(rm);
+  ct.appendChild(chip); applyFilters(splitId);
+}
+function chipKey(e, splitId) {
+  const inp = e.target;
+  if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) {
+    e.preventDefault(); addChip(splitId, inp.value); inp.value = ''; hideDropdown(splitId);
+  } else if (e.key === 'Backspace' && !inp.value) {
+    const ct = document.getElementById('chips-' + splitId);
+    if (ct && ct.lastElementChild) { ct.lastElementChild.remove(); applyFilters(splitId); }
+  } else if (e.key === 'Escape') { hideDropdown(splitId); }
+}
+function chipSuggest(inp, splitId) {
+  const val = inp.value.toLowerCase().trim();
+  const dd = document.getElementById('chip-dd-' + splitId);
+  if (!val || !dd) { if (dd) dd.style.display = 'none'; return; }
+  const tab = document.getElementById('tab-' + splitId);
+  if (!tab) return;
+  const names = [...new Set([...tab.querySelectorAll('tr[data-player]')].map(r => r.dataset.player))].filter(n => n.includes(val)).slice(0, 8);
+  if (!names.length) { dd.style.display = 'none'; return; }
+  dd.innerHTML = '';
+  names.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'chip-dd-item'; item.textContent = n;
+    item.onmousedown = (ev) => { ev.preventDefault(); addChip(splitId, n); inp.value = ''; hideDropdown(splitId); };
+    dd.appendChild(item);
+  });
+  dd.style.display = 'block';
+}
+function hideDropdown(splitId) { const dd = document.getElementById('chip-dd-' + splitId); if (dd) dd.style.display = 'none'; }
+function clearFilters(splitId) {
+  const fb = document.getElementById('fb-' + splitId);
+  if (fb) fb.querySelectorAll('.filter-tag.active').forEach(b => b.classList.remove('active'));
+  const ct = document.getElementById('chips-' + splitId);
+  if (ct) ct.innerHTML = '';
+  const inp = document.getElementById('chip-in-' + splitId);
+  if (inp) inp.value = '';
+  hideDropdown(splitId); applyFilters(splitId);
+}
+function applyFilters(splitId) {
+  const fb = document.getElementById('fb-' + splitId);
+  const tab = document.getElementById('tab-' + splitId);
+  if (!fb || !tab) return;
+  const activeRoles   = new Set([...fb.querySelectorAll('[data-ftype="role"].active')].map(b => b.dataset.fval));
+  const activeClasses = new Set([...fb.querySelectorAll('[data-ftype="class"].active')].map(b => b.dataset.fval));
+  const ct = document.getElementById('chips-' + splitId);
+  const activeNames = ct ? [...ct.querySelectorAll('.chip')].map(c => c.dataset.val) : [];
+  const hasFilters = activeRoles.size || activeClasses.size || activeNames.length;
+  tab.querySelectorAll('table').forEach(tbl => {
+    const tbody = tbl.tBodies[0]; if (!tbody) return;
+    const roleVis = {};
+    [...tbody.rows].forEach(row => {
+      if (row.classList.contains('split-ov-row') || row.classList.contains('section-sep') || row.classList.contains('role-sep')) return;
+      const role = row.dataset.role; if (!role) return;
+      let show = true;
+      if (hasFilters) {
+        const roleOk  = !activeRoles.size   || activeRoles.has(role);
+        const classOk = !activeClasses.size || activeClasses.has(row.dataset.class);
+        const nameOk  = !activeNames.length || activeNames.some(n => (row.dataset.player || '').includes(n));
+        show = roleOk && classOk && nameOk;
+      }
+      row.style.display = show ? '' : 'none';
+      if (show) roleVis[role] = true;
+    });
+    [...tbody.rows].forEach(row => {
+      if (row.classList.contains('role-sep'))
+        row.style.display = (!hasFilters || roleVis[row.dataset.role]) ? '' : 'none';
+    });
+  });
+}
+"""
+
+
+def _filter_bar_html(split_id: str) -> str:
+    si = split_id.replace("'", "\\'")
+    return (
+        f'<div class="filter-bar" id="fb-{split_id}">'
+        f'<span class="filter-label">Role</span>'
+        f'<button class="filter-tag" data-ftype="role" data-fval="Tank" onclick="toggleTag(this,\'{si}\')">🛡 Tank</button>'
+        f'<button class="filter-tag" data-ftype="role" data-fval="Healer" onclick="toggleTag(this,\'{si}\')">💚 Healer</button>'
+        f'<button class="filter-tag" data-ftype="role" data-fval="DPS" onclick="toggleTag(this,\'{si}\')">⚔ DPS</button>'
+        f'<div class="filter-divider"></div>'
+        f'<span class="filter-label">Class</span>'
+        f'<span class="class-tags" id="class-tags-{split_id}"></span>'
+        f'<div class="filter-divider"></div>'
+        f'<div class="chip-input-area">'
+        f'<div class="chip-input-wrap" onclick="this.querySelector(\'.chip-text-input\').focus()">'
+        f'<span class="chips-container" id="chips-{split_id}"></span>'
+        f'<input class="chip-text-input" id="chip-in-{split_id}" placeholder="Player name\u2026"'
+        f' onkeydown="chipKey(event,\'{si}\')" oninput="chipSuggest(this,\'{si}\')"'
+        f' onblur="setTimeout(()=>hideDropdown(\'{si}\'),150)">'
+        f'</div>'
+        f'<div class="chip-dropdown" id="chip-dd-{split_id}" style="display:none"></div>'
+        f'</div>'
+        f'<button class="filter-clear" onclick="clearFilters(\'{si}\')">✕ Clear all</button>'
+        f'</div>'
+    )
 
 
 def write_raid_html(day_data: dict, output_path: str) -> None:
@@ -1231,7 +1380,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
         slabel = day_data.get("difficulty") or f"Split {snum} · {sdiff}"
         active = "active" if (si == 0 and first_split_active) else ""
         tab_buttons += f'<button class="tab-btn {active}" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
-        split_divs  += f'<div id="tab-split-{snum}" class="tab-content {active}">{split_html}</div>\n'
+        fb_html = _filter_bar_html(f"split-{snum}")
+        split_divs  += f'<div id="tab-split-{snum}" class="tab-content {active}">{fb_html}{split_html}</div>\n'
 
     wcl_link = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
 
@@ -1361,6 +1511,7 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
+{_FILTER_BAR_CSS}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
@@ -1391,6 +1542,7 @@ function switchTab(name, btn) {{ switchTabByName(name); }}
 window.addEventListener('DOMContentLoaded', () => {{
   const h = location.hash.replace('#', '');
   if (h) switchTabByName(h);
+  document.querySelectorAll('[id^="class-tags-"]').forEach(el => buildClassTags(el.id.replace('class-tags-', '')));
 }});
 function toggleBoss(titleEl) {{
   titleEl.classList.toggle('collapsed');
@@ -1457,6 +1609,7 @@ function sortBossTable(tableId, colIdx, thEl) {{
   }}
   for (const seg of segments) {{ if (seg.sep) tbody.appendChild(seg.sep); for (const row of seg.rows) tbody.appendChild(row); }}
 }}
+{_FILTER_BAR_JS}
 </script>
 </body>
 </html>"""
