@@ -125,6 +125,7 @@ CLASS_EXTERNAL_IDS = {
     47788,   # Guardian Spirit
     # Shaman
     98008,   # Spirit Link Totem
+    207399,  # Ancestral Protection Totem
     # Warrior
     97462,   # Rallying Cry
 }
