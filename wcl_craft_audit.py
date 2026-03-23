@@ -1903,6 +1903,7 @@ def build_player_profiles(days_data: list) -> dict:
                     mechanics = dict(fight.get("mechanics_data", {}).get(pid, {}))
 
                     p["appearances"].append({
+                        "char": char_name,
                         "boss": boss_display,
                         "difficulty": difficulty,
                         "date": date_str,
@@ -1920,58 +1921,77 @@ def build_player_profiles(days_data: list) -> dict:
 def write_player_pages(days_data: list, output_dir: str = ".") -> None:
     """Generate one player_{slug}.html profile page per known player."""
     from html import escape as _esc
+
     profiles = build_player_profiles(days_data)
+
+    # Per-char class lookup
+    char_classes: dict = {}
+    for day_data in days_data:
+        for actor in day_data.get("actors", []):
+            name = actor.get("name", "")
+            cls  = actor.get("subType", "Unknown")
+            if name and cls != "Unknown":
+                char_classes[name.lower()] = cls
 
     for pname, p in profiles.items():
         slug = _player_slug(pname)
-        cls = p.get("class", "Unknown")
+        cls  = p.get("class", "Unknown")
         role = p.get("role", "DPS")
-        cls_color = CLASS_COLORS.get(cls, "#ccc")
-        role_color = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}.get(role, "#ccc")
-        chars_html = "".join(
-            f'<span class="char-chip" style="color:{cls_color}">{_esc(c)}</span>'
-            for c in sorted(p["chars"])
-        )
+        cls_color   = CLASS_COLORS.get(cls, "#ccc")
+        role_color  = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}.get(role, "#ccc")
 
-        # Build appearances table rows, grouped by boss
-        by_boss: dict = {}
-        for a in p["appearances"]:
-            by_boss.setdefault(a["boss"], []).append(a)
+        # Char chips — colored by each char's own class, clickable for filter
+        chars_html = ""
+        for c in sorted(p["chars"]):
+            char_cls   = char_classes.get(c.lower(), cls)
+            char_color = CLASS_COLORS.get(char_cls, "#888")
+            chars_html += (
+                f'<span class="char-chip" style="color:{char_color}" '
+                f'onclick="filterChar(this,\'{_esc(c.replace(chr(39), ""))}\')\"'
+                f' title="Filter by {_esc(c)}">{_esc(c)}</span>'
+            )
 
+        # Build table rows with data-char attribute
         rows_html = ""
-        for boss, apps in sorted(by_boss.items()):
-            for a in sorted(apps, key=lambda x: x["date"]):
-                parse = a["parse"]
-                if parse >= 99:   parse_color = "#E5CC80"
-                elif parse >= 95: parse_color = "#FF8000"
-                elif parse >= 75: parse_color = "#A335EE"
-                elif parse >= 50: parse_color = "#0070DD"
-                elif parse >= 25: parse_color = "#1EFF00"
-                else:              parse_color = "#aaa"
-                parse_str = f'<span style="color:{parse_color};font-weight:bold">{parse:.0f}%</span>' if parse else "—"
-                dmg = a["dmg_taken"]
-                dmg_str = (f"{dmg/1_000_000:.1f}M" if dmg >= 1_000_000
-                           else (f"{dmg/1000:.0f}k" if dmg > 0 else "—"))
-                uptime_str = f'{a["uptime_pct"]:.0f}%' if a["uptime_pct"] > 0 else "—"
-                death_str = f'<span style="color:#e57373;font-weight:bold">{a["deaths"]}</span>' if a["deaths"] else "—"
-                int_str = str(a["interrupts"]) if a["interrupts"] else "—"
-                def_str = str(a["def_count"]) if a["def_count"] else "—"
-                mech_parts = [f'{k}:{v}' for k, v in a["mechanics"].items() if v]
-                mech_str = ", ".join(mech_parts) if mech_parts else "—"
-                rows_html += (
-                    f'<tr>'
-                    f'<td>{_esc(boss)}</td>'
-                    f'<td style="color:#888">{_esc(a["difficulty"])}</td>'
-                    f'<td style="color:#666">{_esc(a["date"])}</td>'
-                    f'<td class="center">{parse_str}</td>'
-                    f'<td class="center">{death_str}</td>'
-                    f'<td class="center">{dmg_str}</td>'
-                    f'<td class="center">{uptime_str}</td>'
-                    f'<td class="center">{int_str}</td>'
-                    f'<td class="center" style="color:#64b5f6">{def_str}</td>'
-                    f'<td style="color:#e57373;font-size:11px">{mech_str}</td>'
-                    f'</tr>'
-                )
+        for a in sorted(p["appearances"], key=lambda x: (x["boss"], x["date"])):
+            parse = a["parse"]
+            if parse >= 99:   pc = "#E5CC80"
+            elif parse >= 95: pc = "#FF8000"
+            elif parse >= 75: pc = "#A335EE"
+            elif parse >= 50: pc = "#0070DD"
+            elif parse >= 25: pc = "#1EFF00"
+            else:              pc = "#aaa"
+            parse_str  = f'<span style="color:{pc};font-weight:bold">{parse:.0f}%</span>' if parse else "—"
+            dmg        = a["dmg_taken"]
+            dmg_str    = (f"{dmg/1_000_000:.1f}M" if dmg >= 1_000_000 else (f"{dmg/1000:.0f}k" if dmg > 0 else "—"))
+            uptime_str = f'{a["uptime_pct"]:.0f}%' if a["uptime_pct"] > 0 else "—"
+            death_str  = f'<span style="color:#e57373;font-weight:bold">{a["deaths"]}</span>' if a["deaths"] else "—"
+            int_str    = str(a["interrupts"]) if a["interrupts"] else "—"
+            def_str    = str(a["def_count"]) if a["def_count"] else "—"
+            mech_parts = [f'{k}:{v}' for k, v in a["mechanics"].items() if v]
+            mech_str   = ", ".join(mech_parts) if mech_parts else "—"
+            char_name  = a.get("char", "")
+            char_cls   = char_classes.get(char_name.lower(), cls)
+            char_color = CLASS_COLORS.get(char_cls, "#888")
+            rows_html += (
+                f'<tr data-char="{_esc(char_name)}">'
+                f'<td>{_esc(a["boss"])}</td>'
+                f'<td style="color:#888">{_esc(a["difficulty"])}</td>'
+                f'<td style="color:#666">{_esc(a["date"])}</td>'
+                f'<td class="center" style="color:{char_color};font-size:11px">{_esc(char_name)}</td>'
+                f'<td class="center">{parse_str}</td>'
+                f'<td class="center">{death_str}</td>'
+                f'<td class="center">{dmg_str}</td>'
+                f'<td class="center">{uptime_str}</td>'
+                f'<td class="center">{int_str}</td>'
+                f'<td class="center" style="color:#64b5f6">{def_str}</td>'
+                f'<td style="color:#e57373;font-size:11px">{mech_str}</td>'
+                f'</tr>'
+            )
+
+        def _sth(col, lbl):
+            return (f'<th onclick="sortPerfTable({col},this)" style="cursor:pointer;user-select:none">'
+                    f'{lbl} <span class="sarr">▼</span></th>')
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1984,37 +2004,79 @@ def write_player_pages(days_data: list, output_dir: str = ".") -> None:
 body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px}}
 a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
 h1{{font-size:28px;font-weight:700;margin-bottom:4px}}
-h2{{font-size:15px;color:#7289DA;margin:24px 0 10px;letter-spacing:0.5px;text-transform:uppercase}}
+h2{{font-size:13px;color:#7289DA;margin:24px 0 10px;letter-spacing:0.5px;text-transform:uppercase}}
 .role-badge{{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold;color:#0d1117;background:{role_color};margin-left:10px;vertical-align:middle}}
-.class-badge{{font-size:13px;color:{cls_color};margin-left:8px}}
-.chars-list{{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}}
-.char-chip{{background:#1a2233;border:1px solid #2a3a6a;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600}}
-table{{width:100%;border-collapse:collapse;background:#0d1525}}
+.chars-list{{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}}
+.char-chip{{background:#1a2233;border:1px solid #2a3a6a;border-radius:20px;padding:3px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}}
+.char-chip:hover{{background:#1e2d4a;border-color:#7289DA}}
+.char-chip.active{{background:#2a3a6a;border-color:#7289DA;box-shadow:0 0 0 1px #7289DA}}
+.filter-note{{color:#555;font-size:11px;margin-top:6px}}
+table{{width:100%;border-collapse:collapse;background:#0d1525;margin-top:8px}}
 th{{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}}
+th:hover{{color:#a0b4ff}}
 td{{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}}
 tr:hover td{{background:#111827}}
 .center{{text-align:center}}
+.sarr{{color:#555;font-size:10px}}
 .back{{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}}
 </style>
 </head>
 <body>
 <a class="back" href="index.html">← Back to Raids</a>
-<h1 style="color:{cls_color}">{_esc(pname)}<span class="role-badge">{_esc(role)}</span><span class="class-badge">{_esc(cls)}</span></h1>
+<h1 style="color:{cls_color}">{_esc(pname)}<span class="role-badge">{_esc(role)}</span></h1>
 
 <h2>Characters</h2>
 <div class="chars-list">{chars_html}</div>
+<div class="filter-note" id="filter-note"></div>
 
 <h2>Boss Performance</h2>
-<table>
+<table id="perf-table">
 <thead><tr>
-<th>Boss</th><th>Difficulty</th><th>Date</th>
-<th class="center">Parse%</th><th class="center">Deaths</th>
-<th class="center">Dmg Taken</th><th class="center">Uptime%</th>
-<th class="center">Interrupts</th><th class="center">Def Used</th>
+{_sth(0,'Boss')}{_sth(1,'Difficulty')}{_sth(2,'Date')}
+<th class="center">Char</th>
+{_sth(4,'Parse%')}{_sth(5,'Deaths')}{_sth(6,'Dmg Taken')}{_sth(7,'Uptime%')}{_sth(8,'Interrupts')}{_sth(9,'Def Used')}
 <th>Mechanics</th>
 </tr></thead>
 <tbody>{rows_html}</tbody>
 </table>
+<script>
+let _activeChar = null;
+function filterChar(chip, charName) {{
+  const same = _activeChar === charName;
+  document.querySelectorAll('.char-chip').forEach(c => c.classList.remove('active'));
+  _activeChar = same ? null : charName;
+  if (!same) chip.classList.add('active');
+  _applyFilter();
+  const note = document.getElementById('filter-note');
+  note.textContent = _activeChar ? 'Showing: ' + _activeChar + ' — click again to clear' : '';
+}}
+function _applyFilter() {{
+  document.querySelectorAll('#perf-table tbody tr').forEach(row => {{
+    row.style.display = (!_activeChar || row.dataset.char === _activeChar) ? '' : 'none';
+  }});
+}}
+function sortPerfTable(col, th) {{
+  const tbody = document.querySelector('#perf-table tbody');
+  const rows = Array.from(tbody.rows);
+  const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+  document.querySelectorAll('#perf-table th').forEach(t => {{
+    t.dataset.dir = '';
+    const a = t.querySelector('.sarr'); if (a) a.textContent = '▼';
+  }});
+  th.dataset.dir = dir;
+  const arr = th.querySelector('.sarr'); if (arr) arr.textContent = dir === 'asc' ? '▲' : '▼';
+  rows.sort((a, b) => {{
+    const ca = a.cells[col], cb = b.cells[col];
+    const va = (ca?.textContent || '').trim().replace(/%|,/g,'');
+    const vb = (cb?.textContent || '').trim().replace(/%|,/g,'');
+    const na = parseFloat(va), nb = parseFloat(vb);
+    if (!isNaN(na) && !isNaN(nb)) return dir === 'asc' ? na - nb : nb - na;
+    return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  }});
+  rows.forEach(r => tbody.appendChild(r));
+  _applyFilter();
+}}
+</script>
 </body>
 </html>"""
 
