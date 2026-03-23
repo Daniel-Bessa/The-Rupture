@@ -1111,7 +1111,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     title      = ri.get("title", rc) + (f" — {diff_label}" if diff_label else "")
 
     # ── Gear section (Normal or no-diff only) ──
-    show_gear = diff_label in ("Normal", "")  # Heroic/Mythic: skip gear entirely
+    # Heroic/Mythic: no gear. Player-group split pages: no gear (lives in gear_normal.html).
+    show_gear = diff_label in ("Normal", "") and not day_data.get("player_split")
 
     gear_section_html = ""
     gear_tab_html     = ""
@@ -1251,10 +1252,12 @@ h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
 .boss-section-body.collapsed {{ display: none; }}
 /* ── Gear section (Normal) ── */
 .gear-section {{ margin-top: 36px; border-top: 1px solid #2a2a4a; padding-top: 20px; }}
-.gear-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #4caf50; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
+.gear-section-title {{ color: #4caf50; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #4caf50; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
 .gear-section-title:hover {{ background: #1a2236; }}
 .gear-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
 .gear-section-body.collapsed {{ display: none; }}
+.gear-section-body .stat-box .num {{ color: #4caf50; }}
+.gear-section-body th {{ color: #4caf50; }}
 /* ── Stats ── */
 .stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
 .stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
@@ -1473,32 +1476,24 @@ def write_index_html(days_data: list, output_path: str, guild_name: str = "") ->
         diff = day_data.get("difficulty", "")
         date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%B %d, %Y") if ri.get("startTime") else ""
         title    = ri.get("title", rc)
-        suffix   = f"_{diff.lower()}" if diff else ""
-        base_fn  = f"raid_{rc}{suffix}.html"
-
+        filename = _raid_filename(day_data)
         if diff in ("Heroic", "Mythic"):
             label = "HC" if diff == "Heroic" else "Mythic"
             all_cards.append({"diff": diff, "label": label, "date_str": date_str, "title": title,
-                               "filename": base_fn, "boss_count": len(bd), "nm_idx": None, "day_data": day_data})
+                               "filename": filename, "boss_count": len(bd), "nm_idx": None, "day_data": day_data})
         else:
-            # Expand by split (one card per split)
-            splits_bd: dict = {}
-            for boss_name, fights in bd.items():
-                for fight in fights:
-                    snum = fight.get("split_num", 1)
-                    splits_bd.setdefault(snum, set()).add(boss_name)
+            card = {"diff": "Normal", "label": "NM", "date_str": date_str, "title": title,
+                    "filename": filename, "boss_count": len(bd), "nm_idx": None, "day_data": day_data}
+            all_cards.append(card)
+            nm_cards.append(card)
 
-            for snum in sorted(splits_bd):
-                hash_frag = f"#split-{snum}" if len(splits_bd) > 1 else ""
-                card = {"diff": "Normal", "label": "NM", "date_str": date_str, "title": title,
-                        "filename": base_fn + hash_frag, "boss_count": len(splits_bd[snum]),
-                        "nm_idx": None, "day_data": day_data}
-                all_cards.append(card)
-                nm_cards.append(card)
-
-    # Sequential NM numbering (oldest = Run 1)
+    # Sequential NM numbering ordered by date then player_split
     total_nm = len(nm_cards)
-    for i, c in enumerate(nm_cards):
+    nm_ordered = sorted(nm_cards, key=lambda c: (
+        c["day_data"]["report_info"].get("startTime", 0),
+        c["day_data"].get("player_split", 0)
+    ))
+    for i, c in enumerate(nm_ordered):
         c["nm_idx"] = i + 1
         c["label"]  = f"NM · Run {i + 1}"
 
@@ -2646,6 +2641,28 @@ def split_report_by_difficulty(day_data: dict) -> list:
     return results
 
 
+def split_report_by_player_group(day_data: dict) -> list:
+    """If a report has multiple player-group splits, return one day_data per split."""
+    bd = day_data.get("boss_data", {})
+    split_nums = {f.get("split_num", 1) for fights in bd.values() for f in fights}
+    if len(split_nums) <= 1:
+        return [day_data]
+    results = []
+    for snum in sorted(split_nums):
+        filtered_boss = {k: [f for f in v if f.get("split_num", 1) == snum]
+                         for k, v in bd.items()}
+        filtered_boss = {k: v for k, v in filtered_boss.items() if v}
+        results.append({**day_data, "boss_data": filtered_boss, "player_split": snum})
+    return results
+
+
+def _raid_filename(day_data: dict) -> str:
+    rc     = day_data["report_code"]
+    diff   = day_data.get("difficulty", "")
+    psplit = day_data.get("player_split")
+    return f"raid_{rc}{'_' + diff.lower() if diff else ''}{'_split' + str(psplit) if psplit else ''}.html"
+
+
 def main():
     print("=" * 60)
     print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
@@ -2681,7 +2698,8 @@ def main():
     for code in report_codes:
         try:
             result = process_report(token, code, fight_input=fight_mode)
-            days_data.extend(split_report_by_difficulty(result))
+            for r in split_report_by_difficulty(result):
+                days_data.extend(split_report_by_player_group(r))
         except Exception as e:
             print(f"[ERROR] Failed to process report {code}: {e}")
 
@@ -2698,10 +2716,7 @@ def main():
 
     # Per-raid pages
     for day_data in days_data:
-        rc     = day_data["report_code"]
-        diff   = day_data.get("difficulty", "")
-        suffix = f"_{diff.lower()}" if diff else ""
-        write_raid_html(day_data, f"raid_{rc}{suffix}.html")
+        write_raid_html(day_data, _raid_filename(day_data))
 
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
