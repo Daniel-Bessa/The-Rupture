@@ -2145,6 +2145,15 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
 
     profiles = build_player_profiles(days_data)
 
+    # Build per-character class lookup from all actors across all reports
+    char_classes: dict = {}  # char_name_lower -> class_name
+    for day_data in days_data:
+        for actor in day_data.get("actors", []):
+            name = actor.get("name", "")
+            cls  = actor.get("subType", "Unknown")
+            if name and cls != "Unknown":
+                char_classes[name.lower()] = cls
+
     # Build full player list: merge roster.txt with seen-in-reports data
     # PLAYER_ROLES has all players from roster.txt
     all_players = {}
@@ -2199,19 +2208,23 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             cc = data["cls_color"]
             cls_name = data["class"]
 
-            # Build char pills
+            # Build char pills — each char gets its own class color
             chars_html = ""
             for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
-                tag_bg = "#1e3a1e" if mtype == "Main" else "#1a2233"
-                tag_color = "#81c784" if mtype == "Main" else "#7289DA"
-                tag_lbl = "M" if mtype == "Main" else "A"
+                char_cls   = char_classes.get(cname.lower(), "Unknown")
+                char_color = CLASS_COLORS.get(char_cls, "#888")
+                tag_bg     = "#1e3a1e" if mtype == "Main" else "#1a2233"
+                tag_color  = "#81c784" if mtype == "Main" else "#7289DA"
+                tag_lbl    = "M" if mtype == "Main" else "A"
                 chars_html += (f'<span class="char-pill">'
-                               f'<span class="cname-text" style="color:{cc}">{_esc(cname)}</span>'
+                               f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
                                f'<span class="char-type" style="background:{tag_bg};color:{tag_color}">{tag_lbl}</span>'
                                f'</span>')
             for cname in sorted(data["extra_chars"]):
+                char_cls   = char_classes.get(cname.lower(), "Unknown")
+                char_color = CLASS_COLORS.get(char_cls, "#888")
                 chars_html += (f'<span class="char-pill">'
-                               f'<span class="cname-text" style="color:{cc}">{_esc(cname)}</span>'
+                               f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
                                f'<span class="char-type" style="background:#2a1a1a;color:#aaa">?</span>'
                                f'</span>')
 
@@ -2222,7 +2235,7 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             cards_html += (
                 f'<div class="player-card">'
                 f'<div class="card-top">'
-                f'<a href="player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
+                f'<a href="player_{slug}.html" class="card-name">{_esc(pname)}</a>'
                 f'<span class="card-class" style="color:{cc}">{_esc(cls_name)}</span>'
                 f'{seen_badge}'
                 f'</div>'
