@@ -2138,6 +2138,143 @@ h1 {{ color: #7289DA; font-size: 24px; }}
     print(f"[OK] Index page saved: {output_path}")
 
 
+def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write a roster overview page listing all players grouped by role."""
+    from html import escape as _esc
+
+    profiles = build_player_profiles(days_data)
+
+    # Build full player list: merge roster.txt with seen-in-reports data
+    # PLAYER_ROLES has all players from roster.txt
+    all_players = {}
+    for pname, role in PLAYER_ROLES.items():
+        prof = profiles.get(pname, {})
+        cls = prof.get("class", "Unknown")
+        cls_color = CLASS_COLORS.get(cls, "#888")
+
+        # Chars from roster.txt for this player
+        roster_chars = {}  # char_name -> "Main"/"Alt"
+        for char_lower, (rname, mtype) in ROSTER.items():
+            if rname == pname:
+                # Find the properly-cased name from profiles or use as-is
+                char_display = next(
+                    (c for c in prof.get("chars", set()) if c.lower() == char_lower),
+                    char_lower.capitalize()
+                )
+                roster_chars[char_display] = mtype
+
+        # Chars seen in reports but not in roster.txt
+        extra_chars = prof.get("chars", set()) - {c for c in prof.get("chars", set())
+                                                   if c.lower() in {k for k, (n,_) in ROSTER.items() if n == pname}}
+
+        all_players[pname] = {
+            "role": role,
+            "class": cls,
+            "cls_color": cls_color,
+            "roster_chars": roster_chars,
+            "extra_chars": extra_chars,
+            "has_profile": pname in profiles,
+        }
+
+    # Group by role
+    role_order = {"Tank": 0, "Healer": 1, "DPS": 2}
+    grouped = {"Tank": [], "Healer": [], "DPS": []}
+    for pname, data in sorted(all_players.items(), key=lambda x: (role_order.get(x[1]["role"], 3), x[0].lower())):
+        grouped.get(data["role"], grouped["DPS"]).append((pname, data))
+
+    role_colors = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}
+    role_icons  = {"Tank": "🛡", "Healer": "💚", "DPS": "⚔"}
+
+    cards_html = ""
+    for role in ("Tank", "Healer", "DPS"):
+        players = grouped[role]
+        if not players:
+            continue
+        rc = role_colors[role]
+        ri = role_icons[role]
+        cards_html += f'<div class="role-group"><div class="role-group-title" style="color:{rc}">{ri} {role}s</div><div class="player-cards">'
+        for pname, data in players:
+            slug = _player_slug(pname)
+            cc = data["cls_color"]
+            cls_name = data["class"]
+
+            # Build char pills
+            chars_html = ""
+            for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
+                tag_bg = "#1e3a1e" if mtype == "Main" else "#1a2233"
+                tag_color = "#81c784" if mtype == "Main" else "#7289DA"
+                tag_lbl = "M" if mtype == "Main" else "A"
+                chars_html += (f'<span class="char-pill">'
+                               f'<span class="cname-text" style="color:{cc}">{_esc(cname)}</span>'
+                               f'<span class="char-type" style="background:{tag_bg};color:{tag_color}">{tag_lbl}</span>'
+                               f'</span>')
+            for cname in sorted(data["extra_chars"]):
+                chars_html += (f'<span class="char-pill">'
+                               f'<span class="cname-text" style="color:{cc}">{_esc(cname)}</span>'
+                               f'<span class="char-type" style="background:#2a1a1a;color:#aaa">?</span>'
+                               f'</span>')
+
+            seen_badge = ""
+            if not data["has_profile"]:
+                seen_badge = '<span class="unseen-badge">no logs</span>'
+
+            cards_html += (
+                f'<div class="player-card">'
+                f'<div class="card-top">'
+                f'<a href="player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
+                f'<span class="card-class" style="color:{cc}">{_esc(cls_name)}</span>'
+                f'{seen_badge}'
+                f'</div>'
+                f'<div class="card-chars">{chars_html}</div>'
+                f'</div>'
+            )
+        cards_html += '</div></div>'
+
+    title = f"Roster — {guild_name}" if guild_name else "Roster"
+    total_players = len(all_players)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_esc(title)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px 28px}}
+a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
+.page-header{{display:flex;align-items:center;gap:12px;margin-bottom:6px}}
+h1{{color:#7289DA;font-size:22px;font-weight:700}}
+.subtitle{{color:#555;font-size:12px;margin-bottom:28px}}
+.role-group{{margin-bottom:32px}}
+.role-group-title{{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid #1e2a3a}}
+.player-cards{{display:flex;flex-wrap:wrap;gap:10px}}
+.player-card{{background:#0d1525;border:1px solid #1e2a4a;border-radius:8px;padding:12px 14px;min-width:200px;max-width:260px;flex:1}}
+.player-card:hover{{border-color:#2a3a6a;background:#111827}}
+.card-top{{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap}}
+.card-name{{font-size:15px;font-weight:700}}
+.card-class{{font-size:11px;opacity:0.7}}
+.unseen-badge{{font-size:10px;color:#555;background:#111;border:1px solid #222;border-radius:10px;padding:1px 6px;margin-left:auto}}
+.card-chars{{display:flex;flex-wrap:wrap;gap:5px}}
+.char-pill{{display:inline-flex;align-items:center;gap:3px;background:#111827;border-radius:12px;padding:2px 8px 2px 6px;font-size:11px}}
+.cname-text{{font-weight:600}}
+.char-type{{font-size:9px;font-weight:700;border-radius:8px;padding:1px 4px}}
+.back{{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">← Back to Raids</a>
+<div class="page-header"><h1>👥 {_esc(title)}</h1></div>
+<div class="subtitle">{total_players} players</div>
+{cards_html}
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Roster page saved: {output_path}")
+
+
 def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write a consolidated gear page for all Normal runs."""
     normal_days = [d for d in days_data if d.get("difficulty", "") in ("Normal", "")]
@@ -3375,6 +3512,7 @@ def main():
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
+    write_roster_html(days_data, "roster.html", guild_name=guild_name)
     write_player_pages(days_data)
 
     # XLSX: most recent day only
