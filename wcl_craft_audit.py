@@ -126,6 +126,7 @@ def fetch_report_info(token: str, report_code: str) -> dict:
                     encounterID
                     startTime
                     endTime
+                    bossPercentage
                 }
                 masterData(translate: true) {
                     actors(type: "Player") {
@@ -914,60 +915,55 @@ CLASS_COLORS = {
 }
 
 
-def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") -> dict:
+def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None) -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
-    ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
-    results = {}
+    ROLE_ORDER   = {"Tank": 0, "Healer": 1, "DPS": 2}
+    PARSE_COLORS = {99: "#E5CC80", 95: "#FF8000", 75: "#A335EE", 50: "#0070DD", 25: "#1EFF00"}
+    wipe_data    = wipe_data or {}
+    results      = {}
 
     for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
-        table_id = f"boss-tbl-{id_prefix}-{boss_idx}"
+        table_id       = f"boss-tbl-{id_prefix}-{boss_idx}"
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 13 + len(mech_defs) + (1 if has_interrupts else 0)  # base + optional interrupt + mechs + notes
+        total_cols     = 13 + len(mech_defs) + (1 if has_interrupts else 0)
 
-        # Collect all pids across all fights for this boss
         all_pids_set = set()
         for fight in fights:
             all_pids_set.update(fight.get("deaths", {}).keys())
             all_pids_set.update(fight.get("all_player_ids", set()))
 
         def pid_sort(pid):
-            actor = actor_lookup.get(pid, {})
-            char_name = actor.get("name", "")
-            pname, _ = lookup_roster(char_name)
-            role = PLAYER_ROLES.get(pname, "DPS")
+            char_name = actor_lookup.get(pid, {}).get("name", "")
+            pname, _  = lookup_roster(char_name)
+            role      = PLAYER_ROLES.get(pname, "DPS")
             return (ROLE_ORDER.get(role, 2), pname.lower())
 
         sorted_pids = sorted(all_pids_set, key=pid_sort)
 
         def _hfmt(n):
-            return f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000 else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k")
+            return (f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000
+                    else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k"))
 
-        def _split_overview_row(fi, fight, total_cols):
-            sp_dmg  = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
-            sp_heal = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
-            sp_taken= sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
-            sp_dur_s= fight.get("fight_dur_ms", 0) / 1000 or 1
-            sp_dps  = sp_dmg / sp_dur_s
+        def _overview_row(label, fight):
+            sp_dmg   = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
+            sp_heal  = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
+            sp_taken = sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
+            sp_dur_s = fight.get("fight_dur_ms", 0) / 1000 or 1
+            sp_dps   = sp_dmg / sp_dur_s
             sp_m, sp_s = divmod(int(sp_dur_s), 60)
-            dur_str = f"{sp_m}:{sp_s:02d}"
-            inner = (f'<span class="sov-title">Split {fi}</span>'
-                     f'<span class="sov-dur">{dur_str}</span>'
+            inner = (f'<span class="sov-title">{label}</span>'
+                     f'<span class="sov-dur">{sp_m}:{sp_s:02d}</span>'
                      f'<span class="sov-item"><span class="sov-lbl">⚡ Raid DPS</span> <b>{_hfmt(sp_dps)}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>')
             return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
 
-        # ── Frontal failure summary ──
-        all_frontal = []
-        for fight in fights:
-            snum = fight.get("split_num", 1)
-            for f in fight.get("frontal_failures", []):
-                all_frontal.append((snum, f))
-
+        # ── Frontal failure summary (over kills) ──
         frontal_html = ""
+        all_frontal  = [(fight.get("split_num", 1), f) for fight in fights for f in fight.get("frontal_failures", [])]
         if all_frontal:
             rows = ""
             for snum, f in all_frontal:
@@ -978,196 +974,225 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
                          f'<span class="ff-label">{escape(f["label"])}</span> → '
                          f'<span class="ff-primary">{escape(f["primary_player"])}</span>'
                          + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
-                         + f'</div>')
+                         + '</div>')
             frontal_html = (f'<div class="frontal-failures">'
                             f'<div class="ff-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
-                            f'<span class="ff-title">⚠ Frontal Failures</span>'
-                            f'<span class="ff-chevron">▼</span>'
-                            f'</div>'
-                            f'<div class="ff-body open">{rows}</div>'
-                            f'</div>')
+                            f'<span class="ff-title">⚠ Frontal Failures</span><span class="ff-chevron">▼</span></div>'
+                            f'<div class="ff-body open">{rows}</div></div>')
 
-        # ── Avoid failure summary ──
-        avoid_defs = [m for m in mech_defs if m.get("type") == "avoid"]
-        avoid_html = ""
+        # ── Avoid failure summary (over kills) ──
+        avoid_html  = ""
+        avoid_defs  = [m for m in mech_defs if m.get("type") == "avoid"]
         if avoid_defs:
             avoid_labels = {m["label"] for m in avoid_defs}
-            # Aggregate per label → {pid: total_hits} across all fights
-            label_hits = {}  # label -> {pid: count}
+            label_hits: dict = {}
             for fight in fights:
                 for pid, label_counts in fight.get("mechanics_data", {}).items():
-                    for label, count in label_counts.items():
-                        if label in avoid_labels:
-                            label_hits.setdefault(label, {})
-                            label_hits[label][pid] = label_hits[label].get(pid, 0) + count
+                    for lbl, cnt in label_counts.items():
+                        if lbl in avoid_labels:
+                            label_hits.setdefault(lbl, {})[pid] = label_hits.setdefault(lbl, {}).get(pid, 0) + cnt
             if label_hits:
                 rows = ""
                 for m in avoid_defs:
-                    label = m["label"]
-                    if label not in label_hits:
+                    lbl = m["label"]
+                    if lbl not in label_hits:
                         continue
-                    player_hits = sorted(label_hits[label].items(), key=lambda x: -x[1])
                     parts = " · ".join(
                         f'<span class="av-player">{escape(actor_lookup.get(pid, {}).get("name", f"?{pid}"))}</span>'
-                        f'<span class="av-count"> ×{count}</span>'
-                        for pid, count in player_hits
+                        f'<span class="av-count"> ×{cnt}</span>'
+                        for pid, cnt in sorted(label_hits[lbl].items(), key=lambda x: -x[1])
                     )
-                    rows += f'<div class="av-item"><span class="av-label">{escape(label)}</span> → {parts}</div>'
+                    rows += f'<div class="av-item"><span class="av-label">{escape(lbl)}</span> → {parts}</div>'
                 if rows:
                     avoid_html = (f'<div class="avoid-failures">'
                                   f'<div class="av-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
-                                  f'<span class="av-title">⚡ Avoidable Hits</span>'
-                                  f'<span class="av-chevron">▼</span>'
-                                  f'</div>'
-                                  f'<div class="av-body open">{rows}</div>'
-                                  f'</div>')
+                                  f'<span class="av-title">⚡ Avoidable Hits</span><span class="av-chevron">▼</span></div>'
+                                  f'<div class="av-body open">{rows}</div></div>')
 
-        html = frontal_html + avoid_html
-        html += f'<div class="table-wrap"><table id="{table_id}" class="detail-col-hidden"><thead>'
-        html += '<tr>'
-        def _sth(col_idx, label, css="", extra=""):
-            return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
-                    f' onclick="sortBossTable(\'{table_id}\',{col_idx},this)"{extra}>'
-                    f'{label} <span class="sort-arrow">▼</span></th>')
+        # ── Shared table renderer (kills + wipes) ──
+        def _render_table(fights_list, tbl_id, pids=None, show_parse=True):
+            if pids is None:
+                pids = sorted_pids
 
-        html += '<th style="width:10px"></th>'
-        html += _sth(1, 'Player', 'player-header')
-        html += _sth(2, 'Char')
-        html += '<th>Split</th>'
-        html += _sth(4, 'Parse %', 'parse-h')
-        html += _sth(5, 'DPS', 'dmg-h')
-        html += _sth(6, 'Damage', 'dmg-h')
-        html += _sth(7, 'Healing', 'heal-h')
-        html += _sth(8, 'Deaths', 'death-h')
-        html += '<th class="death-h">Killed by (time)</th>'
-        html += _sth(10, 'Dmg Taken', 'dmg-h')
-        html += _sth(11, 'Uptime %', 'uptime-h')
-        if has_interrupts:
-            html += _sth(12, 'Interrupts', 'interrupt-h')
-        for mi, m in enumerate(mech_defs):
-            mech_col_idx = (13 if has_interrupts else 12) + mi
-            css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
-            tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
-            html += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
-                     f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
-                     f' onclick="sortBossTable(\'{table_id}\',{mech_col_idx},this)">'
-                     f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
-        html += '<th>Notes</th>'
-        html += '</tr></thead><tbody>'
+            def _sth(col_idx, lbl, css=""):
+                return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                        f' onclick="sortBossTable(\'{tbl_id}\',{col_idx},this)">'
+                        f'{lbl} <span class="sort-arrow">▼</span></th>')
 
-        PARSE_COLORS = {99:"#E5CC80", 95:"#FF8000", 75:"#A335EE", 50:"#0070DD", 25:"#1EFF00"}
+            t  = f'<div class="table-wrap"><table id="{tbl_id}" class="detail-col-hidden"><thead><tr>'
+            t += '<th style="width:10px"></th>'
+            t += _sth(1, 'Player', 'player-header')
+            t += _sth(2, 'Char')
+            t += '<th>Split</th>'
+            t += (_sth(4, 'Parse %', 'parse-h') if show_parse else '<th class="parse-h">Parse %</th>')
+            t += _sth(5, 'DPS', 'dmg-h')
+            t += _sth(6, 'Damage', 'dmg-h')
+            t += _sth(7, 'Healing', 'heal-h')
+            t += _sth(8, 'Deaths', 'death-h')
+            t += '<th class="death-h">Killed by (time)</th>'
+            t += _sth(10, 'Dmg Taken', 'dmg-h')
+            t += _sth(11, 'Uptime %', 'uptime-h')
+            if has_interrupts:
+                t += _sth(12, 'Interrupts', 'interrupt-h')
+            for mi, m in enumerate(mech_defs):
+                mci = (13 if has_interrupts else 12) + mi
+                css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
+                tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
+                t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                      f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
+                      f' onclick="sortBossTable(\'{tbl_id}\',{mci},this)">'
+                      f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
+            t += '<th>Notes</th></tr></thead><tbody>'
 
-        # Group by split, then role, then player
-        for fi, fight in enumerate(fights, 1):
-            html += _split_overview_row(fi, fight, total_cols)
-            current_role = None
-            for pid in sorted_pids:
-                deaths_map = fight.get("deaths", {})
-                if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
-                    continue
-                actor = actor_lookup.get(pid, {})
-                char_name = actor.get("name", f"ID-{pid}")
-                cls = actor.get("subType", "Unknown")
-                cls_color = CLASS_COLORS.get(cls, "#ccc")
-                pname, _ = lookup_roster(char_name)
-                role = PLAYER_ROLES.get(pname, "DPS")
+            for fi, fight in enumerate(fights_list, 1):
+                row_lbl = fight.get("_row_label") or f"Split {fi}"
+                t += _overview_row(row_lbl, fight)
+                current_role = None
+                for pid in pids:
+                    deaths_map = fight.get("deaths", {})
+                    if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
+                        continue
+                    actor     = actor_lookup.get(pid, {})
+                    char_name = actor.get("name", f"ID-{pid}")
+                    cls       = actor.get("subType", "Unknown")
+                    cls_color = CLASS_COLORS.get(cls, "#ccc")
+                    pname, _  = lookup_roster(char_name)
+                    role      = PLAYER_ROLES.get(pname, "DPS")
 
-                if role != current_role:
-                    current_role = role
-                    html += f'<tr class="role-sep" data-role="{current_role}"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
+                    if role != current_role:
+                        current_role = role
+                        t += f'<tr class="role-sep" data-role="{current_role}"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
 
-                dmg_taken    = fight.get("dmg_taken", {})
-                uptime_map   = fight.get("uptime_map", {})
-                interrupts   = fight.get("interrupts", {})
-                healing_map  = fight.get("healing_map", {})
-                rankings_map = fight.get("rankings_map", {})
-                fight_dur    = fight.get("fight_dur_ms", 0)
-                fight_mechs  = fight.get("mechanics_data", {})
+                    dmg_taken_map = fight.get("dmg_taken", {})
+                    uptime_map    = fight.get("uptime_map", {})
+                    interrupts    = fight.get("interrupts", {})
+                    healing_map   = fight.get("healing_map", {})
+                    rankings_map  = fight.get("rankings_map", {})
+                    fight_dur     = fight.get("fight_dur_ms", 0)
+                    fight_mechs   = fight.get("mechanics_data", {})
 
-                death_list = deaths_map.get(pid, [])
-                d_raw = dmg_taken.get(pid, 0)
-                dmg_str = f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000 else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—")
-                active = uptime_map.get(pid, {}).get("activeTime", 0) if isinstance(uptime_map.get(pid), dict) else 0
-                uptime_str = f"{min(active / fight_dur * 100, 100):.0f}%" if fight_dur > 0 and active > 0 else "—"
-                interrupt_count = interrupts.get(pid, 0)
-                interrupt_str = str(interrupt_count) if interrupt_count > 0 else "—"
-                interrupt_style = (
-                    ' style="background:#1A3A1A"' if interrupt_count > 0
-                    else (' style="background:#5D1A1A"' if has_interrupts else "")
-                )
-                # Parse %
-                parse_pct = rankings_map.get(char_name.lower())
-                if parse_pct is not None:
-                    pc = int(parse_pct)
-                    pc_color = next((v for k, v in sorted(PARSE_COLORS.items(), reverse=True) if pc >= k), "#666")
-                    parse_cell = f'<span style="color:{pc_color};font-weight:600">{pc}</span>'
-                else:
-                    parse_cell = "—"
+                    death_list = deaths_map.get(pid, [])
+                    d_raw      = dmg_taken_map.get(pid, 0)
+                    dmg_str    = (f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000
+                                  else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—"))
+                    active     = (uptime_map.get(pid, {}).get("activeTime", 0)
+                                  if isinstance(uptime_map.get(pid), dict) else 0)
+                    uptime_str = (f"{min(active / fight_dur * 100, 100):.0f}%"
+                                  if fight_dur > 0 and active > 0 else "—")
+                    int_count  = interrupts.get(pid, 0)
+                    int_str    = str(int_count) if int_count > 0 else "—"
+                    int_style  = (' style="background:#1A3A1A"' if int_count > 0
+                                  else (' style="background:#5D1A1A"' if has_interrupts else ""))
 
-                dmg_done_raw = uptime_map.get(pid, {}).get("total", 0) if isinstance(uptime_map.get(pid), dict) else 0
-                dmg_done_str = _hfmt(dmg_done_raw) if dmg_done_raw > 0 else "—"
-                fight_dur_s  = fight_dur / 1000 if fight_dur > 0 else 1
-                dps_raw      = dmg_done_raw / fight_dur_s if dmg_done_raw > 0 else 0
-                dps_str      = _hfmt(dps_raw) if dps_raw > 0 else "—"
-                heal_raw = healing_map.get(pid, 0)
-                heal_str = _hfmt(heal_raw) if heal_raw > 0 else "—"
-
-                death_count = len(death_list)
-                killed_str = "<br>".join(f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)' for d in death_list) or "—"
-
-                # Build pre-death timeline tooltip HTML
-                death_tip_html = ""
-                if death_list:
-                    parts = []
-                    for d in death_list:
-                        tl = d.get("timeline", [])
-                        block = f"<b style='color:#e57373'>☠ {escape(d['ability'])}</b> @ {escape(d['time'])} ({d.get('fight_pct',0)}%)"
-                        if tl:
-                            rows = []
-                            for t in tl:
-                                is_killing = abs(t["sec_before"]) < 0.05
-                                color = "#ff6b6b" if is_killing else "#aaa"
-                                label = " ← killing blow" if is_killing else f"-{t['sec_before']:.1f}s"
-                                rows.append(f"<span style='color:{color}'>{escape(t['ability'])}: {escape(t['amount_k'])} &nbsp;<span style='color:#666;font-size:11px'>{label}</span></span>")
-                            block += "<br>" + "<br>".join(rows)
-                        parts.append(block)
-                    death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
-
-                row_cls = "boss-death-row" if death_count > 0 else ""
-
-                html += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
-                html += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
-                html += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
-                html += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
-                html += f'<td class="center">Split {fi}</td>'
-                html += f'<td class="center parse-h">{parse_cell}</td>'
-                html += f'<td class="center dmg-h">{dps_str}</td>'
-                html += f'<td class="center dmg-h">{dmg_done_str}</td>'
-                html += f'<td class="center heal-h">{heal_str}</td>'
-                if death_count > 0 and death_tip_html:
-                    tip_attr = death_tip_html.replace("'", "&#39;")
-                    html += f'<td class="center death-h" style="cursor:help" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"><span class="death-num">{death_count}</span></td>'
-                    html += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
-                else:
-                    html += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
-                    html += f'<td class="death-h">{killed_str}</td>'
-                html += f'<td class="center dmg-h">{dmg_str}</td>'
-                html += f'<td class="center uptime-h">{uptime_str}</td>'
-                if has_interrupts:
-                    html += f'<td class="center interrupt-h"{interrupt_style}>{interrupt_str}</td>'
-                pid_mechs = fight_mechs.get(pid, {})
-                for m in mech_defs:
-                    count = pid_mechs.get(m["label"], 0)
-                    if count:
-                        bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                        html += f'<td class="center" style="background:{bg}">{count}</td>'
+                    parse_pct = rankings_map.get(char_name.lower())
+                    if parse_pct is not None:
+                        pc = int(parse_pct)
+                        pc_color   = next((v for k, v in sorted(PARSE_COLORS.items(), reverse=True) if pc >= k), "#666")
+                        parse_cell = f'<span style="color:{pc_color};font-weight:600">{pc}</span>'
                     else:
-                        html += '<td class="center">—</td>'
-                html += '<td></td>'
-                html += '</tr>'
+                        parse_cell = "—"
 
-        html += '</tbody></table></div>'
-        results[boss_name] = html
+                    dmg_done_raw = (uptime_map.get(pid, {}).get("total", 0)
+                                    if isinstance(uptime_map.get(pid), dict) else 0)
+                    dmg_done_str = _hfmt(dmg_done_raw) if dmg_done_raw > 0 else "—"
+                    fight_dur_s  = fight_dur / 1000 if fight_dur > 0 else 1
+                    dps_str      = _hfmt(dmg_done_raw / fight_dur_s) if dmg_done_raw > 0 else "—"
+                    heal_raw     = healing_map.get(pid, 0)
+                    heal_str     = _hfmt(heal_raw) if heal_raw > 0 else "—"
+                    death_count  = len(death_list)
+                    killed_str   = ("<br>".join(
+                        f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)'
+                        for d in death_list) or "—")
+
+                    death_tip_html = ""
+                    if death_list:
+                        parts = []
+                        for d in death_list:
+                            tl    = d.get("timeline", [])
+                            block = f"<b style='color:#e57373'>☠ {escape(d['ability'])}</b> @ {escape(d['time'])} ({d.get('fight_pct',0)}%)"
+                            if tl:
+                                trows = []
+                                for tt in tl:
+                                    ik    = abs(tt["sec_before"]) < 0.05
+                                    col   = "#ff6b6b" if ik else "#aaa"
+                                    lbl   = " ← killing blow" if ik else f"-{tt['sec_before']:.1f}s"
+                                    trows.append(f"<span style='color:{col}'>{escape(tt['ability'])}: {escape(tt['amount_k'])} &nbsp;<span style='color:#666;font-size:11px'>{lbl}</span></span>")
+                                block += "<br>" + "<br>".join(trows)
+                            parts.append(block)
+                        death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
+
+                    row_cls = "boss-death-row" if death_count > 0 else ""
+                    t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
+                    t += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
+                    t += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
+                    t += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
+                    t += f'<td class="center">Split {fi}</td>'
+                    t += f'<td class="center parse-h">{parse_cell}</td>'
+                    t += f'<td class="center dmg-h">{dps_str}</td>'
+                    t += f'<td class="center dmg-h">{dmg_done_str}</td>'
+                    t += f'<td class="center heal-h">{heal_str}</td>'
+                    if death_count > 0 and death_tip_html:
+                        tip_attr = death_tip_html.replace("'", "&#39;")
+                        t += f'<td class="center death-h" style="cursor:help" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"><span class="death-num">{death_count}</span></td>'
+                        t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
+                    else:
+                        t += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
+                        t += f'<td class="death-h">{killed_str}</td>'
+                    t += f'<td class="center dmg-h">{dmg_str}</td>'
+                    t += f'<td class="center uptime-h">{uptime_str}</td>'
+                    if has_interrupts:
+                        t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
+                    pid_mechs = fight_mechs.get(pid, {})
+                    for m in mech_defs:
+                        cnt = pid_mechs.get(m["label"], 0)
+                        if cnt:
+                            bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                            t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                        else:
+                            t += '<td class="center">—</td>'
+                    t += '<td></td></tr>'
+
+            t += '</tbody></table></div>'
+            return t
+
+        # ── Kill table ──
+        kill_table = _render_table(fights, table_id)
+
+        # ── Pull selector + wipe panes (if wipes exist for this boss) ──
+        boss_wipes = wipe_data.get(boss_name, [])  # oldest → newest
+
+        if boss_wipes:
+            total_wipes = len(boss_wipes)
+            # Annotate wipes with display labels (oldest = Wipe 1)
+            for wi, w in enumerate(boss_wipes):
+                bpct  = w.get("boss_pct", 0)
+                dur_s = w.get("fight_dur_ms", 0) // 1000
+                wm, ws = divmod(dur_s, 60)
+                w["_row_label"] = f"💀 Wipe {wi + 1} — {bpct}% boss HP · {wm}:{ws:02d}"
+
+            kill_dur_s = fights[0].get("fight_dur_ms", 0) // 1000 if fights else 0
+            km, ks     = divmod(kill_dur_s, 60)
+            pull_btns  = f'<button class="pull-btn active" onclick="switchPull(this,\'{table_id}\')">⚔ Kill · {km}:{ks:02d}</button>'
+
+            wipe_panes = ""
+            for wi, w in enumerate(reversed(boss_wipes)):  # newest first in selector
+                actual_wipe_num = total_wipes - wi          # 1-based, newest = total_wipes
+                bpct    = w.get("boss_pct", 0)
+                dur_s   = w.get("fight_dur_ms", 0) // 1000
+                wm, ws  = divmod(dur_s, 60)
+                wtbl_id = f"wipe-{table_id}-{wi}"
+                pull_btns += f'<button class="pull-btn wipe" onclick="switchPull(this,\'{wtbl_id}\')">Wipe {actual_wipe_num} · {bpct}% · {wm}:{ws:02d}</button>'
+                wipe_pids = sorted(
+                    all_pids_set | {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
+                    key=pid_sort
+                )
+                wipe_panes += f'<div class="pull-pane" id="pane-{wtbl_id}">{_render_table([w], wtbl_id, pids=wipe_pids, show_parse=False)}</div>'
+
+            pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
+            kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_table}</div>'
+            results[boss_name] = frontal_html + avoid_html + pull_selector + kill_pane + wipe_panes
+        else:
+            results[boss_name] = frontal_html + avoid_html + kill_table
 
     return results
 
@@ -1366,7 +1391,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     split_divs  = ""
     for si, snum in enumerate(sorted(splits_boss_data)):
         split_bd   = splits_boss_data[snum]
-        boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"s{snum}")
+        boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"s{snum}",
+                                      wipe_data=day_data.get("wipe_data", {}))
         split_html = "".join(
             f'<div class="boss-section"><div class="boss-section-title" onclick="toggleBoss(this)">⚔ {escape(bn)} <span class="boss-toggle-arrow">▼</span></div><div class="boss-section-body">{bh}</div></div>'
             for bn, bh in boss_htmls.items()
@@ -1512,6 +1538,14 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
+/* ── Pull selector ── */
+.pull-selector {{ display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }}
+.pull-btn {{ background: #16213e; color: #888; border: 1px solid #2a2a4a; padding: 4px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.15s; }}
+.pull-btn:hover {{ color: #bbb; }}
+.pull-btn.active {{ background: #1a3a2a; color: #4caf50; border-color: #4caf50; font-weight: 600; }}
+.pull-btn.wipe.active {{ background: #3a1a1a; color: #e57373; border-color: #e57373; }}
+.pull-pane {{ display: none; }}
+.pull-pane.active {{ display: block; }}
 {_FILTER_BAR_CSS}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
@@ -1545,6 +1579,14 @@ window.addEventListener('DOMContentLoaded', () => {{
   if (h) switchTabByName(h);
   document.querySelectorAll('[id^="class-tags-"]').forEach(el => buildClassTags(el.id.replace('class-tags-', '')));
 }});
+function switchPull(btn, paneId) {{
+  const body = btn.closest('.boss-section-body') || btn.closest('.pull-selector').parentElement;
+  body.querySelectorAll('.pull-btn').forEach(b => b.classList.remove('active'));
+  body.querySelectorAll('.pull-pane').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  const pane = document.getElementById('pane-' + paneId);
+  if (pane) pane.classList.add('active');
+}}
 function toggleBoss(titleEl) {{
   titleEl.classList.toggle('collapsed');
   titleEl.nextElementSibling.classList.toggle('collapsed');
@@ -2611,8 +2653,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
     guild_name = report_info.get("guild", {}).get("name", "") if report_info.get("guild") else ""
     print(f"[OK] Report: {report_info.get('title', 'Untitled')} ({guild_name})")
 
-    all_raw_fights = report_info.get("fights", [])
-    all_fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
+    all_raw_fights  = report_info.get("fights", [])
+    all_fights      = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
+    all_wipe_fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and not f.get("kill")]
     selected_fights = all_fights
 
     if all_fights:
@@ -2748,10 +2791,59 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
         except Exception as e:
             print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
+    # ── Wipe analysis ──
+    wipe_data: dict = {}
+    if all_wipe_fights:
+        print(f"\n[...] Fetching wipe events ({len(all_wipe_fights)} wipe(s))...")
+        encounter_wipe_count: dict = {}
+        for fight in sorted(all_wipe_fights, key=lambda f: f["id"]):
+            fid   = fight["id"]
+            fname = fight["name"]
+            eid   = fight.get("encounterID", 0)
+            diff  = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(fight.get("difficulty", 0), "")
+            boss_key = f"{fname} ({diff})"
+            encounter_wipe_count[eid] = encounter_wipe_count.get(eid, 0) + 1
+            wipe_num     = encounter_wipe_count[eid]
+            boss_pct     = fight.get("bossPercentage", 0)
+            fight_start  = fight.get("startTime", 0)
+            fight_dur_ms = fight.get("endTime", 0) - fight_start
+            try:
+                death_events     = fetch_death_events(token, report_code, fid)
+                damage_events    = fetch_damage_taken_events(token, report_code, fid)
+                interrupt_events = fetch_interrupt_events(token, report_code, fid)
+                cast_events      = fetch_boss_cast_events(token, report_code, fid)
+                deaths           = analyze_deaths(death_events, fight_start, ability_names,
+                                                  fight_end_ms=fight_dur_ms, damage_events=damage_events)
+                avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start,
+                                                            ability_names, player_max_hp, player_roles_map)
+                dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
+                uptime_map       = fetch_uptime_table(token, report_code, fid)
+                healing_map      = fetch_healing_table(token, report_code, fid)
+                interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
+                mech_defs        = BOSS_MECHANICS.get(fname, [])
+                mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
+                frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs,
+                                                            fight_start, cast_events=cast_events)
+                all_pids = {pid for pid in (set(dmg_taken) | set(uptime_map) | set(deaths)) if pid in actor_lookup}
+                wipe_data.setdefault(boss_key, []).append({
+                    "fight_id": fid, "fight_dur_ms": fight_dur_ms,
+                    "wipe_num": wipe_num, "boss_pct": boss_pct,
+                    "deaths": deaths, "all_player_ids": all_pids,
+                    "avoidable_damage": avoidable, "dmg_taken": dmg_taken,
+                    "uptime_map": uptime_map, "healing_map": healing_map,
+                    "rankings_map": {},  # wipes have no rankings
+                    "interrupts": interrupts, "mechanics_data": mechanics_data,
+                    "frontal_failures": frontal_failures,
+                })
+                dur_s = fight_dur_ms // 1000
+                print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
+            except Exception as e:
+                print(f"  [WARN] Could not fetch wipe events for fight {fid}: {e}")
+
     result = {
         "report_code": report_code, "report_info": report_info,
         "records": records, "split_data": split_data,
-        "boss_data": boss_data, "actors": actors,
+        "boss_data": boss_data, "wipe_data": wipe_data, "actors": actors,
         "max_splits": max_splits,
     }
     cache = _cache_path(report_code)
@@ -2769,9 +2861,10 @@ def split_report_by_difficulty(day_data: dict) -> list:
         return [day_data]
     results = []
     for diff in diffs_present:
-        filtered_boss = {k: [dict(f, split_num=1) for f in v]
-                         for k, v in day_data["boss_data"].items() if f"({diff})" in k}
-        results.append({**day_data, "boss_data": filtered_boss, "difficulty": diff})
+        filtered_boss  = {k: [dict(f, split_num=1) for f in v]
+                          for k, v in day_data["boss_data"].items() if f"({diff})" in k}
+        filtered_wipes = {k: v for k, v in day_data.get("wipe_data", {}).items() if f"({diff})" in k}
+        results.append({**day_data, "boss_data": filtered_boss, "wipe_data": filtered_wipes, "difficulty": diff})
     return results
 
 
@@ -2786,7 +2879,8 @@ def split_report_by_player_group(day_data: dict) -> list:
         filtered_boss = {k: [f for f in v if f.get("split_num", 1) == snum]
                          for k, v in bd.items()}
         filtered_boss = {k: v for k, v in filtered_boss.items() if v}
-        results.append({**day_data, "boss_data": filtered_boss, "player_split": snum})
+        results.append({**day_data, "boss_data": filtered_boss,
+                        "wipe_data": day_data.get("wipe_data", {}), "player_split": snum})
     return results
 
 
