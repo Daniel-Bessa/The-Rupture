@@ -2202,7 +2202,8 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             continue
         rc = role_colors[role]
         ri = role_icons[role]
-        cards_html += f'<div class="role-group"><div class="role-group-title" style="color:{rc}">{ri} {role}s</div><div class="player-cards">'
+        role_label = role if role == "DPS" else f"{role}s"
+        cards_html += f'<div class="role-group"><div class="role-group-title" style="color:{rc}">{ri} {role_label}</div><div class="player-cards">'
         for pname, data in players:
             slug = _player_slug(pname)
             cc = data["cls_color"]
@@ -2235,8 +2236,7 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             cards_html += (
                 f'<div class="player-card">'
                 f'<div class="card-top">'
-                f'<a href="player_{slug}.html" class="card-name">{_esc(pname)}</a>'
-                f'<span class="card-class" style="color:{cc}">{_esc(cls_name)}</span>'
+                f'<a href="player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
                 f'{seen_badge}'
                 f'</div>'
                 f'<div class="card-chars">{chars_html}</div>'
