@@ -7,9 +7,12 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }
-h1 { color: #7289DA; font-size: 24px; margin-bottom: 4px; }
+.page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+h1 { color: #7289DA; font-size: 24px; }
+.gear-link { color: #4caf50; font-size: 20px; text-decoration: none; line-height: 1; }
+.gear-link:hover { color: #81c784; }
 .subtitle { color: #555; font-size: 13px; margin-bottom: 28px; }
-.raid-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+.raid-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
 .raid-card { background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }
 .raid-card:hover { border-color: #7289DA; transform: translateY(-2px); }
 .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
@@ -27,12 +30,13 @@ h1 { color: #7289DA; font-size: 24px; margin-bottom: 4px; }
 </style>
 </head>
 <body>
-<h1>Raid Audit — The Rupture</h1>
-<div class="subtitle">3 raids tracked</div>
+<div class="page-header"><h1>Raid Audit — The Rupture</h1><a href="gear_normal.html" class="gear-link" title="Crafted Gear — All Normal Runs">⚙</a></div>
+<div class="subtitle">4 entries tracked</div>
 <div class="raid-grid">
-<a class="raid-card" href="raid_1ZHFrnKkJDM9xyf6_normal.html">  <div class="card-top">    <div class="card-date">March 22, 2026</div>    <div class="card-badges"><span class="badge-diff badge-normal">Normal</span><span class="badge-recent">Most Recent</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 7 bosses killed</span>    <span>&#x21C6; 1 split</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
-<a class="raid-card" href="raid_1ZHFrnKkJDM9xyf6_heroic.html">  <div class="card-top">    <div class="card-date">March 22, 2026</div>    <div class="card-badges"><span class="badge-diff badge-heroic">Heroic</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 6 bosses killed</span>    <span>&#x21C6; 1 split</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
-<a class="raid-card" href="raid_nVDTzm7qpMxBj8AK.html">  <div class="card-top">    <div class="card-date">March 19, 2026</div>    <div class="card-badges"><span class="badge-diff badge-normal">Normal</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 7 bosses killed</span>    <span>&#x21C6; 2 splits</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
+<a class="raid-card" href="raid_1ZHFrnKkJDM9xyf6_normal.html">  <div class="card-top">    <div class="card-date">March 22, 2026</div>    <div class="card-badges"><span class="badge-diff badge-normal">NM · Run 3</span><span class="badge-recent">Most Recent</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 7 bosses killed</span>    <span>Run 3 of 3</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
+<a class="raid-card" href="raid_1ZHFrnKkJDM9xyf6_heroic.html">  <div class="card-top">    <div class="card-date">March 22, 2026</div>    <div class="card-badges"><span class="badge-diff badge-heroic">HC</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 6 bosses killed</span>      </div>  <div class="card-link">View Report &#8594;</div></a>
+<a class="raid-card" href="raid_nVDTzm7qpMxBj8AK.html#split-1">  <div class="card-top">    <div class="card-date">March 19, 2026</div>    <div class="card-badges"><span class="badge-diff badge-normal">NM · Run 1</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 7 bosses killed</span>    <span>Run 1 of 3</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
+<a class="raid-card" href="raid_nVDTzm7qpMxBj8AK.html#split-2">  <div class="card-top">    <div class="card-date">March 19, 2026</div>    <div class="card-badges"><span class="badge-diff badge-normal">NM · Run 2</span></div>  </div>  <div class="card-title">VS / DR / MQD</div>  <div class="card-stats">    <span>&#9876; 7 bosses killed</span>    <span>Run 2 of 3</span>  </div>  <div class="card-link">View Report &#8594;</div></a>
 </div>
 </body>
 </html>

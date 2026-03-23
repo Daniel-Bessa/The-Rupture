@@ -161,12 +161,20 @@ th[data-sortable]:hover .sort-arrow { opacity: 1; }
 
 
 <script>
-function switchTab(name, btn) {
+function switchTabByName(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
+  const el = document.getElementById('tab-' + name);
+  if (!el) return;
+  el.classList.add('active');
+  const btn = [...document.querySelectorAll('.tab-btn')].find(b => (b.getAttribute('onclick') || '').includes("'" + name + "'"));
+  if (btn) btn.classList.add('active');
 }
+function switchTab(name, btn) { switchTabByName(name); }
+window.addEventListener('DOMContentLoaded', () => {
+  const h = location.hash.replace('#', '');
+  if (h) switchTabByName(h);
+});
 function toggleBoss(titleEl) {
   titleEl.classList.toggle('collapsed');
   titleEl.nextElementSibling.classList.toggle('collapsed');

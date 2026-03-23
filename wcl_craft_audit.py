@@ -1366,12 +1366,20 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 {split_divs}
 {gear_section_html}
 <script>
-function switchTab(name, btn) {{
+function switchTabByName(name) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
+  const el = document.getElementById('tab-' + name);
+  if (!el) return;
+  el.classList.add('active');
+  const btn = [...document.querySelectorAll('.tab-btn')].find(b => (b.getAttribute('onclick') || '').includes("'" + name + "'"));
+  if (btn) btn.classList.add('active');
 }}
+function switchTab(name, btn) {{ switchTabByName(name); }}
+window.addEventListener('DOMContentLoaded', () => {{
+  const h = location.hash.replace('#', '');
+  if (h) switchTabByName(h);
+}});
 function toggleBoss(titleEl) {{
   titleEl.classList.toggle('collapsed');
   titleEl.nextElementSibling.classList.toggle('collapsed');
@@ -1447,56 +1455,78 @@ function sortBossTable(tableId, colIdx, thEl) {{
 
 
 def write_index_html(days_data: list, output_path: str, guild_name: str = "") -> None:
-    """Write the overview index.html with one card per raid day."""
+    """Write the overview index.html.
+    Normal splits are expanded into individual cards (numbered Run 1, Run 2, …).
+    Heroic/Mythic get one card each.
+    """
+    diff_cls_map = {"Normal": "badge-normal", "Heroic": "badge-heroic", "Mythic": "badge-mythic"}
 
-    def _card(day_data: dict, is_first: bool) -> str:
-        ri  = day_data["report_info"]
-        rc  = day_data["report_code"]
-        bd  = day_data["boss_data"]
+    # ── Build card descriptors (oldest→newest for NM numbering) ──
+    sorted_asc = sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0))
+    nm_cards   = []   # Normal-split cards only, in chronological order
+    all_cards  = []   # every card
+
+    for day_data in sorted_asc:
+        ri   = day_data["report_info"]
+        rc   = day_data["report_code"]
+        bd   = day_data["boss_data"]
+        diff = day_data.get("difficulty", "")
         date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%B %d, %Y") if ri.get("startTime") else ""
         title    = ri.get("title", rc)
-        forced_diff = day_data.get("difficulty", "")
-        suffix      = f"_{forced_diff.lower()}" if forced_diff else ""
-        filename    = f"raid_{rc}{suffix}.html"
+        suffix   = f"_{diff.lower()}" if diff else ""
+        base_fn  = f"raid_{rc}{suffix}.html"
 
-        # Difficulty badge
-        if forced_diff:
-            diff = forced_diff
+        if diff in ("Heroic", "Mythic"):
+            label = "HC" if diff == "Heroic" else "Mythic"
+            all_cards.append({"diff": diff, "label": label, "date_str": date_str, "title": title,
+                               "filename": base_fn, "boss_count": len(bd), "nm_idx": None, "day_data": day_data})
         else:
-            diff_tags: set = set()
-            for bn in bd:
-                if "(Mythic)" in bn:   diff_tags.add("Mythic")
-                elif "(Heroic)" in bn: diff_tags.add("Heroic")
-                else:                  diff_tags.add("Normal")
-            diff = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
-        diff_cls = {"Normal": "badge-normal", "Heroic": "badge-heroic", "Mythic": "badge-mythic"}.get(diff, "badge-normal")
+            # Expand by split (one card per split)
+            splits_bd: dict = {}
+            for boss_name, fights in bd.items():
+                for fight in fights:
+                    snum = fight.get("split_num", 1)
+                    splits_bd.setdefault(snum, set()).add(boss_name)
 
-        # Boss count + max splits
-        boss_count = len(bd)
-        max_splits = 1
-        for fights in bd.values():
-            for f in fights:
-                max_splits = max(max_splits, f.get("split_num", 1))
+            for snum in sorted(splits_bd):
+                hash_frag = f"#split-{snum}" if len(splits_bd) > 1 else ""
+                card = {"diff": "Normal", "label": "NM", "date_str": date_str, "title": title,
+                        "filename": base_fn + hash_frag, "boss_count": len(splits_bd[snum]),
+                        "nm_idx": None, "day_data": day_data}
+                all_cards.append(card)
+                nm_cards.append(card)
 
+    # Sequential NM numbering (oldest = Run 1)
+    total_nm = len(nm_cards)
+    for i, c in enumerate(nm_cards):
+        c["nm_idx"] = i + 1
+        c["label"]  = f"NM · Run {i + 1}"
+
+    # Display order: newest first
+    all_cards.sort(key=lambda c: c["day_data"]["report_info"].get("startTime", 0), reverse=True)
+
+    def _card(c: dict, is_first: bool) -> str:
+        diff_cls     = diff_cls_map.get(c["diff"], "badge-normal")
         recent_badge = '<span class="badge-recent">Most Recent</span>' if is_first else ""
-        splits_str   = f"{max_splits} split{'s' if max_splits > 1 else ''}" if max_splits > 1 else "1 split"
+        sub = f'<span>Run {c["nm_idx"]} of {total_nm}</span>' if c["nm_idx"] else ""
         return (
-            f'<a class="raid-card" href="{filename}">'
+            f'<a class="raid-card" href="{c["filename"]}">'
             f'  <div class="card-top">'
-            f'    <div class="card-date">{escape(date_str)}</div>'
-            f'    <div class="card-badges"><span class="badge-diff {diff_cls}">{diff}</span>{recent_badge}</div>'
+            f'    <div class="card-date">{escape(c["date_str"])}</div>'
+            f'    <div class="card-badges"><span class="badge-diff {diff_cls}">{escape(c["label"])}</span>{recent_badge}</div>'
             f'  </div>'
-            f'  <div class="card-title">{escape(title)}</div>'
+            f'  <div class="card-title">{escape(c["title"])}</div>'
             f'  <div class="card-stats">'
-            f'    <span>&#9876; {boss_count} boss{"es" if boss_count != 1 else ""} killed</span>'
-            f'    <span>&#x21C6; {splits_str}</span>'
+            f'    <span>&#9876; {c["boss_count"]} boss{"es" if c["boss_count"] != 1 else ""} killed</span>'
+            f'    {sub}'
             f'  </div>'
             f'  <div class="card-link">View Report &#8594;</div>'
             f'</a>'
         )
 
-    cards_html = "\n".join(_card(d, i == 0) for i, d in enumerate(days_data))
-    total_raids = len(days_data)
+    cards_html  = "\n".join(_card(c, i == 0) for i, c in enumerate(all_cards))
+    total_cards = len(all_cards)
+    gear_link   = '<a href="gear_normal.html" class="gear-link" title="Crafted Gear — All Normal Runs">⚙</a>' if nm_cards else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1507,9 +1537,12 @@ def write_index_html(days_data: list, output_path: str, guild_name: str = "") ->
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
-h1 {{ color: #7289DA; font-size: 24px; margin-bottom: 4px; }}
+.page-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }}
+h1 {{ color: #7289DA; font-size: 24px; }}
+.gear-link {{ color: #4caf50; font-size: 20px; text-decoration: none; line-height: 1; }}
+.gear-link:hover {{ color: #81c784; }}
 .subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
-.raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }}
+.raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }}
 .raid-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
 .raid-card:hover {{ border-color: #7289DA; transform: translateY(-2px); }}
 .card-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }}
@@ -1527,8 +1560,8 @@ h1 {{ color: #7289DA; font-size: 24px; margin-bottom: 4px; }}
 </style>
 </head>
 <body>
-<h1>Raid Audit — {escape(guild_name)}</h1>
-<div class="subtitle">{total_raids} raid{"s" if total_raids != 1 else ""} tracked</div>
+<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}</div>
+<div class="subtitle">{total_cards} entr{"ies" if total_cards != 1 else "y"} tracked</div>
 <div class="raid-grid">
 {cards_html}
 </div>
@@ -1538,6 +1571,128 @@ h1 {{ color: #7289DA; font-size: 24px; margin-bottom: 4px; }}
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[OK] Index page saved: {output_path}")
+
+
+def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write a consolidated gear page for all Normal runs."""
+    normal_days = [d for d in days_data if d.get("difficulty", "") in ("Normal", "")]
+    if not normal_days:
+        return
+
+    players: dict = {}
+    for day_data in sorted(normal_days, key=lambda d: d["report_info"].get("startTime", 0)):
+        for rec in day_data["records"]:
+            p = rec["player"]
+            if p not in players:
+                players[p] = {"class": rec["class"], "items": []}
+            if rec["item_id"] != 0:
+                existing = {r["item_id"] for r in players[p]["items"]}
+                if rec["item_id"] not in existing:
+                    players[p]["items"].append(rec)
+
+    max_items     = max((len(p["items"]) for p in players.values()), default=2)
+    max_items     = max(max_items, 2)
+    total_players = len(players)
+    total_crafted = sum(len(p["items"]) for p in players.values())
+    no_craft      = sum(1 for p in players.values() if not p["items"])
+
+    gear_rows = ""
+    for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
+        cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
+        row_class = "no-craft" if not pdata["items"] else ""
+        row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
+        for i in range(max_items):
+            div = ' divider' if i > 0 else ''
+            if i < len(pdata["items"]):
+                item = pdata["items"][i]
+                iid  = item["item_id"]
+                spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
+                spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
+                item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
+                row += f'<td class="item-cell{div}">{item_link}</td><td>{escape(item["slot"])}</td>'
+                row += f'<td class="center">{item["item_level"]}</td><td>{escape(item["craft_rank"])}</td>'
+                row += f'<td class="center {spark_cls}">{spark_txt}</td>'
+            else:
+                row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
+        row += '</tr>'
+        gear_rows += row
+
+    gear_header = '<th class="player-header">Player</th>'
+    for i in range(max_items):
+        div = ' divider' if i > 0 else ''
+        gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+
+    nm_runs = len(normal_days)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crafted Gear — {escape(guild_name)}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
+.page-header {{ display: flex; align-items: center; gap: 16px; margin-bottom: 4px; }}
+h1 {{ color: #4caf50; font-size: 22px; }}
+.back-link {{ color: #7289DA; font-size: 13px; text-decoration: none; }}
+.back-link:hover {{ text-decoration: underline; }}
+.subtitle {{ color: #555; font-size: 13px; margin-bottom: 24px; }}
+.stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
+.stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
+.stat-box .num {{ font-size: 24px; font-weight: bold; color: #4caf50; }}
+.stat-box .label {{ font-size: 11px; color: #888; text-transform: uppercase; }}
+.stat-box.warn .num {{ color: #ffc107; }}
+.search-box {{ margin: 0 0 12px; }}
+.search-box input {{ background: #16213e; border: 1px solid #2a2a4a; color: #e0e0e0; padding: 7px 14px; border-radius: 6px; width: 280px; font-size: 13px; }}
+.search-box input::placeholder {{ color: #555; }}
+.table-wrap {{ overflow-x: auto; border-radius: 8px; }}
+table {{ border-collapse: collapse; min-width: 100%; }}
+th {{ background: #16213e; color: #4caf50; padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; z-index: 1; }}
+th.player-header {{ position: sticky; left: 0; z-index: 2; background: #16213e; min-width: 140px; }}
+td {{ padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; white-space: nowrap; }}
+td.player-cell {{ position: sticky; left: 0; background: #0d1117; font-weight: 600; z-index: 1; }}
+tr:hover td {{ background: rgba(255,255,255,0.04); }}
+tr.no-craft td {{ opacity: 0.45; }}
+td.empty {{ color: #333; }}
+td.item-cell a {{ color: #a0b4ff; text-decoration: none; }}
+td.item-cell a:hover {{ text-decoration: underline; }}
+td.divider {{ border-left: 1px solid #2a2a4a; }}
+td.center {{ text-align: center; }}
+.spark-yes {{ color: #ffc107; font-weight: 700; }}
+</style>
+</head>
+<body>
+<div class="page-header">
+  <h1>⚙ Crafted Gear — All Normal Runs</h1>
+  <a href="index.html" class="back-link">← Back to Index</a>
+</div>
+<div class="subtitle">Compiled across {nm_runs} Normal run{"s" if nm_runs != 1 else ""}</div>
+<div class="stats">
+  <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
+  <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
+  <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
+</div>
+<div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterGear(this)"></div>
+<div class="table-wrap">
+  <table id="gear-table">
+    <thead><tr>{gear_header}</tr></thead>
+    <tbody>{gear_rows}</tbody>
+  </table>
+</div>
+<script>
+function filterGear(input) {{
+  const filter = input.value.toLowerCase();
+  for (let row of document.getElementById('gear-table').tBodies[0].rows)
+    row.style.display = row.cells[0].textContent.toLowerCase().includes(filter) ? '' : 'none';
+}}
+</script>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Gear overview saved: {output_path}")
 
 
 # ─── Roster Mapping (The Rupture) ────────────────────────────────────────────
@@ -2548,6 +2703,7 @@ def main():
 
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
+    write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
 
     # XLSX: most recent day only
     first = days_data[0]
