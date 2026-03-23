@@ -1013,7 +1013,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 10 + len(mech_defs) + (1 if has_interrupts else 0)
+        total_cols     = 8 + len(mech_defs) + (1 if has_interrupts else 0)
 
         all_pids_set = set()
         for fight in fights:
