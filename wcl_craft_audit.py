@@ -1502,8 +1502,10 @@ def write_index_html(days_data: list, output_path: str, guild_name: str = "") ->
         c["nm_idx"] = i + 1
         c["label"]  = f"NM · Run {i + 1}"
 
-    # Display order: newest first
-    all_cards.sort(key=lambda c: c["day_data"]["report_info"].get("startTime", 0), reverse=True)
+    # Display order: newest first; within same date Heroic > Normal
+    diff_order = {"Mythic": 0, "Heroic": 1, "Normal": 2}
+    all_cards.sort(key=lambda c: (-c["day_data"]["report_info"].get("startTime", 0),
+                                   diff_order.get(c["diff"], 3)))
 
     def _card(c: dict, is_first: bool) -> str:
         diff_cls     = diff_cls_map.get(c["diff"], "badge-normal")
