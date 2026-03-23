@@ -194,5 +194,6 @@ SPELL_NAMES = {
     33206: "Pain Suppression",
     47788: "Guardian Spirit",
     98008: "Spirit Link Totem",
+    207399: "Ancestral Protection Totem",
     97462: "Rallying Cry",
 }
