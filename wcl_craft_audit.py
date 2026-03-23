@@ -76,6 +76,10 @@ SLOT_NAMES = {
 }
 
 
+def _player_slug(pname: str) -> str:
+    return pname.lower().replace(" ", "_")
+
+
 # ─── WarcraftLogs API ────────────────────────────────────────────────────────
 
 def get_access_token(client_id: str, client_secret: str) -> str:
