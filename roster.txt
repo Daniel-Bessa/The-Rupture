@@ -31,4 +31,3 @@ Malheiro    | DPS    | Malheiro:Main, Rödinhas:Alt, Malhas:Alt
 Bolters     | DPS    | Schmosba:Main, Ipala:Alt, Devert:Alt
 Tinet       | DPS    | Tinet:Main, Pingveryhigh:Alt, Guldanrämsay:Alt
 Doomkry     | DPS    | Doomkry:Main, Pumppaladin:Alt, Lockry:Alt
-Benji       | DPS    |
