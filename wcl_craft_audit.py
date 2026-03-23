@@ -927,7 +927,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 13 + len(mech_defs) + (1 if has_interrupts else 0)
+        total_cols     = 12 + len(mech_defs) + (1 if has_interrupts else 0)
 
         all_pids_set = set()
         for fight in fights:
@@ -1023,19 +1023,18 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             t += '<th style="width:10px"></th>'
             t += _sth(1, 'Player', 'player-header')
             t += _sth(2, 'Char')
-            t += '<th>Split</th>'
-            t += (_sth(4, 'Parse %', 'parse-h') if show_parse else '<th class="parse-h">Parse %</th>')
-            t += _sth(5, 'DPS', 'dmg-h')
-            t += _sth(6, 'Damage', 'dmg-h')
-            t += _sth(7, 'Healing', 'heal-h')
-            t += _sth(8, 'Deaths', 'death-h')
+            t += (_sth(3, 'Parse %', 'parse-h') if show_parse else '<th class="parse-h">Parse %</th>')
+            t += _sth(4, 'DPS', 'dmg-h')
+            t += _sth(5, 'Damage', 'dmg-h')
+            t += _sth(6, 'Healing', 'heal-h')
+            t += _sth(7, 'Deaths', 'death-h')
             t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(10, 'Dmg Taken', 'dmg-h')
-            t += _sth(11, 'Uptime %', 'uptime-h')
+            t += _sth(9, 'Dmg Taken', 'dmg-h')
+            t += _sth(10, 'Uptime %', 'uptime-h')
             if has_interrupts:
-                t += _sth(12, 'Interrupts', 'interrupt-h')
+                t += _sth(11, 'Interrupts', 'interrupt-h')
             for mi, m in enumerate(mech_defs):
-                mci = (13 if has_interrupts else 12) + mi
+                mci = (12 if has_interrupts else 11) + mi
                 css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
                 tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
                 t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
@@ -1126,7 +1125,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     t += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
                     t += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
                     t += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
-                    t += f'<td class="center">Split {fi}</td>'
                     t += f'<td class="center parse-h">{parse_cell}</td>'
                     t += f'<td class="center dmg-h">{dps_str}</td>'
                     t += f'<td class="center dmg-h">{dmg_done_str}</td>'
