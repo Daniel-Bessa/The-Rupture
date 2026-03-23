@@ -28,7 +28,7 @@ from openpyxl.utils import get_column_letter
 
 from boss_mechanics import BOSS_MECHANICS, BOSS_HAS_INTERRUPTS
 from tracked_spells import (HEALTHSTONE_IDS, HEALTH_POT_IDS, COMBAT_POT_IDS,
-                             CLASS_DEFENSIVE_IDS, SPELL_NAMES)
+                             CLASS_DEFENSIVE_IDS, CLASS_EXTERNAL_IDS, SPELL_NAMES)
 
 # ─── Midnight Season 1 Constants ─────────────────────────────────────────────
 
@@ -714,6 +714,8 @@ def classify_spell(ability_game_id: int) -> str | None:
         return "Combat Pot"
     if ability_game_id in CLASS_DEFENSIVE_IDS:
         return "Defensive"
+    if ability_game_id in CLASS_EXTERNAL_IDS:
+        return "External"
     return None
 
 
@@ -1011,7 +1013,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 9 + len(mech_defs) + (1 if has_interrupts else 0)
+        total_cols     = 10 + len(mech_defs) + (1 if has_interrupts else 0)
 
         all_pids_set = set()
         for fight in fights:
@@ -1148,13 +1150,14 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             t += _sth(2, 'Char')
             t += _sth(3, 'Deaths', 'death-h')
             t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(5, 'Def', 'def-h')
-            t += _sth(6, 'Dmg Taken', 'dmg-h')
-            t += _sth(7, 'Uptime %', 'uptime-h')
+            t += _sth(5, 'Ext', 'ext-h')
+            t += _sth(6, 'Def', 'def-h')
+            t += _sth(7, 'Dmg Taken', 'dmg-h')
+            t += _sth(8, 'Uptime %', 'uptime-h')
             if has_interrupts:
-                t += _sth(8, 'Interrupts', 'interrupt-h')
+                t += _sth(9, 'Interrupts', 'interrupt-h')
             for mi, m in enumerate(mech_defs):
-                mci = (9 if has_interrupts else 8) + mi
+                mci = (10 if has_interrupts else 9) + mi
                 css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
                 tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
                 t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
@@ -1196,6 +1199,22 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                                   if isinstance(uptime_map.get(pid), dict) else 0)
                     uptime_str = (f"{min(active / fight_dur * 100, 100):.0f}%"
                                   if fight_dur > 0 and active > 0 else "—")
+                    ext_list  = fight.get("external_casts", {}).get(pid, [])
+                    ext_count = len(ext_list)
+                    if ext_count > 0:
+                        ext_tip = "<br>".join(
+                            f'<span style="color:#c8e6c9">{escape(e["spell"])}</span>'
+                            f' <span style="color:#7289DA">{escape(e["time"])}</span>'
+                            for e in ext_list
+                        )
+                        ext_tip_attr = ext_tip.replace("'", "&#39;")
+                        ext_cell = (f'<td class="center ext-h" style="cursor:help"'
+                                    f' data-htip=\'{ext_tip_attr}\''
+                                    f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                                    f'<span class="ext-num">{ext_count}</span></td>')
+                    else:
+                        ext_cell = '<td class="center ext-h">—</td>'
+
                     def_list   = fight.get("defensive_casts", {}).get(pid, [])
                     def_count  = len(def_list)
                     if def_count > 0:
@@ -1251,6 +1270,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     else:
                         t += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
                         t += f'<td class="death-h">{killed_str}</td>'
+                    t += ext_cell
                     t += def_cell
                     t += f'<td class="center dmg-h">{dmg_str}</td>'
                     t += f'<td class="center uptime-h">{uptime_str}</td>'
@@ -1607,6 +1627,8 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .detail-h:hover {{ color: #a0b4ff; }}
 .mech-bad-h {{ color: #ff7070; }}
 .mech-soak-h {{ color: #66bb6a; }}
+.ext-h {{ color: #81c784; }}
+.ext-num {{ color: #81c784; font-weight: bold; }}
 .def-h {{ color: #64b5f6; }}
 .def-num {{ color: #64b5f6; font-weight: bold; }}
 .detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
@@ -2950,16 +2972,21 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 timeline_data = fetch_fight_graph(token, report_code, fid)
             except Exception:
                 timeline_data = {}
-            # Extract per-player defensive casts for this fight from split_data
+            # Extract per-player defensive + external casts for this fight from split_data
             defensive_casts: dict = {}
+            external_casts:  dict = {}
             for sdata in split_data.values():
                 for fd in sdata:
                     if fd.get("fight_id") == fid:
                         for pid, casts in fd.get("player_casts", {}).items():
                             defs = [{"spell": c["spell"], "time": c["time"]}
                                     for c in casts if c.get("category") == "Defensive"]
+                            exts = [{"spell": c["spell"], "time": c["time"]}
+                                    for c in casts if c.get("category") == "External"]
                             if defs:
                                 defensive_casts[pid] = defs
+                            if exts:
+                                external_casts[pid] = exts
             all_pids = set()
             for sdata in split_data.values():
                 for fd in sdata:
@@ -2979,6 +3006,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "timeline_data": timeline_data,
                 "spec_roles": fight_spec_roles.get(fid, {}),
                 "defensive_casts": defensive_casts,
+                "external_casts":  external_casts,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
@@ -3040,8 +3068,15 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                         for pid, casts in wipe_player_casts.items()
                         if any(c.get("category") == "Defensive" for c in casts)
                     }
+                    wipe_external_casts = {
+                        pid: [{"spell": c["spell"], "time": c["time"]}
+                              for c in casts if c.get("category") == "External"]
+                        for pid, casts in wipe_player_casts.items()
+                        if any(c.get("category") == "External" for c in casts)
+                    }
                 except Exception:
                     wipe_defensive_casts = {}
+                    wipe_external_casts  = {}
                 all_pids = {pid for pid in (set(dmg_taken) | set(uptime_map) | set(deaths)) if pid in actor_lookup}
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
@@ -3055,6 +3090,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     "timeline_data": timeline_data,
                     "spec_roles": wipe_spec_roles,
                     "defensive_casts": wipe_defensive_casts,
+                    "external_casts":  wipe_external_casts,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
