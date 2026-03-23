@@ -1714,7 +1714,11 @@ function switchTabByName(name) {{
   const btn = [...document.querySelectorAll('.tab-btn')].find(b => (b.getAttribute('onclick') || '').includes("'" + name + "'"));
   if (btn) btn.classList.add('active');
 }}
-function switchTab(name, btn) {{ switchTabByName(name); }}
+function switchTab(name, btn) {{
+  switchTabByName(name);
+  const tab = document.getElementById('tab-' + name);
+  if (tab) tab.querySelectorAll('.pull-pane.active').forEach(renderPaneCharts);
+}}
 function renderTimeline(canvas) {{
   const raw = (key) => {{ try {{ return JSON.parse(canvas.dataset[key] || '[]'); }} catch(e) {{ return []; }} }};
   const dps = raw('dps'), taken = raw('taken'), heal = raw('heal');
