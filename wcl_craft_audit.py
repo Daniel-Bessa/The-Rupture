@@ -1011,7 +1011,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 8 + len(mech_defs) + (1 if has_interrupts else 0)
+        total_cols     = 9 + len(mech_defs) + (1 if has_interrupts else 0)
 
         all_pids_set = set()
         for fight in fights:
@@ -1148,12 +1148,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             t += _sth(2, 'Char')
             t += _sth(3, 'Deaths', 'death-h')
             t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(5, 'Dmg Taken', 'dmg-h')
-            t += _sth(6, 'Uptime %', 'uptime-h')
+            t += _sth(5, 'Def', 'def-h')
+            t += _sth(6, 'Dmg Taken', 'dmg-h')
+            t += _sth(7, 'Uptime %', 'uptime-h')
             if has_interrupts:
-                t += _sth(7, 'Interrupts', 'interrupt-h')
+                t += _sth(8, 'Interrupts', 'interrupt-h')
             for mi, m in enumerate(mech_defs):
-                mci = (8 if has_interrupts else 7) + mi
+                mci = (9 if has_interrupts else 8) + mi
                 css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
                 tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
                 t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
@@ -1195,6 +1196,22 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                                   if isinstance(uptime_map.get(pid), dict) else 0)
                     uptime_str = (f"{min(active / fight_dur * 100, 100):.0f}%"
                                   if fight_dur > 0 and active > 0 else "—")
+                    def_list   = fight.get("defensive_casts", {}).get(pid, [])
+                    def_count  = len(def_list)
+                    if def_count > 0:
+                        def_tip = "<br>".join(
+                            f'<span style="color:#a0c4ff">{escape(d["spell"])}</span>'
+                            f' <span style="color:#7289DA">{escape(d["time"])}</span>'
+                            for d in def_list
+                        )
+                        def_tip_attr = def_tip.replace("'", "&#39;")
+                        def_cell = (f'<td class="center def-h" style="cursor:help"'
+                                    f' data-htip=\'{def_tip_attr}\''
+                                    f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                                    f'<span class="def-num">{def_count}</span></td>')
+                    else:
+                        def_cell = '<td class="center def-h">—</td>'
+
                     int_count  = interrupts.get(pid, 0)
                     int_str    = str(int_count) if int_count > 0 else "—"
                     int_style  = (' style="background:#1A3A1A"' if int_count > 0
@@ -1234,6 +1251,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     else:
                         t += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
                         t += f'<td class="death-h">{killed_str}</td>'
+                    t += def_cell
                     t += f'<td class="center dmg-h">{dmg_str}</td>'
                     t += f'<td class="center uptime-h">{uptime_str}</td>'
                     if has_interrupts:
@@ -1456,9 +1474,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     diff_label = day_data.get("difficulty", "")
     title      = ri.get("title", rc) + (f" — {diff_label}" if diff_label else "")
 
-    # ── Gear section (Normal or no-diff only) ──
-    # Heroic/Mythic: no gear. Player-group split pages: no gear (lives in gear_normal.html).
-    show_gear = diff_label in ("Normal", "") and not day_data.get("player_split")
+    # Gear lives in gear_normal.html — not shown on individual raid pages.
+    show_gear = False
 
     gear_tab_html = ""
     gear_tab_btn  = ""
@@ -1590,6 +1607,8 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .detail-h:hover {{ color: #a0b4ff; }}
 .mech-bad-h {{ color: #ff7070; }}
 .mech-soak-h {{ color: #66bb6a; }}
+.def-h {{ color: #64b5f6; }}
+.def-num {{ color: #64b5f6; font-weight: bold; }}
 .detail-cell {{ white-space: normal; min-width: 180px; font-size: 12px; color: #ccc; }}
 .detail-col-hidden .detail-h span.detail-content,
 .detail-col-hidden .detail-cell {{ display: none; }}
@@ -2931,6 +2950,16 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 timeline_data = fetch_fight_graph(token, report_code, fid)
             except Exception:
                 timeline_data = {}
+            # Extract per-player defensive casts for this fight from split_data
+            defensive_casts: dict = {}
+            for sdata in split_data.values():
+                for fd in sdata:
+                    if fd.get("fight_id") == fid:
+                        for pid, casts in fd.get("player_casts", {}).items():
+                            defs = [{"spell": c["spell"], "time": c["time"]}
+                                    for c in casts if c.get("category") == "Defensive"]
+                            if defs:
+                                defensive_casts[pid] = defs
             all_pids = set()
             for sdata in split_data.values():
                 for fd in sdata:
@@ -2949,6 +2978,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "mechanics_data": mechanics_data, "frontal_failures": frontal_failures,
                 "timeline_data": timeline_data,
                 "spec_roles": fight_spec_roles.get(fid, {}),
+                "defensive_casts": defensive_casts,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
@@ -2999,6 +3029,19 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     }
                 except Exception:
                     wipe_spec_roles = {}
+                try:
+                    wipe_friendly_casts = fetch_cast_events(token, report_code, fid,
+                                                            start_time=fight_start,
+                                                            end_time=fight.get("endTime", 0))
+                    wipe_player_casts = analyze_fight_casts(wipe_friendly_casts, fight_start, actor_lookup)
+                    wipe_defensive_casts = {
+                        pid: [{"spell": c["spell"], "time": c["time"]}
+                              for c in casts if c.get("category") == "Defensive"]
+                        for pid, casts in wipe_player_casts.items()
+                        if any(c.get("category") == "Defensive" for c in casts)
+                    }
+                except Exception:
+                    wipe_defensive_casts = {}
                 all_pids = {pid for pid in (set(dmg_taken) | set(uptime_map) | set(deaths)) if pid in actor_lookup}
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
@@ -3011,6 +3054,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     "frontal_failures": frontal_failures,
                     "timeline_data": timeline_data,
                     "spec_roles": wipe_spec_roles,
+                    "defensive_casts": wipe_defensive_casts,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
