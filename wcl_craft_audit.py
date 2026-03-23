@@ -1104,10 +1104,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0") 
 
 def write_raid_html(day_data: dict, output_path: str) -> None:
     """Write a single raid day as a standalone HTML page (Gear + Split tabs)."""
-    ri       = day_data["report_info"]
-    rc       = day_data["report_code"]
-    date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
-    title    = ri.get("title", rc)
+    ri         = day_data["report_info"]
+    rc         = day_data["report_code"]
+    date_str   = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
+    diff_label = day_data.get("difficulty", "")
+    title      = ri.get("title", rc) + (f" — {diff_label}" if diff_label else "")
 
     # ── Gear tab ──
     players = {}
@@ -1177,7 +1178,7 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
             elif "(Heroic)" in bn:  diff_tags.add("Heroic")
             else:                   diff_tags.add("Normal")
         diff_label = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
-        slabel     = f"Split {snum} · {diff_label}"
+        slabel     = day_data.get("difficulty") or f"Split {snum} · {diff_label}"
         tab_buttons += f'<button class="tab-btn" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
         split_divs  += f'<div id="tab-split-{snum}" class="tab-content">{split_html}</div>\n'
 
@@ -1428,17 +1429,21 @@ def write_index_html(days_data: list, output_path: str, guild_name: str = "") ->
         bd  = day_data["boss_data"]
         date_str = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%B %d, %Y") if ri.get("startTime") else ""
         title    = ri.get("title", rc)
-        filename = f"raid_{rc}.html"
+        forced_diff = day_data.get("difficulty", "")
+        suffix      = f"_{forced_diff.lower()}" if forced_diff else ""
+        filename    = f"raid_{rc}{suffix}.html"
 
-        # Difficulty
-        diff_tags: set = set()
-        for bn in bd:
-            if "(Mythic)" in bn:   diff_tags.add("Mythic")
-            elif "(Heroic)" in bn: diff_tags.add("Heroic")
-            else:                  diff_tags.add("Normal")
-        if "Mythic" in diff_tags:       diff, diff_cls = "Mythic",  "badge-mythic"
-        elif "Heroic" in diff_tags:     diff, diff_cls = "Heroic",  "badge-heroic"
-        else:                           diff, diff_cls = "Normal",  "badge-normal"
+        # Difficulty badge
+        if forced_diff:
+            diff = forced_diff
+        else:
+            diff_tags: set = set()
+            for bn in bd:
+                if "(Mythic)" in bn:   diff_tags.add("Mythic")
+                elif "(Heroic)" in bn: diff_tags.add("Heroic")
+                else:                  diff_tags.add("Normal")
+            diff = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
+        diff_cls = {"Normal": "badge-normal", "Heroic": "badge-heroic", "Mythic": "badge-mythic"}.get(diff, "badge-normal")
 
         # Boss count + max splits
         boss_count = len(bd)
@@ -2444,6 +2449,20 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
     return result
 
 
+def split_report_by_difficulty(day_data: dict) -> list:
+    """If a report has multiple difficulties, return one day_data per difficulty."""
+    diffs_present = [d for d in ("Normal", "Heroic", "Mythic")
+                     if any(f"({d})" in k for k in day_data.get("boss_data", {}))]
+    if len(diffs_present) <= 1:
+        return [day_data]
+    results = []
+    for diff in diffs_present:
+        filtered_boss = {k: [dict(f, split_num=1) for f in v]
+                         for k, v in day_data["boss_data"].items() if f"({diff})" in k}
+        results.append({**day_data, "boss_data": filtered_boss, "difficulty": diff})
+    return results
+
+
 def main():
     print("=" * 60)
     print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
@@ -2478,7 +2497,8 @@ def main():
     days_data = []
     for code in report_codes:
         try:
-            days_data.append(process_report(token, code, fight_input=fight_mode))
+            result = process_report(token, code, fight_input=fight_mode)
+            days_data.extend(split_report_by_difficulty(result))
         except Exception as e:
             print(f"[ERROR] Failed to process report {code}: {e}")
 
@@ -2495,9 +2515,10 @@ def main():
 
     # Per-raid pages
     for day_data in days_data:
-        rc            = day_data["report_code"]
-        raid_filename = f"raid_{rc}.html"
-        write_raid_html(day_data, raid_filename)
+        rc     = day_data["report_code"]
+        diff   = day_data.get("difficulty", "")
+        suffix = f"_{diff.lower()}" if diff else ""
+        write_raid_html(day_data, f"raid_{rc}{suffix}.html")
 
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
