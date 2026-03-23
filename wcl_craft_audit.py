@@ -1258,9 +1258,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
 
                     row_cls = "boss-death-row" if death_count > 0 else ""
                     t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
-                    t += f'<td style="background:{cls_color};width:4px;padding:0;min-width:4px"></td>'
-                    t += f'<td class="player-cell"><span class="pname">{escape(pname)}</span></td>'
-                    t += f'<td><span class="cname" style="color:{cls_color}">{escape(char_name)}</span></td>'
+                    slug = pname.lower()
+                    t += f'<td class="player-cell"><a href="player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
                     if death_count > 0 and death_tip_html:
                         tip_attr = death_tip_html.replace("'", "&#39;")
                         t += f'<td class="center death-h" style="cursor:help" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"><span class="death-num">{death_count}</span></td>'
