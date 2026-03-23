@@ -1145,19 +1145,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                         f'{lbl} <span class="sort-arrow">▼</span></th>')
 
             t  = f'<div class="table-wrap"><table id="{tbl_id}" class="detail-col-hidden"><thead><tr>'
-            t += '<th style="width:10px"></th>'
-            t += _sth(1, 'Player', 'player-header')
-            t += _sth(2, 'Char')
-            t += _sth(3, 'Deaths', 'death-h')
+            t += _sth(0, 'Player', 'player-header')
+            t += _sth(1, 'Deaths', 'death-h')
             t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(5, 'Ext', 'ext-h')
-            t += _sth(6, 'Def', 'def-h')
-            t += _sth(7, 'Dmg Taken', 'dmg-h')
-            t += _sth(8, 'Uptime %', 'uptime-h')
+            t += _sth(3, 'Ext', 'ext-h')
+            t += _sth(4, 'Def', 'def-h')
+            t += _sth(5, 'Dmg Taken', 'dmg-h')
+            t += _sth(6, 'Uptime %', 'uptime-h')
             if has_interrupts:
-                t += _sth(9, 'Interrupts', 'interrupt-h')
+                t += _sth(7, 'Interrupts', 'interrupt-h')
             for mi, m in enumerate(mech_defs):
-                mci = (10 if has_interrupts else 9) + mi
+                mci = (8 if has_interrupts else 7) + mi
                 css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
                 tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
                 t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
