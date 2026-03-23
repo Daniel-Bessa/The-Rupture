@@ -835,6 +835,76 @@ def analyze_players(actors: list, combatant_events: list) -> list:
 
 # ─── HTML Output ─────────────────────────────────────────────────────────────
 
+WOWHEAD_SCRIPTS = """\
+<script>const whTooltips = {colorLinks: true, iconizeLinks: true, renameLinks: true};</script>
+<script src="https://wow.zamimg.com/js/tooltips.js"></script>"""
+
+
+def _ilvl_color(ilvl: int) -> str:
+    if ilvl >= 259: return "#ffd700"   # max crafted — gold
+    if ilvl >= 246: return "#a335ee"   # upper tier — epic purple
+    if ilvl >= 239: return "#1eff00"   # mid tier — uncommon green
+    return "#9d9d9d"                   # low — gray
+
+
+def _build_gear_html(records: list):
+    """Build gear table content (header, rows, stats) with mains/alts separation."""
+    chars: dict = {}
+    for rec in records:
+        p = rec["player"]
+        if p not in chars:
+            _, main_alt = lookup_roster(p)
+            chars[p] = {"class": rec["class"], "items": [], "is_alt": main_alt == "Alt"}
+        if rec["item_id"] != 0:
+            chars[p]["items"].append(rec)
+
+    max_items     = max((len(c["items"]) for c in chars.values()), default=2)
+    max_items     = max(max_items, 2)
+    total_players = len(chars)
+    total_crafted = sum(len(c["items"]) for c in chars.values())
+    no_craft      = sum(1 for c in chars.values() if not c["items"])
+    total_cols    = 1 + max_items * 5
+
+    def _row(pname, pdata):
+        cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
+        row_class = "no-craft" if not pdata["items"] else ""
+        row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
+        for i in range(max_items):
+            div = " divider" if i > 0 else ""
+            if i < len(pdata["items"]):
+                item      = pdata["items"][i]
+                iid       = item["item_id"]
+                ilvl      = item["item_level"]
+                ic        = _ilvl_color(ilvl)
+                spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
+                spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
+                item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
+                row += f'<td class="item-cell{div}">{item_link}</td>'
+                row += f'<td>{escape(item["slot"])}</td>'
+                row += f'<td class="center" style="color:{ic};font-weight:600">{ilvl}</td>'
+                row += f'<td>{escape(item["craft_rank"])}</td>'
+                row += f'<td class="center {spark_cls}">{spark_txt}</td>'
+            else:
+                row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
+        row += "</tr>"
+        return row
+
+    sort_key = lambda x: (-len(x[1]["items"]), x[0].lower())
+    mains = {p: d for p, d in chars.items() if not d["is_alt"]}
+    alts  = {p: d for p, d in chars.items() if d["is_alt"]}
+
+    rows = "".join(_row(p, d) for p, d in sorted(mains.items(), key=sort_key))
+    if alts:
+        rows += f'<tr class="section-sep"><td colspan="{total_cols}">── Alts ──</td></tr>'
+        rows += "".join(_row(p, d) for p, d in sorted(alts.items(), key=sort_key))
+
+    gear_header = '<th class="player-header">Player</th>'
+    for i in range(max_items):
+        div = " divider" if i > 0 else ""
+        gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+
+    return gear_header, rows, max_items, total_players, total_crafted, no_craft
+
 CLASS_COLORS = {
     "DeathKnight": "#C41E3A", "DemonHunter": "#A330C9", "Druid": "#FF7C0A",
     "Evoker": "#33937F", "Hunter": "#AAD372", "Mage": "#3FC7EB",
@@ -1118,48 +1188,7 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     gear_tab_btn  = ""
 
     if show_gear:
-        players = {}
-        for rec in day_data["records"]:
-            p = rec["player"]
-            if p not in players:
-                players[p] = {"class": rec["class"], "items": []}
-            if rec["item_id"] != 0:
-                players[p]["items"].append(rec)
-
-        max_items     = max((len(p["items"]) for p in players.values()), default=2)
-        max_items     = max(max_items, 2)
-        total_players = len(players)
-        total_crafted = sum(len(p["items"]) for p in players.values())
-        no_craft      = sum(1 for p in players.values() if len(p["items"]) == 0)
-
-        gear_rows = ""
-        for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
-            cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
-            row_class = "no-craft" if not pdata["items"] else ""
-            row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
-            for i in range(max_items):
-                div = ' divider' if i > 0 else ''
-                if i < len(pdata["items"]):
-                    item = pdata["items"][i]
-                    iid = item["item_id"]
-                    spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
-                    spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
-                    item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
-                    row += f'<td class="item-cell{div}">{item_link}</td>'
-                    row += f'<td>{escape(item["slot"])}</td>'
-                    row += f'<td class="center">{item["item_level"]}</td>'
-                    row += f'<td>{escape(item["craft_rank"])}</td>'
-                    row += f'<td class="center {spark_cls}">{spark_txt}</td>'
-                else:
-                    row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
-            row += '</tr>'
-            gear_rows += row
-
-        gear_header = '<th class="player-header">Player</th>'
-        for i in range(max_items):
-            div = ' divider' if i > 0 else ''
-            gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
-
+        gear_header, gear_rows, _, total_players, total_crafted, no_craft = _build_gear_html(day_data["records"])
         gear_inner = f"""
   <div class="stats">
     <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
@@ -1170,8 +1199,6 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
   <div class="table-wrap">
     <table id="gear-table"><thead><tr>{gear_header}</tr></thead><tbody>{gear_rows}</tbody></table>
   </div>"""
-
-        # Gear as a tab (appended after split tabs so the first split is active by default)
         gear_tab_btn  = '<button class="tab-btn" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
         gear_tab_html = f'<div id="tab-gear" class="tab-content">{gear_inner}\n</div>'
 
@@ -1214,6 +1241,7 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{escape(title)} — {date_str} — Raid Audit</title>
+{WOWHEAD_SCRIPTS}
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 20px; }}
@@ -1268,6 +1296,7 @@ td:first-child, th:first-child {{ border-left: none; }}
 .no-craft .player-cell {{ background: rgba(80,50,0,0.4); }}
 .spark-yes {{ color: #4caf50; font-weight: bold; }}
 .item-cell a {{ color: #a48cff; text-decoration: none; }}
+tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background: #0d1117; letter-spacing: 0.5px; }}
 .item-cell a:hover {{ text-decoration: underline; }}
 /* ── Roles ── */
 .role-sep td {{ background: #111827; color: #7289DA; font-size: 11px; font-weight: bold; padding: 4px 10px; }}
@@ -1557,49 +1586,17 @@ def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> 
     if not normal_days:
         return
 
-    players: dict = {}
+    # Merge + deduplicate records across all normal days
+    seen: set = set()
+    merged: list = []
     for day_data in sorted(normal_days, key=lambda d: d["report_info"].get("startTime", 0)):
         for rec in day_data["records"]:
-            p = rec["player"]
-            if p not in players:
-                players[p] = {"class": rec["class"], "items": []}
-            if rec["item_id"] != 0:
-                existing = {r["item_id"] for r in players[p]["items"]}
-                if rec["item_id"] not in existing:
-                    players[p]["items"].append(rec)
+            key = (rec["player"], rec["item_id"])
+            if key not in seen:
+                seen.add(key)
+                merged.append(rec)
 
-    max_items     = max((len(p["items"]) for p in players.values()), default=2)
-    max_items     = max(max_items, 2)
-    total_players = len(players)
-    total_crafted = sum(len(p["items"]) for p in players.values())
-    no_craft      = sum(1 for p in players.values() if not p["items"])
-
-    gear_rows = ""
-    for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
-        cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
-        row_class = "no-craft" if not pdata["items"] else ""
-        row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
-        for i in range(max_items):
-            div = ' divider' if i > 0 else ''
-            if i < len(pdata["items"]):
-                item = pdata["items"][i]
-                iid  = item["item_id"]
-                spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
-                spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
-                item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
-                row += f'<td class="item-cell{div}">{item_link}</td><td>{escape(item["slot"])}</td>'
-                row += f'<td class="center">{item["item_level"]}</td><td>{escape(item["craft_rank"])}</td>'
-                row += f'<td class="center {spark_cls}">{spark_txt}</td>'
-            else:
-                row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
-        row += '</tr>'
-        gear_rows += row
-
-    gear_header = '<th class="player-header">Player</th>'
-    for i in range(max_items):
-        div = ' divider' if i > 0 else ''
-        gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
-
+    gear_header, gear_rows, _, total_players, total_crafted, no_craft = _build_gear_html(merged)
     nm_runs = len(normal_days)
 
     html = f"""<!DOCTYPE html>
@@ -1608,6 +1605,7 @@ def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Crafted Gear — {escape(guild_name)}</title>
+{WOWHEAD_SCRIPTS}
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
@@ -1638,6 +1636,7 @@ td.item-cell a:hover {{ text-decoration: underline; }}
 td.divider {{ border-left: 1px solid #2a2a4a; }}
 td.center {{ text-align: center; }}
 .spark-yes {{ color: #ffc107; font-weight: 700; }}
+tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background: #0d1117; letter-spacing: 0.5px; }}
 </style>
 </head>
 <body>
