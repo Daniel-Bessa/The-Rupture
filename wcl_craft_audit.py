@@ -1374,38 +1374,28 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
         gear_tab_btn  = '<button class="tab-btn" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
         gear_tab_html = f'<div id="tab-gear" class="tab-content">{gear_inner}\n</div>'
 
-    # ── Build Split tabs ──
+    # ── Build Boss tabs (one tab per boss) ──
     actor_lookup = {a["id"]: a for a in day_data["actors"]}
-    boss_data    = day_data["boss_data"]
 
-    splits_boss_data: dict = {}
-    for boss_name, fights in boss_data.items():
-        for fight in fights:
-            snum = fight.get("split_num", 1)
-            splits_boss_data.setdefault(snum, {}).setdefault(boss_name, []).append(fight)
+    # Merge all fights per boss (split_num is preserved inside each fight dict)
+    merged_boss_data: dict = {}
+    for boss_name, fights in day_data["boss_data"].items():
+        merged_boss_data.setdefault(boss_name, []).extend(fights)
 
-    first_split_active = not (show_gear and diff_label == "")  # False only when legacy gear tab exists
-    tab_buttons = gear_tab_btn
+    boss_htmls = _build_boss_html(merged_boss_data, actor_lookup, id_prefix="b",
+                                  wipe_data=day_data.get("wipe_data", {}))
+
+    tab_buttons = ""
     split_divs  = ""
-    for si, snum in enumerate(sorted(splits_boss_data)):
-        split_bd   = splits_boss_data[snum]
-        boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"s{snum}",
-                                      wipe_data=day_data.get("wipe_data", {}))
-        split_html = "".join(
-            f'<div class="boss-section"><div class="boss-section-title" onclick="toggleBoss(this)">⚔ {escape(bn)} <span class="boss-toggle-arrow">▼</span></div><div class="boss-section-body">{bh}</div></div>'
-            for bn, bh in boss_htmls.items()
-        )
-        diff_tags: set = set()
-        for bn in split_bd:
-            if "(Mythic)" in bn:    diff_tags.add("Mythic")
-            elif "(Heroic)" in bn:  diff_tags.add("Heroic")
-            else:                   diff_tags.add("Normal")
-        sdiff  = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
-        slabel = day_data.get("difficulty") or f"Split {snum} · {sdiff}"
-        active = "active" if (si == 0 and first_split_active) else ""
-        tab_buttons += f'<button class="tab-btn {active}" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
-        fb_html = _filter_bar_html(f"split-{snum}")
-        split_divs  += f'<div id="tab-split-{snum}" class="tab-content {active}">{fb_html}{split_html}</div>\n'
+    for bi, (boss_name, boss_html) in enumerate(boss_htmls.items()):
+        boss_display = boss_name.rsplit(" (", 1)[0]  # strip difficulty suffix
+        tab_id  = f"boss-{bi}"
+        active  = "active" if bi == 0 else ""
+        fb_html = _filter_bar_html(tab_id)
+        tab_buttons += f'<button class="tab-btn {active}" onclick="switchTab(\'{tab_id}\',this)">{escape(boss_display)}</button>\n'
+        split_divs  += f'<div id="tab-{tab_id}" class="tab-content {active}">{fb_html}{boss_html}</div>\n'
+
+    tab_buttons += gear_tab_btn  # gear always last
 
     wcl_link = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
 
