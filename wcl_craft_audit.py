@@ -1114,9 +1114,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     # Heroic/Mythic: no gear. Player-group split pages: no gear (lives in gear_normal.html).
     show_gear = diff_label in ("Normal", "") and not day_data.get("player_split")
 
-    gear_section_html = ""
-    gear_tab_html     = ""
-    gear_tab_btn      = ""
+    gear_tab_html = ""
+    gear_tab_btn  = ""
 
     if show_gear:
         players = {}
@@ -1172,19 +1171,9 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     <table id="gear-table"><thead><tr>{gear_header}</tr></thead><tbody>{gear_rows}</tbody></table>
   </div>"""
 
-        if diff_label == "Normal":
-            # Gear as a collapsible section below the split tabs
-            gear_section_html = f"""
-<div class="gear-section">
-  <div class="gear-section-title" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('collapsed')">
-    ⚙ Crafted Gear — All Splits <span class="boss-toggle-arrow">▼</span>
-  </div>
-  <div class="gear-section-body">{gear_inner}</div>
-</div>"""
-        else:
-            # No difficulty set: keep gear as a tab (original behaviour)
-            gear_tab_btn = '<button class="tab-btn active" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
-            gear_tab_html = f'<div id="tab-gear" class="tab-content active">{gear_inner}\n</div>'
+        # Gear as a tab (appended after split tabs so the first split is active by default)
+        gear_tab_btn  = '<button class="tab-btn" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
+        gear_tab_html = f'<div id="tab-gear" class="tab-content">{gear_inner}\n</div>'
 
     # ── Build Split tabs ──
     actor_lookup = {a["id"]: a for a in day_data["actors"]}
@@ -1250,14 +1239,6 @@ h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
 .boss-toggle-arrow {{ font-size: 12px; transition: transform 0.2s; }}
 .boss-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
 .boss-section-body.collapsed {{ display: none; }}
-/* ── Gear section (Normal) ── */
-.gear-section {{ margin-top: 36px; border-top: 1px solid #2a2a4a; padding-top: 20px; }}
-.gear-section-title {{ color: #4caf50; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #4caf50; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
-.gear-section-title:hover {{ background: #1a2236; }}
-.gear-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
-.gear-section-body.collapsed {{ display: none; }}
-.gear-section-body .stat-box .num {{ color: #4caf50; }}
-.gear-section-body th {{ color: #4caf50; }}
 /* ── Stats ── */
 .stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
 .stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
@@ -1367,7 +1348,6 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 {gear_tab_html}
 <!-- ── SPLIT TABS ── -->
 {split_divs}
-{gear_section_html}
 <script>
 function switchTabByName(name) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
