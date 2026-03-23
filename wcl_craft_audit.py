@@ -558,7 +558,7 @@ def fetch_fight_graph(token: str, report_code: str, fight_id: int) -> dict:
             return []
         inner = graph_raw.get("data", graph_raw)
         if isinstance(inner, dict):
-            entries = inner.get("data", [])
+            entries = inner.get("series", inner.get("data", []))
         elif isinstance(inner, list):
             entries = inner
         else:
