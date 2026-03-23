@@ -1110,50 +1110,82 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     diff_label = day_data.get("difficulty", "")
     title      = ri.get("title", rc) + (f" — {diff_label}" if diff_label else "")
 
-    # ── Gear tab ──
-    players = {}
-    for rec in day_data["records"]:
-        p = rec["player"]
-        if p not in players:
-            players[p] = {"class": rec["class"], "items": []}
-        if rec["item_id"] != 0:
-            players[p]["items"].append(rec)
+    # ── Gear section (Normal or no-diff only) ──
+    show_gear = diff_label in ("Normal", "")  # Heroic/Mythic: skip gear entirely
 
-    max_items     = max((len(p["items"]) for p in players.values()), default=2)
-    max_items     = max(max_items, 2)
-    total_players = len(players)
-    total_crafted = sum(len(p["items"]) for p in players.values())
-    no_craft      = sum(1 for p in players.values() if len(p["items"]) == 0)
+    gear_section_html = ""
+    gear_tab_html     = ""
+    gear_tab_btn      = ""
 
-    gear_rows = ""
-    for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
-        cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
-        row_class = "no-craft" if not pdata["items"] else ""
-        row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
+    if show_gear:
+        players = {}
+        for rec in day_data["records"]:
+            p = rec["player"]
+            if p not in players:
+                players[p] = {"class": rec["class"], "items": []}
+            if rec["item_id"] != 0:
+                players[p]["items"].append(rec)
+
+        max_items     = max((len(p["items"]) for p in players.values()), default=2)
+        max_items     = max(max_items, 2)
+        total_players = len(players)
+        total_crafted = sum(len(p["items"]) for p in players.values())
+        no_craft      = sum(1 for p in players.values() if len(p["items"]) == 0)
+
+        gear_rows = ""
+        for pname, pdata in sorted(players.items(), key=lambda x: (-len(x[1]["items"]), x[0].lower())):
+            cls_color = CLASS_COLORS.get(pdata["class"], "#ccc")
+            row_class = "no-craft" if not pdata["items"] else ""
+            row = f'<tr class="{row_class}"><td class="player-cell" style="color:{cls_color}">{escape(pname)}</td>'
+            for i in range(max_items):
+                div = ' divider' if i > 0 else ''
+                if i < len(pdata["items"]):
+                    item = pdata["items"][i]
+                    iid = item["item_id"]
+                    spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
+                    spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
+                    item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
+                    row += f'<td class="item-cell{div}">{item_link}</td>'
+                    row += f'<td>{escape(item["slot"])}</td>'
+                    row += f'<td class="center">{item["item_level"]}</td>'
+                    row += f'<td>{escape(item["craft_rank"])}</td>'
+                    row += f'<td class="center {spark_cls}">{spark_txt}</td>'
+                else:
+                    row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
+            row += '</tr>'
+            gear_rows += row
+
+        gear_header = '<th class="player-header">Player</th>'
         for i in range(max_items):
             div = ' divider' if i > 0 else ''
-            if i < len(pdata["items"]):
-                item = pdata["items"][i]
-                iid = item["item_id"]
-                spark_cls = "spark-yes" if "Yes" in str(item["spark_used"]) else ""
-                spark_txt = "Yes" if "Yes" in str(item["spark_used"]) else "No"
-                item_link = f'<a href="https://www.wowhead.com/item={iid}" data-wowhead="item={iid}" target="_blank">#{iid}</a>'
-                row += f'<td class="item-cell{div}">{item_link}</td>'
-                row += f'<td>{escape(item["slot"])}</td>'
-                row += f'<td class="center">{item["item_level"]}</td>'
-                row += f'<td>{escape(item["craft_rank"])}</td>'
-                row += f'<td class="center {spark_cls}">{spark_txt}</td>'
-            else:
-                row += f'<td class="empty{div}">—</td>' + '<td class="empty">—</td>' * 4
-        row += '</tr>'
-        gear_rows += row
+            gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
 
-    gear_header = '<th class="player-header">Player</th>'
-    for i in range(max_items):
-        div = ' divider' if i > 0 else ''
-        gear_header += f'<th class="{div}">Item {i+1}</th><th>Slot</th><th>Ilvl</th><th>Rank</th><th>Spark?</th>'
+        gear_inner = f"""
+  <div class="stats">
+    <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
+    <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
+    <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
+  </div>
+  <div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterGear(this)"></div>
+  <div class="table-wrap">
+    <table id="gear-table"><thead><tr>{gear_header}</tr></thead><tbody>{gear_rows}</tbody></table>
+  </div>"""
 
-    # ── Build Split tabs (top-level alongside Gear) ──
+        if diff_label == "Normal":
+            # Gear as a collapsible section below the split tabs
+            gear_section_html = f"""
+<div class="gear-section">
+  <div class="gear-section-title" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('collapsed')">
+    ⚙ Crafted Gear — All Splits <span class="boss-toggle-arrow">▼</span>
+  </div>
+  <div class="gear-section-body">{gear_inner}</div>
+</div>"""
+        else:
+            # No difficulty set: keep gear as a tab (original behaviour)
+            gear_tab_btn = '<button class="tab-btn active" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
+            gear_tab_html = f'<div id="tab-gear" class="tab-content active">{gear_inner}\n</div>'
+
+    # ── Build Split tabs ──
     actor_lookup = {a["id"]: a for a in day_data["actors"]}
     boss_data    = day_data["boss_data"]
 
@@ -1163,9 +1195,10 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
             snum = fight.get("split_num", 1)
             splits_boss_data.setdefault(snum, {}).setdefault(boss_name, []).append(fight)
 
-    tab_buttons = '<button class="tab-btn active" onclick="switchTab(\'gear\',this)">⚙ Gear</button>\n'
+    first_split_active = (diff_label != "")  # when no gear tab, first split is active
+    tab_buttons = gear_tab_btn
     split_divs  = ""
-    for snum in sorted(splits_boss_data):
+    for si, snum in enumerate(sorted(splits_boss_data)):
         split_bd   = splits_boss_data[snum]
         boss_htmls = _build_boss_html(split_bd, actor_lookup, id_prefix=f"s{snum}")
         split_html = "".join(
@@ -1177,10 +1210,11 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
             if "(Mythic)" in bn:    diff_tags.add("Mythic")
             elif "(Heroic)" in bn:  diff_tags.add("Heroic")
             else:                   diff_tags.add("Normal")
-        diff_label = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
-        slabel     = day_data.get("difficulty") or f"Split {snum} · {diff_label}"
-        tab_buttons += f'<button class="tab-btn" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
-        split_divs  += f'<div id="tab-split-{snum}" class="tab-content">{split_html}</div>\n'
+        sdiff  = "Mythic" if "Mythic" in diff_tags else ("Heroic" if "Heroic" in diff_tags else "Normal")
+        slabel = day_data.get("difficulty") or f"Split {snum} · {sdiff}"
+        active = "active" if (si == 0 and first_split_active) else ""
+        tab_buttons += f'<button class="tab-btn {active}" onclick="switchTab(\'split-{snum}\',this)">{escape(slabel)}</button>\n'
+        split_divs  += f'<div id="tab-split-{snum}" class="tab-content {active}">{split_html}</div>\n'
 
     wcl_link = f'<a href="https://www.warcraftlogs.com/reports/{rc}" target="_blank" class="wcl-link">View on WarcraftLogs ↗</a>'
 
@@ -1215,6 +1249,12 @@ h1 {{ color: #7289DA; font-size: 22px; margin-bottom: 4px; }}
 .boss-toggle-arrow {{ font-size: 12px; transition: transform 0.2s; }}
 .boss-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
 .boss-section-body.collapsed {{ display: none; }}
+/* ── Gear section (Normal) ── */
+.gear-section {{ margin-top: 36px; border-top: 1px solid #2a2a4a; padding-top: 20px; }}
+.gear-section-title {{ color: #a0b4ff; font-size: 15px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; background: #111827; border-radius: 6px; border-left: 3px solid #4caf50; cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }}
+.gear-section-title:hover {{ background: #1a2236; }}
+.gear-section-title.collapsed .boss-toggle-arrow {{ transform: rotate(-90deg); }}
+.gear-section-body.collapsed {{ display: none; }}
 /* ── Stats ── */
 .stats {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
 .stat-box {{ background: #16213e; border-radius: 8px; padding: 10px 18px; }}
@@ -1321,24 +1361,10 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 </div>
 <div class="tab-bar">{tab_buttons}</div>
 
-<!-- ── GEAR TAB ── -->
-<div id="tab-gear" class="tab-content active">
-  <div class="stats">
-    <div class="stat-box"><div class="num">{total_players}</div><div class="label">Players</div></div>
-    <div class="stat-box"><div class="num">{total_crafted}</div><div class="label">Crafted Items</div></div>
-    <div class="stat-box warn"><div class="num">{no_craft}</div><div class="label">No Crafted Gear</div></div>
-  </div>
-  <div class="search-box"><input type="text" placeholder="Search player..." onkeyup="filterGear(this)"></div>
-  <div class="table-wrap">
-    <table id="gear-table">
-      <thead><tr>{gear_header}</tr></thead>
-      <tbody>{gear_rows}</tbody>
-    </table>
-  </div>
-</div>
-
+{gear_tab_html}
 <!-- ── SPLIT TABS ── -->
 {split_divs}
+{gear_section_html}
 <script>
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
