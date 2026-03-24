@@ -707,16 +707,43 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
 
 
 _ALNDUST_SOAK_IDS = {1262305, 1246827}  # Alndust Upheaval — players hit = "went down"
+
+# ── Chimaerus raid group config (hardcoded per report) ───────────────────────
+# Group A (odd waves 1,3,5) goes down first; Group B (even waves 2,4,6) goes second.
+# Player names must match ROSTER player names exactly.
+# Update each week by sending a screenshot of the group assignments.
+_CHIMAERUS_RAID_GROUPS: dict = {
+    "cRCBrLapZQDgwNyX": {
+        # G1(Nope,Doomkry,Mindhacker,Jimy,Madonis) + G3(Zodiacos,Hipe,Kutcher) + G5(Ice,Mostbanned,Nizze,Brunaine,Hypno)
+        "group_a": {"Nope", "Doomkry", "Mindhacker", "Jimy", "Madonis",
+                    "Zodiacos", "Hipe", "Kutcher",
+                    "Ice", "Mostbanned", "Nizze", "Brunaine", "Hypno"},
+        # G2(Beldryk,Malheiro,Toshiko,Kaze,Bolters) + G4(Uncleyoinky,Shamishan,Phyxius,Upyeah,Minxy) + G6(Potrenu,Zush,Tinet)
+        "group_b": {"Beldryk", "Malheiro", "Toshiko", "Kaze", "Bolters",
+                    "Uncleyoinky", "Shamishan", "Phyxius", "Upyeah", "Minxy",
+                    "Potrenu", "Zush", "Tinet"},
+    },
+    "2pYxcGMHZtwqAnRD": {
+        # G1(Nope,Doomkry,Mindhacker,Zush,Mostbanned) + G3(Phyxius,Malheiro,Kaze,Hipe,Madonis) + G5(Potrenu,Kutcher,Tinet)
+        "group_a": {"Nope", "Doomkry", "Mindhacker", "Zush", "Mostbanned",
+                    "Phyxius", "Malheiro", "Kaze", "Hipe", "Madonis",
+                    "Potrenu", "Kutcher", "Tinet"},
+        # G2(Ice,Gepeto,Upyeah,Beldryk,Toshiko) + G4(Minxy,Hypno,Bolters,Brunaine,Yoruichi) + G6(Zodiacos,Nizze,Pyxius)
+        "group_b": {"Ice", "Gepeto", "Upyeah", "Beldryk", "Toshiko",
+                    "Minxy", "Hypno", "Bolters", "Brunaine", "Yoruichi",
+                    "Zodiacos", "Nizze", "Pyxius"},
+    },
+}
 _CHIMAERUS_BOSS_GAME_ID       = 256116
 _CHIMAERUS_SMALL_ADD_GAME_IDS = {245555, 245575}  # Swarming Shade, Haunting Essence
 
 def analyze_alndust_groups(damage_events: list, player_pids: set,
-                            fight_start_ms: int = 0) -> list:
+                            fight_start_ms: int = 0,
+                            report_code: str = "",
+                            actor_lookup: dict = None) -> list:
     """Detect who soaked each Alndust Upheaval wave (went 'down') on Chimaerus.
-    Groups are derived from wave 1 (odd waves) and wave 2 (even waves).
-    Each wave dict includes:
-      down_pids, up_pids, missed_pids (should have soaked but didn't),
-      wrong_pids (wrong group that soaked instead).
+    If a hardcoded group config exists for this report (in _CHIMAERUS_RAID_GROUPS),
+    uses it to determine expected groups per wave. Otherwise falls back to N-2 reference.
     """
     hits = []
     for e in damage_events:
@@ -734,8 +761,22 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
         else:
             waves.append([h])
 
+    # Build PID→player-name map and hardcoded group sets (PIDs) if config exists
+    group_a_pids: set = set()
+    group_b_pids: set = set()
+    use_hardcoded = False
+    if report_code and actor_lookup and report_code in _CHIMAERUS_RAID_GROUPS:
+        cfg = _CHIMAERUS_RAID_GROUPS[report_code]
+        for pid, actor in actor_lookup.items():
+            char = actor.get("name", "")
+            pname, _ = lookup_roster(char)
+            if pname in cfg["group_a"]:
+                group_a_pids.add(pid)
+            elif pname in cfg["group_b"]:
+                group_b_pids.add(pid)
+        use_hardcoded = True
+
     result = []
-    # Track consecutive "up" count per player to detect missed soaks
     consecutive_ups: dict = {pid: 0 for pid in player_pids}
 
     for wi, wave in enumerate(waves):
@@ -745,25 +786,24 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
         up_pids   = [pid for pid in sorted(player_pids) if pid not in down_set]
         t_s       = wave[0][0] // 1000
 
-        if wave_num <= 2:
-            missed_pids = []
-            wrong_pids  = []
+        if use_hardcoded:
+            # Odd waves → group_a should go down; even waves → group_b should go down
+            expected = group_a_pids if wave_num % 2 == 1 else group_b_pids
+            wrong_group = group_b_pids if wave_num % 2 == 1 else group_a_pids
+            missed_pids    = [p for p in expected if p not in down_set and p in player_pids]
+            wrong_pids     = [p for p in down_set if p in wrong_group]
+            double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1 and p in expected]
+        elif wave_num <= 2:
+            missed_pids    = []
+            wrong_pids     = []
+            double_up_pids = []
         else:
-            # Use wave N-2 as the reference (adapts to roster changes, not locked to waves 1-2)
-            expected = set(result[wi - 2]["down_pids"])
+            expected    = set(result[wi - 2]["down_pids"])
             missed_pids = [p for p in expected if p not in down_set]
-            # Players not in the expected group who went down:
-            # — if they had 2+ consecutive ups they missed their own wave and are compensating → not "wrong"
-            # — otherwise they are genuinely in the wrong group
-            wrong_pids = [
-                p for p in down_set if p not in expected
-                and consecutive_ups.get(p, 0) < 2
-            ]
+            wrong_pids  = [p for p in down_set if p not in expected
+                           and consecutive_ups.get(p, 0) < 2]
+            double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1]
 
-        # Flag players who are "up" for the 2nd+ consecutive wave
-        double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1]
-
-        # Update consecutive-up counters
         for pid in player_pids:
             consecutive_ups[pid] = 0 if pid in down_set else consecutive_ups.get(pid, 0) + 1
 
@@ -4246,7 +4286,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             all_pids.update(uptime_map.keys())
             all_pids.update(deaths.keys())
             all_pids = {pid for pid in all_pids if pid in actor_lookup}
-            alndust_groups = (analyze_alndust_groups(damage_events, all_pids, fight_start)
+            alndust_groups = (analyze_alndust_groups(damage_events, all_pids, fight_start,
+                                                      report_code=report_code,
+                                                      actor_lookup=actor_lookup)
                               if "Chimaerus" in fname else [])
             # Per-player damage to Colossal Horror + per-wave analysis (Chimaerus only)
             horror_damage: dict = {}
