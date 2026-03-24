@@ -1685,8 +1685,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_banners = _build_banners(fights)
         kill_table   = _render_table(fights, table_id)
         kill_chart   = _build_chart(fights[0] if fights else {}, f"{table_id}-kill")
-        kill_alndust = _build_alndust_panel(fights) if "Chimaerus" in boss_name else ""
-        kill_content = kill_banners + kill_table + kill_chart + kill_alndust
+        kill_alndust       = _build_alndust_panel(fights)        if "Chimaerus" in boss_name else ""
+        kill_horror_waves  = _build_horror_waves_table(fights)   if "Chimaerus" in boss_name else ""
+        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
