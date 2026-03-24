@@ -849,7 +849,8 @@ def analyze_chimaerus_horror_waves(
     result = []
     for i, wave in enumerate(alndust_groups):
         ws_ms, we_ms = windows[i]
-        wave_dur_ms  = (we_ms - ws_ms) if we_ms != float("inf") else 0
+        we_ms_clamped = we_ms if we_ms != float("inf") else (fight_end_ms - fight_start_ms)
+        wave_dur_ms   = we_ms_clamped - ws_ms
         down_pids    = set(wave["down_pids"])
         up_pids      = set(wave["up_pids"])
 
