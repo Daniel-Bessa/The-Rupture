@@ -2884,6 +2884,300 @@ h1{{color:#7289DA;font-size:22px;font-weight:700}}
     print(f"[OK] Roster page saved: {output_path}")
 
 
+def write_boss_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write Chimaerus Heroic boss progression page: aggregated Alndust + Horror wave stats across all kills."""
+    from html import escape as _esc
+
+    TARGET_BOSS = "Chimaerus, the Undreamt God"
+    TARGET_DIFF = "Heroic"
+    WCL_BASE    = "https://www.warcraftlogs.com/reports"
+
+    # ── Step 1: collect all Chimaerus Heroic kills, normalize PIDs → names ──
+    pulls = []
+    for day_data in sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0)):
+        report_code  = day_data["report_code"]
+        actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
+
+        def pid_name(pid, al=actor_lookup):
+            return al.get(pid, {}).get("name", f"#{pid}")
+
+        boss_data = day_data.get("boss_data", {})
+        for bname, fights in boss_data.items():
+            if TARGET_BOSS not in bname or TARGET_DIFF not in bname:
+                continue
+            for fight in fights:
+                # Normalize alndust waves
+                alndust = []
+                for wave in fight.get("alndust_groups", []):
+                    alndust.append({
+                        "wave":       wave["wave"],
+                        "down":       [pid_name(p) for p in wave.get("down_pids",      [])],
+                        "up":         [pid_name(p) for p in wave.get("up_pids",        [])],
+                        "missed":     [pid_name(p) for p in wave.get("missed_pids",    [])],
+                        "wrong":      [pid_name(p) for p in wave.get("wrong_pids",     [])],
+                        "double_up":  [pid_name(p) for p in wave.get("double_up_pids", [])],
+                    })
+                # Normalize horror waves
+                horror = []
+                for wave in fight.get("horror_waves", []):
+                    pp_named = {}
+                    for pid, stats in wave.get("per_player", {}).items():
+                        pp_named[pid_name(int(pid))] = stats
+                    horror.append({
+                        "wave":         wave["wave"],
+                        "wave_dur_ms":  wave.get("wave_dur_ms", 0),
+                        "kill_time_s":  wave.get("kill_time_s"),
+                        "per_player":   pp_named,
+                    })
+                dur_s = (fight.get("fight_dur_ms") or 0) // 1000
+                pulls.append({
+                    "report_code": report_code,
+                    "fight_id":    fight["fight_id"],
+                    "dur_s":       dur_s,
+                    "dur_fmt":     f"{dur_s//60}:{dur_s%60:02d}",
+                    "alndust":     alndust,
+                    "horror":      horror,
+                    "actor_lookup": actor_lookup,
+                })
+
+    if not pulls:
+        return
+
+    num_pulls = len(pulls)
+
+    def pull_label(pi):
+        p = pulls[pi]
+        return f"Kill {pi+1} ({p['dur_fmt']})"
+
+    def wcl_link(pi):
+        p = pulls[pi]
+        return f"{WCL_BASE}/{p['report_code']}?fight={p['fight_id']}"
+
+    # ── Step 2: Aggregate Alndust per player ──
+    # Collect all players who participated in any alndust wave
+    alndust_players: set = set()
+    player_alndust: dict = {}  # name → {wrong: [(pi, wave)], missed: [...], double_up: [...]}
+
+    for pi, pull in enumerate(pulls):
+        for wave in pull["alndust"]:
+            wn = wave["wave"]
+            for name in wave["down"] + wave["up"] + wave["missed"] + wave["wrong"] + wave["double_up"]:
+                alndust_players.add(name)
+            for key, names in [("wrong", wave["wrong"]), ("missed", wave["missed"]), ("double_up", wave["double_up"])]:
+                for name in names:
+                    rec = player_alndust.setdefault(name, {"wrong": [], "missed": [], "double_up": []})
+                    rec[key].append((pi, wn))
+
+    # ── Step 3: Aggregate Horror wave stats per player ──
+    horror_players: set = set()
+    player_horror: dict = {}  # name → {pulls: [{wave, dmg, dps, active_pct}]}
+
+    for pi, pull in enumerate(pulls):
+        for wave in pull["horror"]:
+            dur  = wave["wave_dur_ms"]
+            for name, stats in wave["per_player"].items():
+                horror_players.add(name)
+                dmg    = stats.get("dmg", 0)
+                active = stats.get("active_ms", 0)
+                dps    = int(dmg / (dur / 1000)) if dur else 0
+                pct    = round(active / dur * 100, 1) if dur and active else 0.0
+                player_horror.setdefault(name, []).append({
+                    "pull": pi, "wave": wave["wave"], "dmg": dmg, "dps": dps, "active_pct": pct
+                })
+
+    def fmt_dmg(v):
+        if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
+        if v >= 1_000:     return f"{v/1_000:.1f}k"
+        return str(v) if v else "—"
+
+    # ── Step 4: Build HTML ──
+    # Pull timeline bar
+    timeline_cells = ""
+    for pi, p in enumerate(pulls):
+        timeline_cells += (f'<a href="{wcl_link(pi)}" target="_blank" class="tl-cell tl-kill">'
+                           f'Kill {pi+1}<br><span class="tl-sub">{p["dur_fmt"]}</span></a>')
+
+    # ── Alndust table ──
+    def tip(items, pi_wn_list):
+        """Render a count cell with hover tooltip listing specific pulls/waves."""
+        if not pi_wn_list:
+            return '<td class="prog-cell prog-ok">—</td>'
+        count = len(pi_wn_list)
+        lines = ""
+        for (pi, wn) in pi_wn_list:
+            lines += (f'<div class="tip-row">{_esc(pull_label(pi))} · Wave {wn} '
+                      f'<a href="{wcl_link(pi)}" target="_blank" class="tip-wcl">WCL ↗</a></div>')
+        badge_cls = "prog-bad" if count >= 2 else "prog-warn"
+        return (f'<td class="prog-cell {badge_cls}">'
+                f'<div class="tip-wrap">{count}'
+                f'<div class="tip-box">{lines}</div></div></td>')
+
+    alndust_rows = ""
+    sorted_alndust = sorted(alndust_players, key=lambda n: (
+        -(len(player_alndust.get(n, {}).get("wrong",      [])) +
+          len(player_alndust.get(n, {}).get("missed",     [])) +
+          len(player_alndust.get(n, {}).get("double_up",  []))),
+        n.lower()
+    ))
+    for name in sorted_alndust:
+        rec      = player_alndust.get(name, {"wrong": [], "missed": [], "double_up": []})
+        total    = len(rec["wrong"]) + len(rec["missed"]) + len(rec["double_up"])
+        row_cls  = "prog-row-clean" if total == 0 else ""
+        # Get class color from most recent pull's actor_lookup
+        color = "#ccc"
+        for pull in reversed(pulls):
+            for aid, actor in pull["actor_lookup"].items():
+                if actor.get("name", "").lower() == name.lower():
+                    color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                    break
+            else:
+                continue
+            break
+        alndust_rows += (f'<tr class="{row_cls}">'
+                         f'<td class="prog-name" style="color:{color}">{_esc(name)}</td>'
+                         + tip("wrong",     rec["wrong"])
+                         + tip("missed",    rec["missed"])
+                         + tip("double_up", rec["double_up"])
+                         + f'</tr>')
+
+    # ── Horror table ──
+    horror_rows = ""
+    # Compute per-player averages
+    horror_stats = {}
+    for name in horror_players:
+        entries     = player_horror.get(name, [])
+        avg_dmg     = int(sum(e["dmg"]        for e in entries) / len(entries)) if entries else 0
+        avg_dps     = int(sum(e["dps"]        for e in entries) / len(entries)) if entries else 0
+        avg_active  = round(sum(e["active_pct"] for e in entries) / len(entries), 1) if entries else 0.0
+        low_pulls   = [(e["pull"], e["wave"]) for e in entries if e["dmg"] < 200_000 and e["active_pct"] < 5]
+        horror_stats[name] = {"avg_dmg": avg_dmg, "avg_dps": avg_dps, "avg_active": avg_active,
+                               "low_pulls": low_pulls, "entries": entries}
+
+    sorted_horror = sorted(horror_players, key=lambda n: -horror_stats[n]["avg_dmg"])
+    for name in sorted_horror:
+        s     = horror_stats[name]
+        color = "#ccc"
+        for pull in reversed(pulls):
+            for aid, actor in pull["actor_lookup"].items():
+                if actor.get("name", "").lower() == name.lower():
+                    color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                    break
+            else:
+                continue
+            break
+        low_cell = ""
+        if s["low_pulls"]:
+            lines = ""
+            for (pi, wn) in s["low_pulls"]:
+                lines += (f'<div class="tip-row">{_esc(pull_label(pi))} · Wave {wn} '
+                          f'<a href="{wcl_link(pi)}" target="_blank" class="tip-wcl">WCL ↗</a></div>')
+            low_cell = (f'<td class="prog-cell prog-warn">'
+                        f'<div class="tip-wrap">{len(s["low_pulls"])}'
+                        f'<div class="tip-box">{lines}</div></div></td>')
+        else:
+            low_cell = '<td class="prog-cell prog-ok">—</td>'
+
+        horror_rows += (f'<tr>'
+                        f'<td class="prog-name" style="color:{color}">{_esc(name)}</td>'
+                        f'<td class="prog-cell">{fmt_dmg(s["avg_dmg"])}</td>'
+                        f'<td class="prog-cell">{fmt_dmg(s["avg_dps"])}</td>'
+                        f'<td class="prog-cell">{s["avg_active"]:.1f}%</td>'
+                        f'{low_cell}'
+                        f'</tr>')
+
+    title = f"Boss Progression — {TARGET_BOSS} ({TARGET_DIFF})"
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_esc(title)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px 28px}}
+a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
+.back{{display:inline-block;margin-bottom:20px;color:#7289DA;font-size:13px}}
+h1{{color:#e2e8f0;font-size:20px;font-weight:700;margin-bottom:4px}}
+.subtitle{{color:#555;font-size:12px;margin-bottom:24px}}
+.section-title{{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7289DA;
+  margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid #1e2a3a}}
+
+/* Pull timeline */
+.timeline{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}}
+.tl-cell{{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:90px;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:600;
+  text-align:center;text-decoration:none;border:1px solid}}
+.tl-kill{{background:#0d2010;border-color:#2a5c2a;color:#81c784}}
+.tl-kill:hover{{background:#122816;text-decoration:none}}
+.tl-sub{{font-size:10px;font-weight:400;opacity:0.7;margin-top:2px}}
+
+/* Tables */
+.prog-wrap{{overflow-x:auto;margin-bottom:8px}}
+table.prog-tbl{{border-collapse:collapse;width:100%}}
+table.prog-tbl th{{background:#0d1525;color:#7289DA;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.5px;padding:8px 12px;text-align:left;
+  border-bottom:1px solid #1e2a4a;white-space:nowrap}}
+table.prog-tbl td{{padding:6px 12px;border-bottom:1px solid #111827;white-space:nowrap}}
+.prog-name{{font-weight:600;font-size:13px;min-width:140px}}
+.prog-cell{{text-align:center;min-width:80px;font-size:12px;color:#c9d1d9}}
+.prog-ok{{color:#4a5568}}
+.prog-warn{{color:#f4a742;font-weight:600}}
+.prog-bad{{color:#e57373;font-weight:700}}
+.prog-row-clean td{{opacity:0.5}}
+
+/* Tooltip */
+.tip-wrap{{position:relative;display:inline-block;cursor:default}}
+.tip-box{{display:none;position:absolute;z-index:100;bottom:calc(100% + 6px);left:50%;
+  transform:translateX(-50%);background:#1a2233;border:1px solid #2a3a5a;border-radius:8px;
+  padding:10px 12px;min-width:220px;max-width:320px;box-shadow:0 4px 20px rgba(0,0,0,0.6);
+  text-align:left}}
+.tip-wrap:hover .tip-box{{display:block}}
+.tip-row{{font-size:11px;color:#c9d1d9;padding:2px 0;white-space:nowrap}}
+.tip-wcl{{color:#7289DA;font-size:10px;margin-left:6px}}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">← Back to Raids</a>
+<h1>⚔ {_esc(TARGET_BOSS)} — {TARGET_DIFF} Progression</h1>
+<div class="subtitle">{num_pulls} kill(s) tracked · Data from all reports · Hover counts for details</div>
+
+<div class="section-title">Pull Timeline</div>
+<div class="timeline">{timeline_cells}</div>
+
+<div class="section-title">Alndust — Mechanic Failures (across all pulls)</div>
+<div class="prog-wrap">
+<table class="prog-tbl">
+<thead><tr>
+  <th>Player</th>
+  <th title="Went to wrong group">Wrong Group</th>
+  <th title="Missed going underground entirely">Missed</th>
+  <th title="Went underground 2+ waves in a row">Double-up</th>
+</tr></thead>
+<tbody>{alndust_rows}</tbody>
+</table>
+</div>
+
+<div class="section-title">Colossal Horror — Wave Contribution (avg across all pulls)</div>
+<div class="prog-wrap">
+<table class="prog-tbl">
+<thead><tr>
+  <th>Player</th>
+  <th>Avg DMG</th>
+  <th>Avg DPS</th>
+  <th>Avg Active</th>
+  <th title="Pulls where DMG &lt;200k and Active &lt;5%">Low Contrib</th>
+</tr></thead>
+<tbody>{horror_rows}</tbody>
+</table>
+</div>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Boss progression page saved: {output_path}")
+
+
 def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write a consolidated gear page for all Normal runs."""
     normal_days = [d for d in days_data if d.get("difficulty", "") in ("Normal", "")]
