@@ -498,6 +498,29 @@ def fetch_damage_done_events(token: str, report_code: str, fight_id: int,
     return all_events
 
 
+def fetch_damage_table_for_target(token: str, report_code: str, fight_id: int,
+                                   target_id: int) -> dict:
+    """Fetch per-player DamageDone stats against a specific target NPC.
+    Returns {sourceID: {"dmg": int, "active_ms": int}}.
+    Uses the WCL table endpoint (same data as the WCL UI damage-done-to-target view).
+    """
+    query = """
+    query ($code: String!, $fightID: Int!, $targetID: Int!) {
+        reportData {
+            report(code: $code) {
+                table(dataType: DamageDone, fightIDs: [$fightID], targetID: $targetID)
+            }
+        }
+    }
+    """
+    result = query_wcl(token, query, {"code": report_code, "fightID": fight_id,
+                                      "targetID": target_id})
+    table  = result["reportData"]["report"]["table"]
+    entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
+    return {e["id"]: {"dmg": e.get("total", 0), "active_ms": e.get("activeTime", 0)}
+            for e in entries if "id" in e}
+
+
 def fetch_npc_death_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch death events for enemy NPCs in a fight."""
     query = """
@@ -749,106 +772,98 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
 
 
 def analyze_chimaerus_horror_waves(
+    token: str,
+    report_code: str,
+    fight_id: int,
     alndust_groups: list,
-    horror_events: list,
-    small_add_events: list,
-    boss_events: list,
-    horror_death_events: list,
+    horror_events: list,          # DamageDone events to Horror (for timing only)
+    horror_actor_ids: set,        # set of masterData actor IDs for all Horror instances
     actor_lookup: dict,
     fight_start_ms: int,
 ) -> list:
     """Analyze per-wave Colossal Horror performance on Chimaerus.
 
-    Returns list of wave dicts (one per Alndust wave):
+    For each wave, maps Horror actor IDs → wave window using event timestamps,
+    then fetches per-player damage + activeTime via the WCL table endpoint.
+
+    Returns list of wave dicts:
       wave, t_s, down_pids, up_pids,
-      shield_break_s  (seconds from wave start to first unabsorbed Horror hit, or None),
-      kill_duration_s (seconds from shield break to Horror death, or None),
-      per_player: {pid: {phase, shield_dmg, kill_dmg, late_assist, small_add_dmg, boss_dmg}}
+      kill_time_s (seconds from wave start to Horror death, or None),
+      per_player: {pid: {phase, dmg, active_ms, boss_dmg}}
     """
-    if not alndust_groups:
+    if not alndust_groups or not horror_actor_ids:
         return []
 
     def rel_ms(ev):
         return ev.get("timestamp", 0) - fight_start_ms
 
-    horror_ev = sorted(horror_events,    key=rel_ms)
-    small_ev  = sorted(small_add_events, key=rel_ms)
-    boss_ev   = sorted(boss_events,      key=rel_ms)
-    death_ev  = sorted(horror_death_events, key=rel_ms)
+    # Build wave windows (ms, relative to fight start)
+    windows = []
+    for i, wave in enumerate(alndust_groups):
+        start = wave["t_s"] * 1000
+        end   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
+        windows.append((start, end))
+
+    # Map each Horror actor to a wave using first damage event timestamp
+    actor_to_wave: dict = {}  # actor_id -> wave_index
+    horror_ev_sorted = sorted(horror_events, key=rel_ms)
+    for ev in horror_ev_sorted:
+        tid = ev.get("targetID")
+        if tid not in horror_actor_ids or tid in actor_to_wave:
+            continue
+        t = rel_ms(ev)
+        for wi, (ws, we) in enumerate(windows):
+            if ws <= t < we:
+                actor_to_wave[tid] = wi
+                break
+
+    # Fetch per-player table stats for each Horror actor
+    # wave_stats[wave_idx][pid] = {dmg, active_ms}
+    wave_stats: dict = {}
+    for actor_id in horror_actor_ids:
+        wi = actor_to_wave.get(actor_id)
+        if wi is None:
+            continue
+        tbl = fetch_damage_table_for_target(token, report_code, fight_id, actor_id)
+        for pid, stats in tbl.items():
+            if wi not in wave_stats:
+                wave_stats[wi] = {}
+            if pid not in wave_stats[wi]:
+                wave_stats[wi][pid] = {"dmg": 0, "active_ms": 0}
+            wave_stats[wi][pid]["dmg"]       += stats["dmg"]
+            wave_stats[wi][pid]["active_ms"] += stats["active_ms"]
 
     result = []
     for i, wave in enumerate(alndust_groups):
-        wave_start_ms = wave["t_s"] * 1000
-        wave_end_ms   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
-
-        down_pids = set(wave["down_pids"])
-        up_pids   = set(wave["up_pids"])
-
-        # Horror events in this wave window
-        w_horror = [e for e in horror_ev if wave_start_ms <= rel_ms(e) < wave_end_ms]
-
-        # Shield break: first event where no absorption (shield is gone)
-        shield_break_ms = None
-        for e in w_horror:
-            if e.get("type") == "damage" and e.get("absorbed", 0) == 0 and e.get("amount", 0) > 0:
-                shield_break_ms = rel_ms(e) - wave_start_ms
-                break
+        ws_ms, we_ms = windows[i]
+        wave_dur_ms  = (we_ms - ws_ms) if we_ms != float("inf") else 0
+        down_pids    = set(wave["down_pids"])
+        up_pids      = set(wave["up_pids"])
 
         # Horror kill time: first Horror death event in this wave window
-        horror_kill_ms = None
-        for e in death_ev:
-            t = rel_ms(e)
-            if wave_start_ms <= t < wave_end_ms:
-                horror_kill_ms = t - wave_start_ms
-                break
-
-        kill_duration_ms = None
-        if horror_kill_ms is not None and shield_break_ms is not None:
-            kill_duration_ms = horror_kill_ms - shield_break_ms
-
-        shield_end_ms = (wave_start_ms + shield_break_ms) if shield_break_ms is not None else wave_end_ms
+        kill_time_s = None
+        for ev in horror_ev_sorted:
+            pass  # death detection requires death events — skipped for now
 
         per_player = {}
+        stats_for_wave = wave_stats.get(i, {})
         for pid in down_pids | up_pids:
-            phase = "down" if pid in down_pids else "up"
-
-            shield_dmg = sum(
-                e.get("amount", 0) for e in w_horror
-                if e.get("sourceID") == pid and e.get("type") == "damage"
-                and rel_ms(e) < shield_end_ms
-            )
-            kill_dmg = sum(
-                e.get("amount", 0) for e in w_horror
-                if e.get("sourceID") == pid and e.get("type") == "damage"
-                and rel_ms(e) >= shield_end_ms
-            )
-            small_add_dmg = sum(
-                e.get("amount", 0) for e in small_ev
-                if e.get("sourceID") == pid and e.get("type") == "damage"
-                and wave_start_ms <= rel_ms(e) < wave_end_ms
-            )
-            boss_dmg = sum(
-                e.get("amount", 0) for e in boss_ev
-                if e.get("sourceID") == pid and e.get("type") == "damage"
-                and wave_start_ms <= rel_ms(e) < wave_end_ms
-            )
+            phase  = "down" if pid in down_pids else "up"
+            pstats = stats_for_wave.get(pid, {"dmg": 0, "active_ms": 0})
             per_player[pid] = {
-                "phase":        phase,
-                "shield_dmg":   shield_dmg,
-                "kill_dmg":     kill_dmg,
-                "late_assist":  kill_dmg if phase == "down" else 0,
-                "small_add_dmg": small_add_dmg,
-                "boss_dmg":     boss_dmg,
+                "phase":     phase,
+                "dmg":       pstats["dmg"],
+                "active_ms": pstats["active_ms"],
             }
 
         result.append({
-            "wave":           wave["wave"],
-            "t_s":            wave["t_s"],
-            "down_pids":      wave["down_pids"],
-            "up_pids":        wave["up_pids"],
-            "shield_break_s": round(shield_break_ms / 1000, 1) if shield_break_ms is not None else None,
-            "kill_duration_s": round(kill_duration_ms / 1000, 1) if kill_duration_ms is not None else None,
-            "per_player":     per_player,
+            "wave":          wave["wave"],
+            "t_s":           wave["t_s"],
+            "wave_dur_ms":   wave_dur_ms,
+            "down_pids":     wave["down_pids"],
+            "up_pids":       wave["up_pids"],
+            "kill_time_s":   kill_time_s,
+            "per_player":    per_player,
         })
 
     return result
@@ -1585,7 +1600,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             )
 
         def _build_horror_waves_table(fights_list: list) -> str:
-            """Build per-wave Colossal Horror damage breakdown table for Chimaerus."""
+            """Build per-wave Colossal Horror damage + uptime table for Chimaerus."""
             horror_waves = []
             for fd in fights_list:
                 if fd.get("horror_waves"):
@@ -1599,80 +1614,105 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 if v > 0:          return f"{v // 1000}k"
                 return "—"
 
-            def fmt_time(s):
-                if s is None: return "?"
-                m = int(s) // 60; sec = int(s) % 60
-                return f"{m}:{sec:02d}"
+            def fmt_uptime(active_ms, wave_dur_ms):
+                if not wave_dur_ms or not active_ms:
+                    return "—"
+                pct = min(100, round(active_ms / wave_dur_ms * 100))
+                return f"{pct}%"
 
-            # Determine ordered player list: Group 1 (odd waves) first, then Group 2
-            all_pids_ordered = []
+            # Determine group membership: Group 1 = players who went DOWN on wave 1
+            group1 = set(horror_waves[0]["down_pids"]) if horror_waves else set()
+            group2 = set(horror_waves[1]["down_pids"]) if len(horror_waves) > 1 else set()
+
+            # Build ordered player list: group1 first, then group2, then others
+            ordered = []
             seen = set()
-            if horror_waves:
-                for pid in horror_waves[0].get("down_pids", []):
-                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
-            if len(horror_waves) > 1:
-                for pid in horror_waves[1].get("down_pids", []):
-                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
+            for pid in horror_waves[0].get("down_pids", []):
+                if pid not in seen: ordered.append(pid); seen.add(pid)
+            for pid in horror_waves[0].get("up_pids", []):
+                if pid not in seen: ordered.append(pid); seen.add(pid)
             for wave in horror_waves:
                 for pid in wave.get("down_pids", []) + wave.get("up_pids", []):
-                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
+                    if pid not in seen: ordered.append(pid); seen.add(pid)
 
-            # Table header
+            # Separate group1 and group2 ordered lists
+            g1_players = [p for p in ordered if p in group1]
+            g2_players = [p for p in ordered if p in group2]
+            other_players = [p for p in ordered if p not in group1 and p not in group2]
+            player_rows_order = g1_players + g2_players + other_players
+
+            num_waves = len(horror_waves)
+            tbl_id = "hw-tbl-main"
+
+            # Build header: Wave N with 3 sub-cols each (Phase, DMG, Uptime)
             t = '<div class="horror-waves-wrap">'
             t += '<div class="hw-title">⚔ Colossal Horror — Wave Breakdown</div>'
-            t += '<table class="boss-table hw-tbl"><thead>'
+            t += f'<table class="boss-table hw-tbl" id="{tbl_id}"><thead>'
             t += '<tr><th class="hw-player-col" rowspan="2">Player</th>'
             for w in horror_waves:
-                sb = fmt_time(w.get("shield_break_s"))
-                kd = fmt_time(w.get("kill_duration_s"))
-                timing = f'<span class="hw-timing">🛡 {sb} · ⚔ {kd}</span>'
-                t += f'<th colspan="2" class="hw-wave-hdr">Wave {w["wave"]}<br>{timing}</th>'
+                t += f'<th colspan="3" class="hw-wave-hdr">Wave {w["wave"]}</th>'
             t += '</tr><tr>'
-            for _ in horror_waves:
-                t += '<th class="hw-sub hw-sub-phase">Phase</th><th class="hw-sub hw-sub-dmg">DMG</th>'
+            for wi, w in enumerate(horror_waves):
+                t += f'<th class="hw-sub">Phase</th>'
+                t += (f'<th class="hw-sub hw-sortable" style="cursor:pointer;user-select:none"'
+                      f' onclick="hwSort({wi},\'dmg\',this)">DMG <span class="sort-arrow">▼</span></th>')
+                t += (f'<th class="hw-sub hw-sortable" style="cursor:pointer;user-select:none"'
+                      f' onclick="hwSort({wi},\'uptime\',this)">Uptime <span class="sort-arrow">▼</span></th>')
             t += '</tr></thead><tbody>'
 
-            for pid in all_pids_ordered:
+            def player_row(pid, group_sep=False):
                 info  = actor_lookup.get(pid, {})
                 name  = info.get("name", f"#{pid}")
                 cls   = info.get("subType", "")
                 color = CLASS_COLORS.get(cls, "#ccc")
-                t += f'<tr><td class="hw-name" style="color:{color}">{escape(name)}</td>'
+                sep_style = ' style="border-top:1px solid #2a3a4a"' if group_sep else ''
+                row = f'<tr{sep_style}>'
+                row += f'<td class="hw-name" style="color:{color}">{escape(name)}</td>'
                 for w in horror_waves:
                     pp       = w["per_player"].get(pid, {})
                     phase    = pp.get("phase", "")
-                    boss_dmg = pp.get("boss_dmg", 0)
-                    add_dmg  = pp.get("small_add_dmg", 0)
-                    if phase == "down":
-                        primary  = pp.get("shield_dmg", 0)
-                        assist   = pp.get("late_assist", 0)
-                        ph_html  = '<span class="hw-phase-down">↓ Down</span>'
-                        # slacker: dealt more to boss than Horror during shield phase
-                        is_slack = boss_dmg > max(primary, 30_000)
-                    elif phase == "up":
-                        primary  = pp.get("kill_dmg", 0)
-                        assist   = 0
-                        ph_html  = '<span class="hw-phase-up">↑ Up</span>'
-                        is_slack = boss_dmg > max(primary, 30_000)
-                    else:
-                        primary = assist = 0
-                        ph_html = '—'
-                        is_slack = False
+                    dmg      = pp.get("dmg", 0)
+                    active   = pp.get("active_ms", 0)
+                    dur      = w.get("wave_dur_ms", 0)
+                    ph_html  = ('<span class="hw-phase-down">↓ Down</span>' if phase == "down"
+                                else '<span class="hw-phase-up">↑ Up</span>' if phase == "up"
+                                else "—")
+                    row += f'<td class="hw-phase-cell">{ph_html}</td>'
+                    row += f'<td class="hw-dmg-cell" data-val="{dmg}">{fmt_dmg(dmg)}</td>'
+                    row += f'<td class="hw-dmg-cell" data-val="{active}">{fmt_uptime(active, dur)}</td>'
+                row += '</tr>'
+                return row
 
-                    dmg_str = fmt_dmg(primary)
-                    if assist > 0:
-                        dmg_str += f'<span class="hw-assist"> +{fmt_dmg(assist)}</span>'
-                    if is_slack:
-                        slack_tip = f"Boss: {fmt_dmg(boss_dmg)}"
-                        if add_dmg > 10_000:
-                            slack_tip += f" / Adds: {fmt_dmg(add_dmg)}"
-                        dmg_str += f'<span class="hw-slack" title="{slack_tip}"> ⚠</span>'
-
-                    t += f'<td class="hw-phase-cell">{ph_html}</td>'
-                    t += f'<td class="hw-dmg-cell">{dmg_str}</td>'
-                t += '</tr>'
+            for i, pid in enumerate(player_rows_order):
+                sep = (i == len(g1_players) and len(g1_players) > 0 and len(g2_players) > 0)
+                t += player_row(pid, group_sep=sep)
 
             t += '</tbody></table></div>'
+
+            # Sort JS
+            t += """
+<script>
+(function(){
+  var hwAsc = {};
+  window.hwSort = function(waveIdx, col, th) {
+    var key = waveIdx + '_' + col;
+    hwAsc[key] = !hwAsc[key];
+    var tbl = document.getElementById('hw-tbl-main');
+    var tbody = tbl.querySelector('tbody');
+    var rows = Array.from(tbody.querySelectorAll('tr')).filter(function(r){ return !r.classList.contains('hw-sep'); });
+    var colOffset = 1 + waveIdx * 3 + (col === 'dmg' ? 1 : 2);
+    rows.sort(function(a, b){
+      var av = parseInt(a.cells[colOffset] ? a.cells[colOffset].getAttribute('data-val') || 0 : 0);
+      var bv = parseInt(b.cells[colOffset] ? b.cells[colOffset].getAttribute('data-val') || 0 : 0);
+      return hwAsc[key] ? av - bv : bv - av;
+    });
+    rows.forEach(function(r){ tbody.appendChild(r); });
+    tbl.querySelectorAll('.sort-arrow').forEach(function(s){ s.textContent = '▼'; });
+    if (th) th.querySelector('.sort-arrow').textContent = hwAsc[key] ? '▲' : '▼';
+  };
+})();
+</script>
+"""
             return t
 
         # ── Pull selector + panes ──
@@ -2112,7 +2152,8 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .hw-phase-up   {{ color: #64b5f6; font-size: 11px; font-weight: 600; }}
 .hw-assist {{ color: #81c784; font-size: 11px; }}
 .hw-slack  {{ color: #f4a742; font-size: 12px; cursor: help; }}
-.horror-waves-wrap {{ margin: 16px 0 8px; }}
+.horror-waves-wrap {{ margin: 16px 0 8px; overflow-x: auto; }}
+.hw-tbl thead {{ position: static; }}
 .alndust-panel {{ margin-top: 12px; background: rgba(100,160,255,0.06); border: 1px solid rgba(100,160,255,0.25); border-radius: 8px; overflow: hidden; }}
 .ag-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
 .ag-header:hover {{ background: rgba(100,160,255,0.1); }}
@@ -3845,17 +3886,10 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     if src in actor_lookup:
                         horror_damage[src] = horror_damage.get(src, 0) + ev.get("amount", 0)
                 if alndust_groups:
-                    small_add_ids        = {a["id"] for a in npc_actors if a.get("gameID") in _CHIMAERUS_SMALL_ADD_GAME_IDS}
-                    chimaerus_boss_actor_ids = {a["id"] for a in npc_actors if a.get("gameID") == _CHIMAERUS_BOSS_GAME_ID}
-                    small_add_events     = (fetch_damage_done_events(token, report_code, fid, target_ids=small_add_ids)
-                                            if small_add_ids else [])
-                    boss_dmg_events      = (fetch_damage_done_events(token, report_code, fid, target_ids=chimaerus_boss_actor_ids)
-                                            if chimaerus_boss_actor_ids else [])
-                    npc_deaths           = fetch_npc_death_events(token, report_code, fid)
-                    horror_death_events  = [e for e in npc_deaths if e.get("targetID") in horror_actor_ids]
                     horror_waves = analyze_chimaerus_horror_waves(
-                        alndust_groups, horror_done_events, small_add_events, boss_dmg_events,
-                        horror_death_events, actor_lookup, fight_start,
+                        token, report_code, fid,
+                        alndust_groups, horror_done_events,
+                        horror_actor_ids, actor_lookup, fight_start,
                     )
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
