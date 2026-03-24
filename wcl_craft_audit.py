@@ -3001,14 +3001,14 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
     def tip(items, pi_wn_list):
         """Render a count cell with hover tooltip listing specific pulls/waves."""
         if not pi_wn_list:
-            return '<td class="prog-cell prog-ok">—</td>'
+            return '<td class="prog-cell prog-ok" data-val="0">—</td>'
         count = len(pi_wn_list)
         lines = ""
         for (pi, wn) in pi_wn_list:
             lines += (f'<div class="tip-row">{_esc(pull_label(pi))} · Wave {wn} '
                       f'<a href="{wcl_link(pi)}" target="_blank" class="tip-wcl">WCL ↗</a></div>')
         badge_cls = "prog-bad" if count >= 2 else "prog-warn"
-        return (f'<td class="prog-cell {badge_cls}">'
+        return (f'<td class="prog-cell {badge_cls}" data-val="{count}">'
                 f'<div class="tip-wrap">{count}'
                 f'<div class="tip-box">{lines}</div></div></td>')
 
@@ -3116,14 +3116,20 @@ h1{{color:#e2e8f0;font-size:20px;font-weight:700;margin-bottom:4px}}
 table.prog-tbl{{border-collapse:collapse;width:100%}}
 table.prog-tbl th{{background:#0d1525;color:#7289DA;font-size:11px;font-weight:700;
   text-transform:uppercase;letter-spacing:0.5px;padding:8px 12px;text-align:left;
-  border-bottom:1px solid #1e2a4a;white-space:nowrap}}
-table.prog-tbl td{{padding:6px 12px;border-bottom:1px solid #111827;white-space:nowrap}}
+  border-bottom:2px solid #1e2a4a;border-right:1px solid #1a2640;white-space:nowrap;
+  cursor:pointer;user-select:none}}
+table.prog-tbl th:last-child{{border-right:none}}
+table.prog-tbl th:hover{{background:#111e33;color:#a0b4e0}}
+table.prog-tbl td{{padding:6px 12px;border-bottom:1px solid #111827;
+  border-right:1px solid #151e2e;white-space:nowrap}}
+table.prog-tbl td:last-child{{border-right:none}}
 .prog-name{{font-weight:600;font-size:13px;min-width:140px}}
 .prog-cell{{text-align:center;min-width:80px;font-size:12px;color:#c9d1d9}}
 .prog-ok{{color:#4a5568}}
 .prog-warn{{color:#f4a742;font-weight:600}}
 .prog-bad{{color:#e57373;font-weight:700}}
 .prog-row-clean td{{opacity:0.5}}
+.sort-arrow{{font-size:9px;margin-left:4px;opacity:0.5}}
 
 /* Tooltip */
 .tip-wrap{{position:relative;display:inline-block;cursor:default}}
@@ -3146,12 +3152,12 @@ table.prog-tbl td{{padding:6px 12px;border-bottom:1px solid #111827;white-space:
 
 <div class="section-title">Alndust — Mechanic Failures (across all pulls)</div>
 <div class="prog-wrap">
-<table class="prog-tbl">
+<table class="prog-tbl" id="tbl-alndust">
 <thead><tr>
-  <th>Player</th>
-  <th title="Went to wrong group">Wrong Group</th>
-  <th title="Missed going underground entirely">Missed</th>
-  <th title="Went underground 2+ waves in a row">Double-up</th>
+  <th onclick="progSort('tbl-alndust',0,this)">Player <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-alndust',1,this)" title="Went to wrong group">Wrong Group <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-alndust',2,this)" title="Missed going underground entirely">Missed <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-alndust',3,this)" title="Went underground 2+ waves in a row">Double-up <span class="sort-arrow">▼</span></th>
 </tr></thead>
 <tbody>{alndust_rows}</tbody>
 </table>
@@ -3159,17 +3165,40 @@ table.prog-tbl td{{padding:6px 12px;border-bottom:1px solid #111827;white-space:
 
 <div class="section-title">Colossal Horror — Wave Contribution (avg across all pulls)</div>
 <div class="prog-wrap">
-<table class="prog-tbl">
+<table class="prog-tbl" id="tbl-horror">
 <thead><tr>
-  <th>Player</th>
-  <th>Avg DMG</th>
-  <th>Avg DPS</th>
-  <th>Avg Active</th>
-  <th title="Pulls where DMG &lt;200k and Active &lt;5%">Low Contrib</th>
+  <th onclick="progSort('tbl-horror',0,this)">Player <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-horror',1,this)">Avg DMG <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-horror',2,this)">Avg DPS <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-horror',3,this)">Avg Active <span class="sort-arrow">▼</span></th>
+  <th onclick="progSort('tbl-horror',4,this)" title="Pulls where DMG &lt;200k and Active &lt;5%">Low Contrib <span class="sort-arrow">▼</span></th>
 </tr></thead>
 <tbody>{horror_rows}</tbody>
 </table>
 </div>
+<script>
+(function(){{
+  var asc = {{}};
+  window.progSort = function(tblId, colIdx, th) {{
+    var key = tblId + '_' + colIdx;
+    asc[key] = !asc[key];
+    var tbody = document.getElementById(tblId).querySelector('tbody');
+    var rows  = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function(a, b) {{
+      var ac = a.cells[colIdx], bc = b.cells[colIdx];
+      var av = ac ? (ac.getAttribute('data-val') || ac.innerText.trim()) : '';
+      var bv = bc ? (bc.getAttribute('data-val') || bc.innerText.trim()) : '';
+      var an = parseFloat(av.replace(/[^0-9.\-]/g,'')), bn = parseFloat(bv.replace(/[^0-9.\-]/g,''));
+      if (!isNaN(an) && !isNaN(bn)) return asc[key] ? an - bn : bn - an;
+      return asc[key] ? av.localeCompare(bv) : bv.localeCompare(av);
+    }});
+    rows.forEach(function(r) {{ tbody.appendChild(r); }});
+    document.querySelectorAll('#' + tblId + ' .sort-arrow').forEach(function(s) {{ s.textContent = '▼'; s.style.opacity='0.5'; }});
+    var arrow = th.querySelector('.sort-arrow');
+    if (arrow) {{ arrow.textContent = asc[key] ? '▲' : '▼'; arrow.style.opacity='1'; }}
+  }};
+}})();
+</script>
 </body>
 </html>"""
 
