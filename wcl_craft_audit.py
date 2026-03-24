@@ -2101,7 +2101,21 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .av-player {{ color: #e0e0e0; }}
 .av-count {{ color: #e06c6c; font-weight: 700; margin-right: 8px; }}
 /* ── Alndust Upheaval grouping panel ── */
-.horror-h {{ color: #e57373; }}
+.hw-title {{ font-size: 13px; font-weight: 600; color: #aaa; padding: 10px 0 6px; letter-spacing: .04em; }}
+.hw-tbl {{ margin-bottom: 8px; }}
+.hw-wave-hdr {{ text-align: center; font-size: 12px; color: #9ab; padding: 4px 8px; background: #0f1a28; }}
+.hw-timing {{ font-size: 11px; color: #667; font-weight: 400; }}
+.hw-player-col {{ min-width: 110px; }}
+.hw-sub {{ font-size: 11px; color: #556; font-weight: 400; text-align: center; padding: 2px 6px; }}
+.hw-sub-dmg {{ min-width: 60px; }}
+.hw-name {{ font-size: 12px; white-space: nowrap; padding-right: 12px; }}
+.hw-phase-cell {{ text-align: center; padding: 3px 6px; }}
+.hw-dmg-cell {{ text-align: right; padding: 3px 8px; font-size: 12px; font-variant-numeric: tabular-nums; }}
+.hw-phase-down {{ color: #e57373; font-size: 11px; font-weight: 600; }}
+.hw-phase-up   {{ color: #64b5f6; font-size: 11px; font-weight: 600; }}
+.hw-assist {{ color: #81c784; font-size: 11px; }}
+.hw-slack  {{ color: #f4a742; font-size: 12px; cursor: help; }}
+.horror-waves-wrap {{ margin: 16px 0 8px; }}
 .alndust-panel {{ margin-top: 12px; background: rgba(100,160,255,0.06); border: 1px solid rgba(100,160,255,0.25); border-radius: 8px; overflow: hidden; }}
 .ag-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
 .ag-header:hover {{ background: rgba(100,160,255,0.1); }}
