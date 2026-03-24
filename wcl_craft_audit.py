@@ -1361,11 +1361,24 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             if not waves:
                 return ""
 
-            def _pid_chip(pid):
+            missed_all = set()
+            wrong_all  = set()
+            for w in waves:
+                missed_all.update(w.get("missed_pids", []))
+                wrong_all.update(w.get("wrong_pids",  []))
+
+            def _pid_chip(pid, missed=False, wrong=False):
                 info  = actor_lookup.get(pid, {})
                 name  = info.get("name", f"#{pid}")
                 cls   = info.get("class", "")
                 color = CLASS_COLORS.get(cls, "#ccc")
+                if missed:
+                    return (f'<span class="ag-chip ag-miss" title="Missed soak">'
+                            f'{escape(name)} ✗</span>')
+                if wrong:
+                    return (f'<span class="ag-chip" style="background:#f4a74222;border:1px solid #f4a74266;'
+                            f'color:#f4a742;padding:2px 8px;border-radius:12px;font-size:12px;'
+                            f'white-space:nowrap" title="Wrong group soaked">{escape(name)} ?</span>')
                 return (f'<span class="ag-chip" style="background:{color}22;border:1px solid {color}55;'
                         f'color:{color};padding:2px 8px;border-radius:12px;font-size:12px;'
                         f'white-space:nowrap">{escape(name)}</span>')
@@ -1374,11 +1387,20 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             for w in waves:
                 m, s   = divmod(w["t_s"], 60)
                 t_str  = f"{m}:{s:02d}"
-                down_chips = " ".join(_pid_chip(p) for p in w["down_pids"])
-                up_chips   = " ".join(_pid_chip(p) for p in w["up_pids"])
+                missed = set(w.get("missed_pids", []))
+                wrong  = set(w.get("wrong_pids",  []))
+                down_chips = " ".join(
+                    _pid_chip(p, wrong=(p in wrong)) for p in w["down_pids"]
+                )
+                up_chips = " ".join(
+                    _pid_chip(p, missed=(p in missed)) for p in w["up_pids"]
+                )
+                label_extra = ""
+                if missed:
+                    label_extra = f' <span class="ag-miss-count">⚠ {len(missed)} missed</span>'
                 rows += (
                     f'<div class="ag-wave">'
-                    f'<div class="ag-wave-label">Wave {w["wave"]} <span class="ag-time">({t_str})</span></div>'
+                    f'<div class="ag-wave-label">Wave {w["wave"]} <span class="ag-time">({t_str})</span>{label_extra}</div>'
                     f'<div class="ag-group ag-down"><span class="ag-badge ag-badge-down">⬇ Down</span> {down_chips}</div>'
                     f'<div class="ag-group ag-up"><span class="ag-badge ag-badge-up">⬆ Up</span> {up_chips}</div>'
                     f'</div>'
