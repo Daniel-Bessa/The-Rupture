@@ -3640,7 +3640,6 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     "rankings_map": {},  # wipes have no rankings
                     "interrupts": interrupts, "mechanics_data": mechanics_data,
                     "frontal_failures": frontal_failures,
-                    "timeline_data": timeline_data,
                     "spec_roles": wipe_spec_roles,
                     "defensive_casts": wipe_defensive_casts,
                     "external_casts":  wipe_external_casts,
