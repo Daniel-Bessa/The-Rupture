@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Idea: Per-Fight Timeline Chart</title>
+<style>
+body { background: #0d1117; color: #ccc; font-family: sans-serif; padding: 40px; max-width: 900px; margin: 0 auto; }
+h1 { color: #7289DA; }
+h2 { color: #aaa; border-bottom: 1px solid #2a2a4a; padding-bottom: 6px; margin-top: 40px; }
+p, li { line-height: 1.7; color: #999; }
+code { background: #161b22; padding: 2px 6px; border-radius: 4px; color: #e6db74; font-size: 13px; }
+pre { background: #161b22; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 12px; color: #abb2bf; line-height: 1.5; }
+.demo-wrap { margin: 20px 0 4px; }
+canvas { display: block; width: 100%; height: 140px; background: #0d1525; border-radius: 6px; }
+.legend { display: flex; gap: 14px; padding: 4px 2px; font-size: 11px; color: #888; align-items: center; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status { background: #1a3a1a; color: #81c784; border: 1px solid #2a5a2a; padding: 12px 16px; border-radius: 6px; margin: 20px 0; }
+.issue  { background: #3a1a1a; color: #e57373; border: 1px solid #5a2a2a; padding: 12px 16px; border-radius: 6px; margin: 20px 0; }
+</style>
+</head>
+<body>
+
+<h1>💡 Idea: Per-Fight Timeline Chart</h1>
+<p>A canvas chart showing DPS Done, Damage Taken, and Healing over the duration of a single boss fight.
+Placed below each boss's player table on the raid pages.</p>
+
+<div class="status">
+  <strong>Status: Parked</strong> — The chart renders correctly but the data shape from WCL isn't useful
+  enough at the per-fight level. May revisit as a <em>cross-log comparison chart</em> (see notes below).
+</div>
+
+<h2>Live Demo (synthetic data)</h2>
+<div class="demo-wrap">
+  <canvas id="demo-canvas" height="140"></canvas>
+  <div class="legend">
+    <span class="dot" style="background:#ffb74d"></span><span>DPS Done</span>
+    <span class="dot" style="background:#e57373"></span><span>Dmg Taken</span>
+    <span class="dot" style="background:#81c784"></span><span>Healing</span>
+  </div>
+</div>
+
+<h2>The Problem</h2>
+<ul>
+  <li>WCL <code>graph</code> API returns <strong>cumulative totals</strong> per time bucket, not per-second rates.</li>
+  <li>Converting to rates: <code>rate[i] = (cum[i] - cum[i-1]) / interval_s</code> — works but produces very few data points (WCL uses ~20 buckets per fight regardless of duration), making the chart coarse.</li>
+  <li>With only 20 points over a 10-minute fight, each bucket is ~30s wide — not detailed enough to see anything interesting.</li>
+  <li>The chart just shows "DPS went up then stopped" which you already know from the kill.</li>
+</ul>
+
+<h2>Better Future Idea: Cross-Log Comparison</h2>
+<ul>
+  <li>Compare the <strong>same boss across multiple weeks/splits</strong> — e.g. average damage taken on Vaelgor week 1 vs week 2 vs week 3.</li>
+  <li>Show improvement (or regression) per player across raids.</li>
+  <li>Bar chart: damage taken per player on a given boss, sorted, with week-over-week delta.</li>
+  <li>This is much more actionable than a single-fight DPS line.</li>
+</ul>
+
+<h2>WCL API Notes</h2>
+<pre>
+# Query used:
+query ($code: String!, $fightID: Int!) {
+    reportData {
+        report(code: $code) {
+            dps:   graph(dataType: DamageDone,  fightIDs: [$fightID], hostilityType: Friendlies)
+            taken: graph(dataType: DamageTaken, fightIDs: [$fightID], hostilityType: Friendlies)
+            heal:  graph(dataType: Healing,     fightIDs: [$fightID], hostilityType: Friendlies)
+        }
+    }
+}
+
+# Response shape:
+{
+  "data": {
+    "series": [
+      {
+        "name": "PlayerName",
+        "type": "Hunter",           # class
+        "pointStart": 0,            # ms offset from fight start
+        "pointInterval": 42921.75,  # ms per bucket (~20 buckets per fight)
+        "total": 14276577,          # total damage over full fight
+        "data": [0, 0, ..., 9830, 18343, 33261, 33261]  # CUMULATIVE totals per bucket
+      },
+      ...
+      { "name": "Total", "type": "Total", "data": [...] }  # pre-summed across all players
+    ],
+    "startTime": 0,
+    "endTime": 858000
+  }
+}
+
+# Conversion to per-second rate (used in wcl_craft_audit.py fetch_fight_graph):
+def _sum_series(graph_raw):
+    inner   = graph_raw.get("data", graph_raw)
+    series  = inner.get("series", [])
+    src     = next((e for e in series if e.get("type") == "Total"), None)
+    interval_s = src["pointInterval"] / 1000
+    prev = 0
+    result = []
+    for i, cum in enumerate(src["data"]):
+        delta = max(cum - prev, 0)
+        rate  = round(delta / interval_s)
+        t_s   = round((src["pointStart"] + i * src["pointInterval"]) / 1000, 1)
+        result.append((t_s, rate))
+        if cum > prev: prev = cum
+    # trim trailing zeros (fight over)
+    while result and result[-1][1] == 0: result.pop()
+    return result
+</pre>
+
+<h2>Canvas Renderer (JS)</h2>
+<pre id="renderer-src"></pre>
+
+<script>
+// ── Demo data (synthetic fight, ~8 minutes) ──────────────────────────────────
+function makeSynth(peak, noiseAmp, rampStart, points) {
+  const d = [];
+  for (let i = 0; i < points; i++) {
+    const t = i * 25;
+    const ramp = Math.max(0, Math.min(1, (i - rampStart) / (points - rampStart - 2)));
+    const noise = (Math.random() - 0.5) * noiseAmp;
+    d.push([t, Math.max(0, Math.round(peak * ramp + noise))]);
+  }
+  return d;
+}
+const pts = 20;
+const dps   = makeSynth(580000, 60000, 3, pts);
+const taken = makeSynth(140000, 30000, 3, pts);
+const heal  = makeSynth(420000, 50000, 3, pts);
+
+// ── Renderer ─────────────────────────────────────────────────────────────────
+function renderTimeline(canvas, dps, taken, heal) {
+  const all = dps.concat(taken, heal);
+  if (!all.length) return;
+  const W = canvas.offsetWidth || 800;
+  const H = 140;
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const PAD = {top:14, right:12, bottom:22, left:54};
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+  const maxT = Math.max(...all.map(p => p[0]));
+  const maxV = Math.max(...all.map(p => p[1]));
+  if (!maxT || !maxV) return;
+  const xS = t => PAD.left + (t / maxT) * cW;
+  const yS = v => PAD.top  + cH - (v / maxV) * cH;
+  ctx.fillStyle = '#0d1525';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#1a2540'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + (cH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+  }
+  const fmt = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? Math.round(v/1e3)+'k' : String(Math.round(v));
+  ctx.fillStyle = '#455'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 2; i++) {
+    const y = PAD.top + (cH / 2) * i;
+    ctx.fillText(fmt(maxV * (1 - i/2)), PAD.left - 4, y + 4);
+  }
+  ctx.textAlign = 'center'; ctx.fillStyle = '#445';
+  const steps = Math.min(6, Math.floor(maxT / 30));
+  for (let i = 0; i <= steps; i++) {
+    const t = maxT * i / steps;
+    const m = Math.floor(t / 60), s = Math.round(t % 60);
+    ctx.fillText(`${m}:${s.toString().padStart(2,'0')}`, xS(t), H - 4);
+  }
+  [{d: dps, c: '#ffb74d'}, {d: taken, c: '#e57373'}, {d: heal, c: '#81c784'}].forEach(({d, c}) => {
+    if (!d.length) return;
+    ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    d.forEach(([t, v], i) => { const x = xS(t), y = yS(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  const c = document.getElementById('demo-canvas');
+  renderTimeline(c, dps, taken, heal);
+  // Also show the renderer source in the pre block
+  document.getElementById('renderer-src').textContent = renderTimeline.toString();
+});
+</script>
+</body>
+</html>
