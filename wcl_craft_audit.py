@@ -3904,6 +3904,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                         token, report_code, fid,
                         alndust_groups,
                         horror_actor_ids, actor_lookup, fight_start,
+                        fight_start + fight_dur_ms,
                     )
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
