@@ -3075,13 +3075,13 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
                         f'<div class="tip-wrap">{len(s["low_pulls"])}'
                         f'<div class="tip-box">{lines}</div></div></td>')
         else:
-            low_cell = '<td class="prog-cell prog-ok">—</td>'
+            low_cell = f'<td class="prog-cell prog-ok" data-val="0">—</td>'
 
         horror_rows += (f'<tr>'
                         f'<td class="prog-name" style="color:{color}">{_esc(name)}</td>'
-                        f'<td class="prog-cell">{fmt_dmg(s["avg_dmg"])}</td>'
-                        f'<td class="prog-cell">{fmt_dmg(s["avg_dps"])}</td>'
-                        f'<td class="prog-cell">{s["avg_active"]:.1f}%</td>'
+                        f'<td class="prog-cell" data-val="{s["avg_dmg"]}">{fmt_dmg(s["avg_dmg"])}</td>'
+                        f'<td class="prog-cell" data-val="{s["avg_dps"]}">{fmt_dmg(s["avg_dps"])}</td>'
+                        f'<td class="prog-cell" data-val="{s["avg_active"]}">{s["avg_active"]:.1f}%</td>'
                         f'{low_cell}'
                         f'</tr>')
 
