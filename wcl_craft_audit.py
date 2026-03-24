@@ -1462,6 +1462,43 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         else:
             results[boss_name] = kill_content
 
+    # ── Wipe-only bosses (not killed this raid) ──
+    for boss_name, boss_wipes in (wipe_data or {}).items():
+        if boss_name in results or not boss_wipes:
+            continue
+        boss_name_base = boss_name.rsplit(" (", 1)[0]
+        table_id  = f"{id_prefix}-wipeonly-{boss_name_base.lower().replace(' ', '-').replace('&', 'and')}"
+        total     = len(boss_wipes)
+
+        for wi, w in enumerate(boss_wipes):
+            bpct  = w.get("boss_pct", 0)
+            dur_s = w.get("fight_dur_ms", 0) // 1000
+            wm, ws = divmod(dur_s, 60)
+            w["_row_label"] = f"💀 Wipe {wi + 1} — {bpct}% boss HP · {wm}:{ws:02d}"
+
+        pull_btns  = ""
+        wipe_panes = ""
+        for wi, w in enumerate(reversed(boss_wipes)):
+            actual_wipe_num = total - wi
+            bpct    = w.get("boss_pct", 0)
+            dur_s   = w.get("fight_dur_ms", 0) // 1000
+            wm, ws  = divmod(dur_s, 60)
+            wtbl_id = f"wipe-{table_id}-{wi}"
+            active  = "active" if wi == 0 else ""
+            btn_cls = "pull-btn wipe active" if wi == 0 else "pull-btn wipe"
+            pull_btns += f'<button class="{btn_cls}" onclick="switchPull(this,\'{wtbl_id}\')">Wipe {actual_wipe_num} · {bpct}% · {wm}:{ws:02d}</button>'
+            wipe_pids = sorted(
+                {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
+                key=pid_sort
+            )
+            wipe_banners = _build_banners([w])
+            wipe_table   = _render_table([w], wtbl_id, pids=wipe_pids)
+            wipe_chart   = _build_chart(w, wtbl_id)
+            wipe_panes  += f'<div class="pull-pane {active}" id="pane-{wtbl_id}">{wipe_banners}{wipe_table}{wipe_chart}</div>'
+
+        pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
+        results[boss_name] = pull_selector + wipe_panes
+
     return results
 
 
