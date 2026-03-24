@@ -1624,15 +1624,24 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 return ""
 
             def fmt_dmg(v):
-                if v >= 1_000_000: return f"{v / 1_000_000:.1f}M"
-                if v > 0:          return f"{v // 1000}k"
+                if v >= 1_000_000: return f"{v / 1_000_000:.2f}M"
+                if v >= 1_000:     return f"{v / 1_000:.1f}k"
+                if v > 0:          return str(v)
                 return "—"
 
-            def fmt_uptime(active_ms, wave_dur_ms):
+            def fmt_dps(dmg, wave_dur_ms):
+                if not wave_dur_ms or not dmg:
+                    return "—"
+                dps = dmg / (wave_dur_ms / 1000)
+                if dps >= 1_000_000: return f"{dps / 1_000_000:.2f}M"
+                if dps >= 1_000:     return f"{dps / 1_000:.1f}k"
+                return str(int(dps))
+
+            def fmt_active(active_ms, wave_dur_ms):
                 if not wave_dur_ms or not active_ms:
                     return "—"
-                pct = min(100, round(active_ms / wave_dur_ms * 100))
-                return f"{pct}%"
+                pct = min(100.0, active_ms / wave_dur_ms * 100)
+                return f"{pct:.1f}%"
 
             # Determine group membership: Group 1 = players who went DOWN on wave 1
             group1 = set(horror_waves[0]["down_pids"]) if horror_waves else set()
@@ -1657,28 +1666,30 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             num_waves = len(horror_waves)
             tbl_id = "hw-tbl-main"
 
-            # Build header: Wave N with 3 sub-cols each (Phase, DMG, Uptime)
+            # Build header: Wave N with 4 sub-cols each (Phase, DMG, DPS, Active)
             t = '<div class="horror-waves-wrap">'
             t += '<div class="hw-title">⚔ Colossal Horror — Wave Breakdown</div>'
             t += f'<table class="boss-table hw-tbl" id="{tbl_id}"><thead>'
             t += '<tr><th class="hw-player-col" rowspan="2">Player</th>'
             for w in horror_waves:
-                t += f'<th colspan="3" class="hw-wave-hdr">Wave {w["wave"]}</th>'
+                t += f'<th colspan="4" class="hw-wave-hdr">Wave {w["wave"]}</th>'
             t += '</tr><tr>'
             for wi, w in enumerate(horror_waves):
                 t += f'<th class="hw-sub">Phase</th>'
                 t += (f'<th class="hw-sub hw-sortable" style="cursor:pointer;user-select:none"'
                       f' onclick="hwSort({wi},\'dmg\',this)">DMG <span class="sort-arrow">▼</span></th>')
                 t += (f'<th class="hw-sub hw-sortable" style="cursor:pointer;user-select:none"'
-                      f' onclick="hwSort({wi},\'uptime\',this)">Uptime <span class="sort-arrow">▼</span></th>')
+                      f' onclick="hwSort({wi},\'dps\',this)">DPS <span class="sort-arrow">▼</span></th>')
+                t += (f'<th class="hw-sub hw-sortable" style="cursor:pointer;user-select:none"'
+                      f' onclick="hwSort({wi},\'active\',this)">Active <span class="sort-arrow">▼</span></th>')
             t += '</tr></thead><tbody>'
 
-            def player_row(pid):
+            def player_row(pid, group_id=""):
                 info  = actor_lookup.get(pid, {})
                 name  = info.get("name", f"#{pid}")
                 cls   = info.get("subType", "")
                 color = CLASS_COLORS.get(cls, "#ccc")
-                row = '<tr>'
+                row = f'<tr data-group="{group_id}">'
                 row += f'<td class="hw-name" style="color:{color}">{escape(name)}</td>'
                 for w in horror_waves:
                     pp       = w["per_player"].get(pid, {})
@@ -1689,27 +1700,29 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     ph_html  = ('<span class="hw-phase-down">↓ Down</span>' if phase == "down"
                                 else '<span class="hw-phase-up">↑ Up</span>' if phase == "up"
                                 else "—")
+                    dps_val  = int(dmg / (dur / 1000)) if dur else 0
                     row += f'<td class="hw-phase-cell">{ph_html}</td>'
                     row += f'<td class="hw-dmg-cell" data-val="{dmg}">{fmt_dmg(dmg)}</td>'
-                    row += f'<td class="hw-dmg-cell" data-val="{active}">{fmt_uptime(active, dur)}</td>'
+                    row += f'<td class="hw-dmg-cell" data-val="{dps_val}">{fmt_dps(dmg, dur)}</td>'
+                    row += f'<td class="hw-dmg-cell" data-val="{active}">{fmt_active(active, dur)}</td>'
                 row += '</tr>'
                 return row
 
-            num_cols = 1 + num_waves * 3
-            def group_header(label):
-                return (f'<tr class="hw-group-hdr">'
+            num_cols = 1 + num_waves * 4
+            def group_header(label, group_id):
+                return (f'<tr class="hw-group-hdr" data-group-hdr="{group_id}">'
                         f'<td colspan="{num_cols}">{label}</td></tr>')
 
             if g1_players:
-                t += group_header("Group 1")
+                t += group_header("Group 1", "g1")
                 for pid in g1_players:
-                    t += player_row(pid)
+                    t += player_row(pid, group_id="g1")
             if g2_players:
-                t += group_header("Group 2")
+                t += group_header("Group 2", "g2")
                 for pid in g2_players:
-                    t += player_row(pid)
+                    t += player_row(pid, group_id="g2")
             for pid in other_players:
-                t += player_row(pid)
+                t += player_row(pid, group_id="other")
 
             t += '</tbody></table></div>'
 
@@ -1723,16 +1736,36 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
     hwAsc[key] = !hwAsc[key];
     var tbl = document.getElementById('hw-tbl-main');
     var tbody = tbl.querySelector('tbody');
-    var rows = Array.from(tbody.querySelectorAll('tr')).filter(function(r){ return !r.classList.contains('hw-sep'); });
-    var colOffset = 1 + waveIdx * 3 + (col === 'dmg' ? 1 : 2);
-    rows.sort(function(a, b){
-      var av = parseInt(a.cells[colOffset] ? a.cells[colOffset].getAttribute('data-val') || 0 : 0);
-      var bv = parseInt(b.cells[colOffset] ? b.cells[colOffset].getAttribute('data-val') || 0 : 0);
-      return hwAsc[key] ? av - bv : bv - av;
+    var colOffset = 1 + waveIdx * 4 + (col === 'dmg' ? 1 : col === 'dps' ? 2 : 3);
+    var asc = hwAsc[key];
+
+    // Collect groups in order: [{hdr: trEl or null, rows: [trEl, ...]}, ...]
+    var groups = [];
+    var currentGroup = null;
+    Array.from(tbody.querySelectorAll('tr')).forEach(function(r) {
+      if (r.hasAttribute('data-group-hdr')) {
+        currentGroup = { hdr: r, rows: [] };
+        groups.push(currentGroup);
+      } else if (r.hasAttribute('data-group')) {
+        if (!currentGroup) { currentGroup = { hdr: null, rows: [] }; groups.push(currentGroup); }
+        currentGroup.rows.push(r);
+      }
     });
-    rows.forEach(function(r){ tbody.appendChild(r); });
+
+    // Sort rows within each group
+    groups.forEach(function(g) {
+      g.rows.sort(function(a, b) {
+        var av = parseInt(a.cells[colOffset] ? a.cells[colOffset].getAttribute('data-val') || 0 : 0);
+        var bv = parseInt(b.cells[colOffset] ? b.cells[colOffset].getAttribute('data-val') || 0 : 0);
+        return asc ? av - bv : bv - av;
+      });
+      // Re-append: header first, then sorted rows
+      if (g.hdr) tbody.appendChild(g.hdr);
+      g.rows.forEach(function(r) { tbody.appendChild(r); });
+    });
+
     tbl.querySelectorAll('.sort-arrow').forEach(function(s){ s.textContent = '▼'; });
-    if (th) th.querySelector('.sort-arrow').textContent = hwAsc[key] ? '▲' : '▼';
+    if (th) th.querySelector('.sort-arrow').textContent = asc ? '▲' : '▼';
   };
 })();
 </script>
