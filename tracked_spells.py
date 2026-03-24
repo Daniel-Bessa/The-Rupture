@@ -78,7 +78,7 @@ CLASS_DEFENSIVE_IDS = {
     19236,   # Desperate Prayer
     47585,   # Dispersion
     586,     # Fade
-    15286,   # Vampiric Embrace
+    # 15286 moved to CLASS_EXTERNAL_IDS (Vampiric Embrace — raid heal)
     # Rogue
     31224,   # Cloak of Shadows
     5277,    # Evasion
