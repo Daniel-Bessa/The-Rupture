@@ -707,36 +707,43 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
             waves.append([h])
 
     result = []
-    odd_group  = None  # set from wave 1
-    even_group = None  # set from wave 2
-    for wi, wave in enumerate(waves):
-        wave_num   = wi + 1
-        down_pids  = list(dict.fromkeys(pid for _, pid in wave))
-        down_set   = set(down_pids)
-        up_pids    = [pid for pid in sorted(player_pids) if pid not in down_set]
-        t_s        = wave[0][0] // 1000
+    # Track consecutive "up" count per player to detect missed soaks
+    consecutive_ups: dict = {pid: 0 for pid in player_pids}
 
-        if wave_num == 1:
-            odd_group = down_set
-            missed_pids = []
-            wrong_pids  = []
-        elif wave_num == 2:
-            even_group = down_set
+    for wi, wave in enumerate(waves):
+        wave_num  = wi + 1
+        down_pids = list(dict.fromkeys(pid for _, pid in wave))
+        down_set  = set(down_pids)
+        up_pids   = [pid for pid in sorted(player_pids) if pid not in down_set]
+        t_s       = wave[0][0] // 1000
+
+        if wave_num <= 2:
             missed_pids = []
             wrong_pids  = []
         else:
-            expected = odd_group if wave_num % 2 == 1 else even_group
-            if expected is not None:
-                missed_pids = [p for p in expected if p not in down_set]
-                wrong_pids  = [p for p in down_set  if p not in expected]
-            else:
-                missed_pids = []
-                wrong_pids  = []
+            # Use wave N-2 as the reference (adapts to roster changes, not locked to waves 1-2)
+            expected = set(result[wi - 2]["down_pids"])
+            missed_pids = [p for p in expected if p not in down_set]
+            # Players not in the expected group who went down:
+            # — if they had 2+ consecutive ups they missed their own wave and are compensating → not "wrong"
+            # — otherwise they are genuinely in the wrong group
+            wrong_pids = [
+                p for p in down_set if p not in expected
+                and consecutive_ups.get(p, 0) < 2
+            ]
+
+        # Flag players who are "up" for the 2nd+ consecutive wave
+        double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1]
+
+        # Update consecutive-up counters
+        for pid in player_pids:
+            consecutive_ups[pid] = 0 if pid in down_set else consecutive_ups.get(pid, 0) + 1
 
         result.append({
             "wave": wave_num, "t_s": t_s,
             "down_pids": down_pids, "up_pids": up_pids,
             "missed_pids": missed_pids, "wrong_pids": wrong_pids,
+            "double_up_pids": double_up_pids,
         })
     return result
 
@@ -1529,14 +1536,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             if not waves:
                 return ""
 
-            # Derive expected groups from wave 1 (odd) and wave 2 (even)
-            odd_group  = set(waves[0]["down_pids"]) if len(waves) > 0 else set()
-            even_group = set(waves[1]["down_pids"]) if len(waves) > 1 else set()
-
-            def _pid_chip(pid, missed=False, wrong=False):
+            def _pid_chip(pid, missed=False, wrong=False, double_up=False):
                 info  = actor_lookup.get(pid, {})
                 name  = info.get("name", f"#{pid}")
-                cls   = info.get("class", "")
+                cls   = info.get("subType", info.get("class", ""))
                 color = CLASS_COLORS.get(cls, "#ccc")
                 if missed:
                     return (f'<span class="ag-chip ag-miss" title="Missed soak">'
@@ -1545,33 +1548,35 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     return (f'<span class="ag-chip" style="background:#f4a74222;border:1px solid #f4a74266;'
                             f'color:#f4a742;padding:2px 8px;border-radius:12px;font-size:12px;'
                             f'white-space:nowrap" title="Wrong group soaked">{escape(name)} ?</span>')
+                if double_up:
+                    return (f'<span class="ag-chip ag-double-up" title="Up 2+ waves in a row — missed their soak">'
+                            f'{escape(name)} ⚠</span>')
                 return (f'<span class="ag-chip" style="background:{color}22;border:1px solid {color}55;'
                         f'color:{color};padding:2px 8px;border-radius:12px;font-size:12px;'
                         f'white-space:nowrap">{escape(name)}</span>')
 
             rows = ""
             for w in waves:
-                wave_num = w["wave"]
-                m, s     = divmod(w["t_s"], 60)
-                t_str    = f"{m}:{s:02d}"
-                down_set = set(w["down_pids"])
-
-                if wave_num <= 2:
-                    missed = set()
-                    wrong  = set()
-                else:
-                    expected = odd_group if wave_num % 2 == 1 else even_group
-                    missed   = expected - down_set
-                    wrong    = down_set - expected
+                wave_num     = w["wave"]
+                m, s         = divmod(w["t_s"], 60)
+                t_str        = f"{m}:{s:02d}"
+                missed       = set(w.get("missed_pids", []))
+                wrong        = set(w.get("wrong_pids",  []))
+                double_up    = set(w.get("double_up_pids", []))
 
                 down_chips = " ".join(
                     _pid_chip(p, wrong=(p in wrong)) for p in w["down_pids"]
                 )
                 up_chips = " ".join(
-                    _pid_chip(p, missed=(p in missed)) for p in w["up_pids"]
+                    _pid_chip(p, missed=(p in missed), double_up=(p in double_up))
+                    for p in w["up_pids"]
                 )
-                label_extra = (f' <span class="ag-miss-count">⚠ {len(missed)} missed</span>'
-                               if missed else "")
+                warnings = []
+                if missed:
+                    warnings.append(f'<span class="ag-miss-count">⚠ {len(missed)} missed</span>')
+                if double_up:
+                    warnings.append(f'<span class="ag-double-up-count">⚠ {len(double_up)} up again</span>')
+                label_extra = (" " + " ".join(warnings)) if warnings else ""
                 rows += (
                     f'<div class="ag-wave">'
                     f'<div class="ag-wave-label">Wave {wave_num} <span class="ag-time">({t_str})</span>{label_extra}</div>'
@@ -2133,7 +2138,9 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .ag-badge-down {{ background: rgba(229,115,115,0.2); color: #e57373; border: 1px solid rgba(229,115,115,0.4); }}
 .ag-badge-up {{ background: rgba(129,199,132,0.15); color: #81c784; border: 1px solid rgba(129,199,132,0.3); }}
 .ag-chip.ag-miss {{ background: rgba(229,115,115,0.2); border: 1px solid rgba(229,115,115,0.6); color: #e57373; padding: 2px 8px; border-radius: 12px; font-size: 12px; white-space: nowrap; font-weight: 700; }}
+.ag-chip.ag-double-up {{ background: rgba(255,183,77,0.15); border: 1px solid rgba(255,183,77,0.5); color: #ffb74d; padding: 2px 8px; border-radius: 12px; font-size: 12px; white-space: nowrap; font-weight: 600; }}
 .ag-miss-count {{ color: #e57373; font-size: 11px; font-weight: 700; margin-left: 8px; }}
+.ag-double-up-count {{ color: #ffb74d; font-size: 11px; font-weight: 700; margin-left: 8px; }}
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
