@@ -583,11 +583,25 @@ def fetch_fight_graph(token: str, report_code: str, fight_id: int) -> dict:
             src = {**src, "data": vals}
         point_start    = src.get("pointStart", 0)
         point_interval = src.get("pointInterval", 1000)
+        interval_s     = point_interval / 1000
         data_vals      = src.get("data", [])
         if not data_vals:
             return []
-        return [(round((point_start + i * point_interval) / 1000, 1), v or 0)
-                for i, v in enumerate(data_vals)]
+        # Convert cumulative totals → per-second rate for each bucket
+        result = []
+        prev = 0
+        for i, cum in enumerate(data_vals):
+            cum = cum or 0
+            delta = max(cum - prev, 0)
+            rate  = round(delta / interval_s) if interval_s > 0 else 0
+            t_s   = round((point_start + i * point_interval) / 1000, 1)
+            result.append((t_s, rate))
+            if cum > prev:
+                prev = cum
+        # Trim trailing zero-rate points (fight already over)
+        while result and result[-1][1] == 0:
+            result.pop()
+        return result
 
     return {
         "dps":   _sum_series(rep.get("dps")),
