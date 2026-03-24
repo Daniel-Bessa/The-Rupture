@@ -554,29 +554,40 @@ def fetch_fight_graph(token: str, report_code: str, fight_id: int) -> dict:
         return {"dps": [], "taken": [], "heal": []}
 
     def _sum_series(graph_raw) -> list:
-        """Sum all player entries per time bucket → [(t_s, total), ...], time 0-based."""
+        """Extract total time-series from WCL graph response → [(t_s, total), ...], time 0-based.
+        WCL returns {data: {series: [{pointStart, pointInterval, data: [val, val, ...]}, ...]}}
+        Uses the pre-summed 'Total' entry when available, otherwise sums all player entries.
+        """
         if not isinstance(graph_raw, dict):
             return []
         inner = graph_raw.get("data", graph_raw)
-        if isinstance(inner, dict):
-            entries = inner.get("series", inner.get("data", []))
-        elif isinstance(inner, list):
-            entries = inner
-        else:
+        if not isinstance(inner, dict):
             return []
-        bucket: dict = {}
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            for point in entry.get("data", []):
-                if isinstance(point, (list, tuple)) and len(point) >= 2:
-                    t_ms = int(point[0])
-                    val  = point[1] or 0
-                    bucket[t_ms] = bucket.get(t_ms, 0) + val
-        if not bucket:
+        series = inner.get("series", [])
+        if not series:
             return []
-        t_min = min(bucket)
-        return sorted((round((t - t_min) / 1000, 1), v) for t, v in bucket.items())
+        # Prefer the pre-summed Total entry
+        src = next((e for e in series if e.get("type") == "Total"), None)
+        if src is None:
+            # Fall back: sum all non-Total entries element-wise
+            non_total = [e for e in series if isinstance(e.get("data"), list)]
+            if not non_total:
+                return []
+            src = non_total[0]
+            extra = non_total[1:]
+            vals = [v or 0 for v in src.get("data", [])]
+            for e in extra:
+                for i, v in enumerate(e.get("data", [])):
+                    if i < len(vals):
+                        vals[i] += v or 0
+            src = {**src, "data": vals}
+        point_start    = src.get("pointStart", 0)
+        point_interval = src.get("pointInterval", 1000)
+        data_vals      = src.get("data", [])
+        if not data_vals:
+            return []
+        return [(round((point_start + i * point_interval) / 1000, 1), v or 0)
+                for i, v in enumerate(data_vals)]
 
     return {
         "dps":   _sum_series(rep.get("dps")),
