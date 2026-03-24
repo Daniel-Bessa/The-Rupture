@@ -238,9 +238,12 @@ function switchTab(name, btn) {
     if (prevChips) savedNames = [...prevChips.querySelectorAll('.chip')].map(c => c.dataset.val);
   }
   switchTabByName(name);
-  // Restore filter state into new tab
-  if (savedRoles.length || savedClasses.length || savedNames.length) {
+  // Sync filter state into new tab (clear first, then apply saved state)
+  if (prevId && prevId !== name) {
     const newFb = document.getElementById('fb-' + name);
+    if (newFb) newFb.querySelectorAll('.filter-tag.active').forEach(b => b.classList.remove('active'));
+    const newChips = document.getElementById('chips-' + name);
+    if (newChips) newChips.innerHTML = '';
     if (newFb) {
       savedRoles.forEach(v => { const b = newFb.querySelector(`[data-ftype="role"][data-fval="${v}"]`); if (b) b.classList.add('active'); });
       savedClasses.forEach(v => { const b = newFb.querySelector(`[data-ftype="class"][data-fval="${v}"]`); if (b) b.classList.add('active'); });
