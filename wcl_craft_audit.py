@@ -1361,11 +1361,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             if not waves:
                 return ""
 
-            missed_all = set()
-            wrong_all  = set()
-            for w in waves:
-                missed_all.update(w.get("missed_pids", []))
-                wrong_all.update(w.get("wrong_pids",  []))
+            # Derive expected groups from wave 1 (odd) and wave 2 (even)
+            odd_group  = set(waves[0]["down_pids"]) if len(waves) > 0 else set()
+            even_group = set(waves[1]["down_pids"]) if len(waves) > 1 else set()
 
             def _pid_chip(pid, missed=False, wrong=False):
                 info  = actor_lookup.get(pid, {})
@@ -1385,22 +1383,30 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
 
             rows = ""
             for w in waves:
-                m, s   = divmod(w["t_s"], 60)
-                t_str  = f"{m}:{s:02d}"
-                missed = set(w.get("missed_pids", []))
-                wrong  = set(w.get("wrong_pids",  []))
+                wave_num = w["wave"]
+                m, s     = divmod(w["t_s"], 60)
+                t_str    = f"{m}:{s:02d}"
+                down_set = set(w["down_pids"])
+
+                if wave_num <= 2:
+                    missed = set()
+                    wrong  = set()
+                else:
+                    expected = odd_group if wave_num % 2 == 1 else even_group
+                    missed   = expected - down_set
+                    wrong    = down_set - expected
+
                 down_chips = " ".join(
                     _pid_chip(p, wrong=(p in wrong)) for p in w["down_pids"]
                 )
                 up_chips = " ".join(
                     _pid_chip(p, missed=(p in missed)) for p in w["up_pids"]
                 )
-                label_extra = ""
-                if missed:
-                    label_extra = f' <span class="ag-miss-count">⚠ {len(missed)} missed</span>'
+                label_extra = (f' <span class="ag-miss-count">⚠ {len(missed)} missed</span>'
+                               if missed else "")
                 rows += (
                     f'<div class="ag-wave">'
-                    f'<div class="ag-wave-label">Wave {w["wave"]} <span class="ag-time">({t_str})</span>{label_extra}</div>'
+                    f'<div class="ag-wave-label">Wave {wave_num} <span class="ag-time">({t_str})</span>{label_extra}</div>'
                     f'<div class="ag-group ag-down"><span class="ag-badge ag-badge-down">⬇ Down</span> {down_chips}</div>'
                     f'<div class="ag-group ag-up"><span class="ag-badge ag-badge-up">⬆ Up</span> {up_chips}</div>'
                     f'</div>'
