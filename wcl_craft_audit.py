@@ -1155,7 +1155,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
 
         # ── Per-pull banner builder (frontal + avoid for any list of fights) ──
-        import json as _json
 
         def _build_banners(fights_list: list) -> str:
             """Build Frontal Failures + Avoidable Hits HTML for a given list of fights."""
@@ -1205,7 +1204,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                                 f'<div class="av-body open">{rows}</div></div>')
             return out
 
-        def _build_chart(fight: dict, chart_id: str) -> str:
+        def _build_chart(*_) -> str:
             return ""  # parked — see ideas/timeline_chart.html
 
         # ── Shared table renderer (kills + wipes) ──
