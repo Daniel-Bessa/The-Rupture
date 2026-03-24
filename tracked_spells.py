@@ -128,6 +128,8 @@ CLASS_EXTERNAL_IDS = {
     207399,  # Ancestral Protection Totem
     # Warrior
     97462,   # Rallying Cry
+    # Priest
+    15286,   # Vampiric Embrace (Shadow Priest — raid heal)
 }
 
 ALL_TRACKED_IDS = (HEALTHSTONE_IDS | HEALTH_POT_IDS | COMBAT_POT_IDS
@@ -171,7 +173,7 @@ SPELL_NAMES = {
     498: "Divine Protection",
     # Personal defensives — Priest
     19236: "Desperate Prayer",    47585: "Dispersion",
-    586: "Fade",                  15286: "Vampiric Embrace",
+    586: "Fade",
     # Personal defensives — Rogue
     31224: "Cloak of Shadows",   5277: "Evasion",
     1966: "Feint",               1856: "Vanish",
@@ -196,4 +198,5 @@ SPELL_NAMES = {
     98008: "Spirit Link Totem",
     207399: "Ancestral Protection Totem",
     97462: "Rallying Cry",
+    15286: "Vampiric Embrace",
 }
