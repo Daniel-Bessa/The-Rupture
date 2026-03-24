@@ -1653,7 +1653,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             g1_players = [p for p in ordered if p in group1]
             g2_players = [p for p in ordered if p in group2]
             other_players = [p for p in ordered if p not in group1 and p not in group2]
-            player_rows_order = g1_players + g2_players + other_players
 
             num_waves = len(horror_waves)
             tbl_id = "hw-tbl-main"
@@ -1674,13 +1673,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                       f' onclick="hwSort({wi},\'uptime\',this)">Uptime <span class="sort-arrow">▼</span></th>')
             t += '</tr></thead><tbody>'
 
-            def player_row(pid, group_sep=False):
+            def player_row(pid):
                 info  = actor_lookup.get(pid, {})
                 name  = info.get("name", f"#{pid}")
                 cls   = info.get("subType", "")
                 color = CLASS_COLORS.get(cls, "#ccc")
-                sep_style = ' style="border-top:1px solid #2a3a4a"' if group_sep else ''
-                row = f'<tr{sep_style}>'
+                row = '<tr>'
                 row += f'<td class="hw-name" style="color:{color}">{escape(name)}</td>'
                 for w in horror_waves:
                     pp       = w["per_player"].get(pid, {})
@@ -1697,9 +1695,21 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 row += '</tr>'
                 return row
 
-            for i, pid in enumerate(player_rows_order):
-                sep = (i == len(g1_players) and len(g1_players) > 0 and len(g2_players) > 0)
-                t += player_row(pid, group_sep=sep)
+            num_cols = 1 + num_waves * 3
+            def group_header(label):
+                return (f'<tr class="hw-group-hdr">'
+                        f'<td colspan="{num_cols}">{label}</td></tr>')
+
+            if g1_players:
+                t += group_header("Group 1")
+                for pid in g1_players:
+                    t += player_row(pid)
+            if g2_players:
+                t += group_header("Group 2")
+                for pid in g2_players:
+                    t += player_row(pid)
+            for pid in other_players:
+                t += player_row(pid)
 
             t += '</tbody></table></div>'
 
@@ -2168,6 +2178,7 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .hw-slack  {{ color: #f4a742; font-size: 12px; cursor: help; }}
 .horror-waves-wrap {{ margin: 16px 0 8px; overflow-x: auto; }}
 .hw-tbl thead {{ position: static; }}
+.hw-group-hdr td {{ font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #556; background: #0b1520; padding: 4px 8px; border-top: 1px solid #1a2a3a; }}
 .alndust-panel {{ margin-top: 12px; background: rgba(100,160,255,0.06); border: 1px solid rgba(100,160,255,0.25); border-radius: 8px; overflow: hidden; }}
 .ag-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
 .ag-header:hover {{ background: rgba(100,160,255,0.1); }}
