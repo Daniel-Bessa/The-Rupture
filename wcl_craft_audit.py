@@ -1876,12 +1876,6 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 .pull-pane {{ display: none; }}
 .pull-pane.active {{ display: block; }}
 {_FILTER_BAR_CSS}
-/* ── Timeline chart ── */
-.timeline-wrap {{ margin: 12px 0 4px; }}
-.timeline-canvas {{ display: block; width: 100%; height: 140px; background: #0d1525; border-radius: 6px; cursor: default; }}
-.timeline-legend {{ display: flex; align-items: center; gap: 14px; padding: 4px 2px; font-size: 11px; color: #888; }}
-.tl-dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 50%; }}
-.tl-lbl {{ margin-left: -8px; }}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
