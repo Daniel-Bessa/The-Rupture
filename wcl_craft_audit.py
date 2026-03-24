@@ -134,8 +134,9 @@ def fetch_report_info(token: str, report_code: str) -> dict:
                     bossPercentage
                 }
                 masterData(translate: true) {
-                    actors(type: "Player") {
+                    actors {
                         id
+                        gameID
                         name
                         type
                         subType
@@ -1104,7 +1105,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
         has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 8 + len(mech_defs) + (1 if has_interrupts else 0)
+        is_chimaerus   = "Chimaerus" in boss_name_base
+        total_cols     = 8 + len(mech_defs) + (1 if has_interrupts else 0) + (1 if is_chimaerus else 0)
 
         all_pids_set = set()
         for fight in fights:
@@ -1234,7 +1236,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                       f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
                       f' onclick="sortBossTable(\'{tbl_id}\',{mci},this)">'
                       f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
-            t += '<th>Notes</th></tr></thead><tbody>'
+            t += '<th>Notes</th>'
+            if is_chimaerus:
+                t += _sth(total_cols - 1, 'Horror DMG', 'horror-h')
+            t += '</tr></thead><tbody>'
 
             for fi, fight in enumerate(fights_list, 1):
                 row_lbl = fight.get("_row_label") or f"Split {fi}"
@@ -1351,7 +1356,18 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                             t += f'<td class="center" style="background:{bg}">{cnt}</td>'
                         else:
                             t += '<td class="center">—</td>'
-                    t += '<td></td></tr>'
+                    t += '<td></td>'
+                    if is_chimaerus:
+                        hdmg = fight.get("horror_damage", {}).get(pid, 0)
+                        if hdmg >= 1_000_000:
+                            hdmg_str = f"{hdmg/1_000_000:.1f}M"
+                        elif hdmg > 0:
+                            hdmg_str = f"{hdmg/1000:.0f}k"
+                        else:
+                            hdmg_str = "—"
+                        bg = ' style="background:#1a2a3a"' if hdmg > 0 else ''
+                        t += f'<td class="center horror-h"{bg}>{hdmg_str}</td>'
+                    t += '</tr>'
 
             t += '</tbody></table></div>'
             return t
@@ -1846,6 +1862,7 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .av-player {{ color: #e0e0e0; }}
 .av-count {{ color: #e06c6c; font-weight: 700; margin-right: 8px; }}
 /* ── Alndust Upheaval grouping panel ── */
+.horror-h {{ color: #e57373; }}
 .alndust-panel {{ margin-top: 12px; background: rgba(100,160,255,0.06); border: 1px solid rgba(100,160,255,0.25); border-radius: 8px; overflow: hidden; }}
 .ag-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
 .ag-header:hover {{ background: rgba(100,160,255,0.1); }}
@@ -3376,7 +3393,7 @@ def _fix_int_keys(boss_data: dict) -> dict:
     int_key_fields = (
         "uptime_map", "dmg_taken", "healing_map", "interrupts",
         "avoidable_damage", "deaths", "mechanics_data",
-        "defensive_casts", "external_casts",
+        "defensive_casts", "external_casts", "horror_damage",
     )
     for fights in boss_data.values():
         for fight in fights:
@@ -3418,10 +3435,15 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             selected_ids = {int(x.strip()) for x in fight_input.split(",") if x.strip().isdigit()}
             selected_fights = [f for f in all_fights if f["id"] in selected_ids]
 
-    actors = report_info.get("masterData", {}).get("actors", [])
+    all_actors  = report_info.get("masterData", {}).get("actors", [])
+    actors      = [a for a in all_actors if a.get("type") == "Player"]
+    npc_actors  = [a for a in all_actors if a.get("type") == "NPC"]
     print(f"[OK] Found {len(actors)} player actors in report.")
     ability_names = {ab["gameID"]: ab["name"] for ab in report_info.get("masterData", {}).get("abilities", [])}
-    actor_lookup = {a["id"]: a for a in actors}
+    actor_lookup  = {a["id"]: a for a in actors}
+    # Colossal Horror actor IDs for this report (Chimaerus add)
+    _COLOSSAL_HORROR_GAME_IDS = {245556, 249341, 257691}
+    horror_actor_ids = {a["id"] for a in npc_actors if a.get("gameID") in _COLOSSAL_HORROR_GAME_IDS}
 
     # Gear
     all_combatant_events = []
@@ -3552,6 +3574,17 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             all_pids = {pid for pid in all_pids if pid in actor_lookup}
             alndust_groups = (analyze_alndust_groups(damage_events, all_pids, fight_start)
                               if "Chimaerus" in fname else [])
+            # Per-player damage to Colossal Horror (Chimaerus only)
+            horror_damage: dict = {}
+            if "Chimaerus" in fname and horror_actor_ids:
+                for ev in damage_events:
+                    if ev.get("type") != "damage":
+                        continue
+                    if ev.get("targetID") not in horror_actor_ids:
+                        continue
+                    src = ev.get("sourceID")
+                    if src in actor_lookup:
+                        horror_damage[src] = horror_damage.get(src, 0) + ev.get("amount", 0)
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
                 "deaths": deaths, "all_player_ids": all_pids,
@@ -3563,6 +3596,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "defensive_casts": defensive_casts,
                 "external_casts":  external_casts,
                 "alndust_groups":  alndust_groups,
+                "horror_damage":   horror_damage,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
