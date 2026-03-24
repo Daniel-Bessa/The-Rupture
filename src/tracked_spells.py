@@ -47,6 +47,7 @@ CLASS_DEFENSIVE_IDS = {
     196555,  # Netherwalk
     187827,  # Metamorphosis (Vengeance)
     # Druid
+    5487,    # Bear Form
     22812,   # Barkskin
     61336,   # Survival Instincts
     # Evoker
@@ -155,6 +156,7 @@ SPELL_NAMES = {
     198589: "Blur",               196718: "Darkness",
     196555: "Netherwalk",         187827: "Metamorphosis",
     # Personal defensives — Druid
+    5487:  "Bear Form",
     22812: "Barkskin",            61336: "Survival Instincts",
     # Personal defensives — Evoker
     363916: "Obsidian Scales",    374348: "Renewing Blaze",
