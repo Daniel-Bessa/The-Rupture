@@ -784,6 +784,7 @@ def analyze_chimaerus_horror_waves(
     horror_actor_ids: set,        # set of masterData actor IDs for all Horror instances
     actor_lookup: dict,
     fight_start_ms: int,
+    fight_end_ms: int,
 ) -> list:
     """Analyze per-wave Colossal Horror performance on Chimaerus.
 
@@ -809,7 +810,7 @@ def analyze_chimaerus_horror_waves(
         start = wave["t_s"] * 1000
         end   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
         windows.append((start, end))
-        end_abs = (fight_start_ms + end) if end != float("inf") else float("inf")
+        end_abs = (fight_start_ms + end) if end != float("inf") else fight_end_ms
         windows_abs.append((fight_start_ms + start, end_abs))
 
     # Get Horror NPC death events for kill_time_s tracking.
