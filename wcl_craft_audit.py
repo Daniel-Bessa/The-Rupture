@@ -1695,10 +1695,13 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
     split_divs  = ""
     for bi, (boss_name, boss_html) in enumerate(boss_htmls.items()):
         boss_display = boss_name.rsplit(" (", 1)[0]  # strip difficulty suffix
-        tab_id  = f"boss-{bi}"
-        active  = "active" if bi == 0 else ""
-        fb_html = _filter_bar_html(tab_id)
-        tab_buttons += f'<button class="tab-btn {active}" onclick="switchTab(\'{tab_id}\',this)">{escape(boss_display)}</button>\n'
+        tab_id    = f"boss-{bi}"
+        active    = "active" if bi == 0 else ""
+        fb_html   = _filter_bar_html(tab_id)
+        wipe_only = boss_name not in merged_boss_data
+        btn_label = f'💀 {escape(boss_display)}' if wipe_only else escape(boss_display)
+        btn_style = ' style="color:#e57373"' if wipe_only else ''
+        tab_buttons += f'<button class="tab-btn {active}"{btn_style} onclick="switchTab(\'{tab_id}\',this)">{btn_label}</button>\n'
         split_divs  += f'<div id="tab-{tab_id}" class="tab-content {active}">{fb_html}{boss_html}</div>\n'
 
     tab_buttons += gear_tab_btn  # gear always last
