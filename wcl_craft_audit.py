@@ -2129,7 +2129,7 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .ag-badge {{ font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }}
 .ag-badge-down {{ background: rgba(229,115,115,0.2); color: #e57373; border: 1px solid rgba(229,115,115,0.4); }}
 .ag-badge-up {{ background: rgba(129,199,132,0.15); color: #81c784; border: 1px solid rgba(129,199,132,0.3); }}
-.ag-chip {{ background: #1e2a38; border: 1px solid #2a3a4a; color: #bbb; padding: 2px 8px; border-radius: 12px; font-size: 12px; white-space: nowrap; }}
+.ag-chip {{ color: #ccc; font-size: 12px; white-space: nowrap; padding: 2px 4px; }}
 .ag-chip.ag-miss {{ background: rgba(229,115,115,0.2); border: 1px solid rgba(229,115,115,0.6); color: #e57373; font-weight: 700; }}
 .ag-chip.ag-wrong {{ background: rgba(244,167,66,0.15); border: 1px solid rgba(244,167,66,0.5); color: #f4a742; font-weight: 600; }}
 .ag-chip.ag-double-up {{ background: rgba(255,183,77,0.1); border: 1px solid rgba(255,183,77,0.4); color: #ffb74d; font-weight: 600; }}
