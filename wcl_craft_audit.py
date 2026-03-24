@@ -3564,7 +3564,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             for sdata in split_data.values():
                 for fd in sdata:
                     if fd.get("fight_id") == fid:
-                        for pid, casts in fd.get("player_casts", {}).items():
+                        for pid_raw, casts in fd.get("player_casts", {}).items():
+                            pid = int(pid_raw) if isinstance(pid_raw, str) else pid_raw
                             defs = [{"spell": c["spell"], "time": c["time"]}
                                     for c in casts
                                     if c.get("category") in ("Defensive", "Healthstone", "Health")]
@@ -3654,9 +3655,10 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     wipe_player_casts = analyze_fight_casts(wipe_friendly_casts, fight_start, actor_lookup)
                     wipe_defensive_casts = {
                         pid: [{"spell": c["spell"], "time": c["time"]}
-                              for c in casts if c.get("category") == "Defensive"]
+                              for c in casts
+                              if c.get("category") in ("Defensive", "Healthstone", "Health")]
                         for pid, casts in wipe_player_casts.items()
-                        if any(c.get("category") == "Defensive" for c in casts)
+                        if any(c.get("category") in ("Defensive", "Healthstone", "Health") for c in casts)
                     }
                     wipe_external_casts = {
                         pid: [{"spell": c["spell"], "time": c["time"]}
