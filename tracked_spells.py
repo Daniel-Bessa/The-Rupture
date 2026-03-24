@@ -115,6 +115,7 @@ CLASS_EXTERNAL_IDS = {
     102342,  # Ironbark
     # Evoker
     374227,  # Zephyr
+    357170,  # Time Dilation (Preservation)
     # Monk
     116849,  # Life Cocoon
     # Paladin
@@ -190,6 +191,7 @@ SPELL_NAMES = {
     51052: "Anti-Magic Zone",
     102342: "Ironbark",
     374227: "Zephyr",
+    357170: "Time Dilation",
     116849: "Life Cocoon",
     1022: "Blessing of Protection",
     6940: "Blessing of Sacrifice",
