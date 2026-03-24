@@ -604,7 +604,10 @@ _ALNDUST_SOAK_IDS = {1262305, 1246827}  # Alndust Upheaval — players hit = "we
 def analyze_alndust_groups(damage_events: list, player_pids: set,
                             fight_start_ms: int = 0) -> list:
     """Detect who soaked each Alndust Upheaval wave (went 'down') on Chimaerus.
-    Returns list of {wave, t_s (fight-relative), down_pids, up_pids}.
+    Groups are derived from wave 1 (odd waves) and wave 2 (even waves).
+    Each wave dict includes:
+      down_pids, up_pids, missed_pids (should have soaked but didn't),
+      wrong_pids (wrong group that soaked instead).
     """
     hits = []
     for e in damage_events:
@@ -621,12 +624,39 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
             waves[-1].append(h)
         else:
             waves.append([h])
+
     result = []
+    odd_group  = None  # set from wave 1
+    even_group = None  # set from wave 2
     for wi, wave in enumerate(waves):
-        down_pids = list(dict.fromkeys(pid for _, pid in wave))
-        up_pids   = [pid for pid in sorted(player_pids) if pid not in set(down_pids)]
-        t_s = wave[0][0] // 1000
-        result.append({"wave": wi + 1, "t_s": t_s, "down_pids": down_pids, "up_pids": up_pids})
+        wave_num   = wi + 1
+        down_pids  = list(dict.fromkeys(pid for _, pid in wave))
+        down_set   = set(down_pids)
+        up_pids    = [pid for pid in sorted(player_pids) if pid not in down_set]
+        t_s        = wave[0][0] // 1000
+
+        if wave_num == 1:
+            odd_group = down_set
+            missed_pids = []
+            wrong_pids  = []
+        elif wave_num == 2:
+            even_group = down_set
+            missed_pids = []
+            wrong_pids  = []
+        else:
+            expected = odd_group if wave_num % 2 == 1 else even_group
+            if expected is not None:
+                missed_pids = [p for p in expected if p not in down_set]
+                wrong_pids  = [p for p in down_set  if p not in expected]
+            else:
+                missed_pids = []
+                wrong_pids  = []
+
+        result.append({
+            "wave": wave_num, "t_s": t_s,
+            "down_pids": down_pids, "up_pids": up_pids,
+            "missed_pids": missed_pids, "wrong_pids": wrong_pids,
+        })
     return result
 
 
