@@ -1211,16 +1211,15 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
 
             t  = f'<div class="table-wrap"><table id="{tbl_id}" class="detail-col-hidden"><thead><tr>'
             t += _sth(0, 'Player', 'player-header')
-            t += _sth(1, 'Deaths', 'death-h')
             t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(3, 'Ext', 'ext-h')
-            t += _sth(4, 'Def', 'def-h')
-            t += _sth(5, 'Dmg Taken', 'dmg-h')
-            t += _sth(6, 'Uptime %', 'uptime-h')
+            t += _sth(2, 'Ext', 'ext-h')
+            t += _sth(3, 'Def', 'def-h')
+            t += _sth(4, 'Dmg Taken', 'dmg-h')
+            t += _sth(5, 'Uptime %', 'uptime-h')
             if has_interrupts:
-                t += _sth(7, 'Interrupts', 'interrupt-h')
+                t += _sth(6, 'Interrupts', 'interrupt-h')
             for mi, m in enumerate(mech_defs):
-                mci = (8 if has_interrupts else 7) + mi
+                mci = (7 if has_interrupts else 6) + mi
                 css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
                 tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
                 t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
@@ -1327,10 +1326,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     t += f'<td class="player-cell"><a href="player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
                     if death_count > 0 and death_tip_html:
                         tip_attr = death_tip_html.replace("'", "&#39;")
-                        t += f'<td class="center death-h" style="cursor:help" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"><span class="death-num">{death_count}</span></td>'
                         t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
                     else:
-                        t += f'<td class="center death-h">{"<span class=death-num>" + str(death_count) + "</span>" if death_count > 0 else "—"}</td>'
                         t += f'<td class="death-h">{killed_str}</td>'
                     t += ext_cell
                     t += def_cell
