@@ -599,6 +599,37 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
     return totals
 
 
+_ALNDUST_SOAK_IDS = {1262305, 1246827}  # Alndust Upheaval — players hit = "went down"
+
+def analyze_alndust_groups(damage_events: list, player_pids: set,
+                            fight_start_ms: int = 0) -> list:
+    """Detect who soaked each Alndust Upheaval wave (went 'down') on Chimaerus.
+    Returns list of {wave, t_s (fight-relative), down_pids, up_pids}.
+    """
+    hits = []
+    for e in damage_events:
+        if e.get("abilityGameID") in _ALNDUST_SOAK_IDS and e.get("targetID") in player_pids:
+            t_ms = e.get("timestamp", 0) - fight_start_ms
+            hits.append((t_ms, e["targetID"]))
+    if not hits:
+        return []
+    hits.sort()
+    # Group into waves: gap > 10 s between events = new wave
+    waves = [[hits[0]]]
+    for h in hits[1:]:
+        if h[0] - waves[-1][-1][0] <= 10_000:
+            waves[-1].append(h)
+        else:
+            waves.append([h])
+    result = []
+    for wi, wave in enumerate(waves):
+        down_pids = list(dict.fromkeys(pid for _, pid in wave))
+        up_pids   = [pid for pid in sorted(player_pids) if pid not in set(down_pids)]
+        t_s = wave[0][0] // 1000
+        result.append({"wave": wi + 1, "t_s": t_s, "down_pids": down_pids, "up_pids": up_pids})
+    return result
+
+
 def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
                              fight_start_ms: int = 0, ability_names: dict = None,
                              player_max_hp: dict = None, player_roles: dict = None) -> dict:
@@ -1290,6 +1321,46 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             t += '</tbody></table></div>'
             return t
 
+        def _build_alndust_panel(fights_list: list) -> str:
+            """Render the Alndust Upheaval up/down grouping panel for Chimaerus."""
+            waves = []
+            for fd in fights_list:
+                if fd.get("alndust_groups"):
+                    waves = fd["alndust_groups"]
+                    break
+            if not waves:
+                return ""
+
+            def _pid_chip(pid):
+                info  = actor_lookup.get(pid, {})
+                name  = info.get("name", f"#{pid}")
+                cls   = info.get("class", "")
+                color = CLASS_COLORS.get(cls, "#ccc")
+                return (f'<span class="ag-chip" style="background:{color}22;border:1px solid {color}55;'
+                        f'color:{color};padding:2px 8px;border-radius:12px;font-size:12px;'
+                        f'white-space:nowrap">{escape(name)}</span>')
+
+            rows = ""
+            for w in waves:
+                m, s   = divmod(w["t_s"], 60)
+                t_str  = f"{m}:{s:02d}"
+                down_chips = " ".join(_pid_chip(p) for p in w["down_pids"])
+                up_chips   = " ".join(_pid_chip(p) for p in w["up_pids"])
+                rows += (
+                    f'<div class="ag-wave">'
+                    f'<div class="ag-wave-label">Wave {w["wave"]} <span class="ag-time">({t_str})</span></div>'
+                    f'<div class="ag-group ag-down"><span class="ag-badge ag-badge-down">⬇ Down</span> {down_chips}</div>'
+                    f'<div class="ag-group ag-up"><span class="ag-badge ag-badge-up">⬆ Up</span> {up_chips}</div>'
+                    f'</div>'
+                )
+            return (
+                f'<div class="alndust-panel">'
+                f'<div class="ag-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                f'<span class="ag-title">⬆⬇ Alndust Upheaval — Intermission Groups</span>'
+                f'<span class="ag-chevron">▼</span></div>'
+                f'<div class="ag-body open">{rows}</div></div>'
+            )
+
         # ── Pull selector + panes ──
         boss_wipes = wipe_data.get(boss_name, [])  # oldest → newest
 
@@ -1297,7 +1368,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_banners = _build_banners(fights)
         kill_table   = _render_table(fights, table_id)
         kill_chart   = _build_chart(fights[0] if fights else {}, f"{table_id}-kill")
-        kill_content = kill_banners + kill_table + kill_chart
+        kill_alndust = _build_alndust_panel(fights) if "Chimaerus" in boss_name else ""
+        kill_content = kill_banners + kill_table + kill_chart + kill_alndust
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -1670,6 +1742,23 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .av-label {{ color: #f4a742; font-weight: 600; margin-right: 4px; }}
 .av-player {{ color: #e0e0e0; }}
 .av-count {{ color: #e06c6c; font-weight: 700; margin-right: 8px; }}
+/* ── Alndust Upheaval grouping panel ── */
+.alndust-panel {{ margin-top: 12px; background: rgba(100,160,255,0.06); border: 1px solid rgba(100,160,255,0.25); border-radius: 8px; overflow: hidden; }}
+.ag-header {{ display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; user-select: none; }}
+.ag-header:hover {{ background: rgba(100,160,255,0.1); }}
+.ag-title {{ color: #7eb8ff; font-weight: 700; font-size: 13px; }}
+.ag-chevron {{ color: #7eb8ff; font-size: 11px; transition: transform 0.2s; }}
+.ag-header.open .ag-chevron {{ transform: rotate(180deg); }}
+.ag-body {{ display: none; padding: 6px 12px 10px; }}
+.ag-body.open {{ display: block; }}
+.ag-wave {{ margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }}
+.ag-wave:last-child {{ margin-bottom: 0; border-bottom: none; }}
+.ag-wave-label {{ color: #aac4ff; font-weight: 700; font-size: 12px; margin-bottom: 6px; }}
+.ag-time {{ color: #5580aa; font-weight: 400; }}
+.ag-group {{ display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-bottom: 4px; }}
+.ag-badge {{ font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }}
+.ag-badge-down {{ background: rgba(229,115,115,0.2); color: #e57373; border: 1px solid rgba(229,115,115,0.4); }}
+.ag-badge-up {{ background: rgba(129,199,132,0.15); color: #81c784; border: 1px solid rgba(129,199,132,0.3); }}
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
@@ -3380,7 +3469,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     if fd.get("fight_id") == fid:
                         for pid, casts in fd.get("player_casts", {}).items():
                             defs = [{"spell": c["spell"], "time": c["time"]}
-                                    for c in casts if c.get("category") == "Defensive"]
+                                    for c in casts
+                                    if c.get("category") in ("Defensive", "Healthstone", "Health")]
                             exts = [{"spell": c["spell"], "time": c["time"]}
                                     for c in casts if c.get("category") == "External"]
                             if defs:
@@ -3396,6 +3486,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             all_pids.update(uptime_map.keys())
             all_pids.update(deaths.keys())
             all_pids = {pid for pid in all_pids if pid in actor_lookup}
+            alndust_groups = (analyze_alndust_groups(damage_events, all_pids, fight_start)
+                              if "Chimaerus" in fname else [])
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
                 "deaths": deaths, "all_player_ids": all_pids,
@@ -3407,6 +3499,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "spec_roles": fight_spec_roles.get(fid, {}),
                 "defensive_casts": defensive_casts,
                 "external_casts":  external_casts,
+                "alndust_groups":  alndust_groups,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
