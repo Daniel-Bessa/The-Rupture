@@ -499,22 +499,27 @@ def fetch_damage_done_events(token: str, report_code: str, fight_id: int,
 
 
 def fetch_damage_table_for_target(token: str, report_code: str, fight_id: int,
-                                   target_id: int) -> dict:
+                                   target_id: int,
+                                   start_ms: float = None,
+                                   end_ms: float = None) -> dict:
     """Fetch per-player DamageDone stats against a specific target NPC.
     Returns {sourceID: {"dmg": int, "active_ms": int}}.
     Uses the WCL table endpoint (same data as the WCL UI damage-done-to-target view).
+    Optional start_ms/end_ms (relative to fight start) restrict the time window.
     """
     query = """
-    query ($code: String!, $fightID: Int!, $targetID: Int!) {
+    query ($code: String!, $fightID: Int!, $targetID: Int!, $startTime: Float, $endTime: Float) {
         reportData {
             report(code: $code) {
-                table(dataType: DamageDone, fightIDs: [$fightID], targetID: $targetID)
+                table(dataType: DamageDone, fightIDs: [$fightID], targetID: $targetID,
+                      startTime: $startTime, endTime: $endTime)
             }
         }
     }
     """
     result = query_wcl(token, query, {"code": report_code, "fightID": fight_id,
-                                      "targetID": target_id})
+                                      "targetID": target_id,
+                                      "startTime": start_ms, "endTime": end_ms})
     table  = result["reportData"]["report"]["table"]
     entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
     return {e["id"]: {"dmg": e.get("total", 0), "active_ms": e.get("activeTime", 0)}
@@ -776,15 +781,14 @@ def analyze_chimaerus_horror_waves(
     report_code: str,
     fight_id: int,
     alndust_groups: list,
-    horror_events: list,          # DamageDone events to Horror (for timing only)
     horror_actor_ids: set,        # set of masterData actor IDs for all Horror instances
     actor_lookup: dict,
     fight_start_ms: int,
 ) -> list:
     """Analyze per-wave Colossal Horror performance on Chimaerus.
 
-    For each wave, maps Horror actor IDs → wave window using event timestamps,
-    then fetches per-player damage + activeTime via the WCL table endpoint.
+    For each wave window, queries the WCL table endpoint per Horror actor with
+    startTime/endTime to handle actor reuse across waves.
 
     Returns list of wave dicts:
       wave, t_s, down_pids, up_pids,
@@ -804,50 +808,38 @@ def analyze_chimaerus_horror_waves(
         end   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
         windows.append((start, end))
 
-    # Map each Horror actor to a wave using NPC death event timestamps.
-    # Each Horror dies at the end of its wave, giving reliable timing.
+    # Get Horror NPC death events for kill_time_s tracking.
+    # Actors may be reused across waves (same actor ID for wave 1 and wave 3, etc.),
+    # so we track (actor_id, wave_index) -> death_ms using sorted death events.
     npc_deaths = fetch_npc_death_events(token, report_code, fight_id)
-    actor_to_wave: dict = {}   # actor_id -> wave_index
-    actor_kill_ms: dict = {}   # actor_id -> death timestamp (relative ms)
+    wave_kill_ms: dict = {}   # wave_index -> death ms (relative to fight start)
     for ev in sorted(npc_deaths, key=rel_ms):
         tid = ev.get("targetID")
-        if tid not in horror_actor_ids or tid in actor_to_wave:
+        if tid not in horror_actor_ids:
             continue
         t = rel_ms(ev)
         for wi, (ws, we) in enumerate(windows):
-            if ws <= t < we:
-                actor_to_wave[tid] = wi
-                actor_kill_ms[tid] = t
+            if ws <= t < we and wi not in wave_kill_ms:
+                wave_kill_ms[wi] = t
                 break
 
-    # Fallback: if death events didn't cover some actors, try first damage event
-    if len(actor_to_wave) < len(horror_actor_ids):
-        horror_ev_sorted = sorted(horror_events, key=rel_ms)
-        for ev in horror_ev_sorted:
-            tid = ev.get("targetID")
-            if tid not in horror_actor_ids or tid in actor_to_wave:
-                continue
-            t = rel_ms(ev)
-            for wi, (ws, we) in enumerate(windows):
-                if ws <= t < we:
-                    actor_to_wave[tid] = wi
-                    break
-
-    # Fetch per-player table stats for each Horror actor
-    # wave_stats[wave_idx][pid] = {dmg, active_ms}
-    wave_stats: dict = {}
-    for actor_id in horror_actor_ids:
-        wi = actor_to_wave.get(actor_id)
-        if wi is None:
-            continue
-        tbl = fetch_damage_table_for_target(token, report_code, fight_id, actor_id)
-        for pid, stats in tbl.items():
-            if wi not in wave_stats:
-                wave_stats[wi] = {}
-            if pid not in wave_stats[wi]:
-                wave_stats[wi][pid] = {"dmg": 0, "active_ms": 0}
-            wave_stats[wi][pid]["dmg"]       += stats["dmg"]
-            wave_stats[wi][pid]["active_ms"] += stats["active_ms"]
+    # Fetch per-player table stats per wave using time-windowed queries.
+    # Querying each (actor_id, wave_window) handles actor reuse across waves.
+    wave_stats: dict = {}  # wave_index -> {pid: {dmg, active_ms}}
+    for wi, (ws_ms, we_ms) in enumerate(windows):
+        end_param = we_ms if we_ms != float("inf") else None
+        for actor_id in horror_actor_ids:
+            tbl = fetch_damage_table_for_target(
+                token, report_code, fight_id, actor_id,
+                start_ms=ws_ms, end_ms=end_param,
+            )
+            for pid, stats in tbl.items():
+                if wi not in wave_stats:
+                    wave_stats[wi] = {}
+                if pid not in wave_stats[wi]:
+                    wave_stats[wi][pid] = {"dmg": 0, "active_ms": 0}
+                wave_stats[wi][pid]["dmg"]       += stats["dmg"]
+                wave_stats[wi][pid]["active_ms"] += stats["active_ms"]
 
     result = []
     for i, wave in enumerate(alndust_groups):
@@ -858,11 +850,8 @@ def analyze_chimaerus_horror_waves(
 
         # Horror kill time: seconds from wave start to Horror death
         kill_time_s = None
-        ws_ms_val = windows[i][0]
-        for actor_id, wi in actor_to_wave.items():
-            if wi == i and actor_id in actor_kill_ms:
-                kill_time_s = round((actor_kill_ms[actor_id] - ws_ms_val) / 1000, 1)
-                break
+        if i in wave_kill_ms:
+            kill_time_s = round((wave_kill_ms[i] - ws_ms) / 1000, 1)
 
         per_player = {}
         stats_for_wave = wave_stats.get(i, {})
@@ -3907,7 +3896,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 if alndust_groups:
                     horror_waves = analyze_chimaerus_horror_waves(
                         token, report_code, fid,
-                        alndust_groups, horror_done_events,
+                        alndust_groups,
                         horror_actor_ids, actor_lookup, fight_start,
                     )
             boss_data.setdefault(boss_key, []).append({
