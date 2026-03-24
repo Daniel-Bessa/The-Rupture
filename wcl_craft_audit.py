@@ -3570,21 +3570,26 @@ def main():
     token = get_access_token(client_id, client_secret)
     print("[OK] Authenticated successfully.")
 
-    report_urls = config.get("REPORT_URLS", [])
-    if not report_urls:
-        report_urls = [input("\nReport code or URL: ").strip()]
+    report_configs = config.get("REPORT_URLS", [])
+    if not report_configs:
+        report_configs = [{"url": input("\nReport code or URL: ").strip(), "split_start": 1}]
     else:
-        print(f"[OK] Loaded {len(report_urls)} report URL(s) from config.")
+        print(f"[OK] Loaded {len(report_configs)} report URL(s) from config.")
 
-    report_codes = [_extract_report_code(u) for u in report_urls]
-    fight_mode   = "interactive" if len(report_codes) == 1 else "all"
+    fight_mode = "interactive" if len(report_configs) == 1 else "all"
 
     days_data = []
-    for code in report_codes:
+    for rc in report_configs:
+        url         = rc["url"] if isinstance(rc, dict) else rc
+        split_start = rc.get("split_start", 1) if isinstance(rc, dict) else 1
+        code        = _extract_report_code(url)
         try:
             result = process_report(token, code, fight_input=fight_mode)
             for r in split_report_by_difficulty(result):
-                days_data.extend(split_report_by_player_group(r))
+                for dd in split_report_by_player_group(r):
+                    if "player_split" in dd:
+                        dd["player_split"] = dd["player_split"] + split_start - 1
+                    days_data.append(dd)
         except Exception as e:
             print(f"[ERROR] Failed to process report {code}: {e}")
 
