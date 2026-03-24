@@ -3602,10 +3602,6 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs,
                                                             fight_start, cast_events=cast_events)
                 try:
-                    timeline_data = fetch_fight_graph(token, report_code, fid)
-                except Exception:
-                    timeline_data = {}
-                try:
                     wipe_ci = fetch_combatant_info_events(token, report_code, fid)
                     wipe_spec_roles = {
                         e["sourceID"]: SPEC_ROLES.get(e.get("specID"), "DPS")
