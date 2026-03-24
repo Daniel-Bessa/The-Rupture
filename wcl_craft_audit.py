@@ -464,6 +464,40 @@ def fetch_damage_taken_events(token: str, report_code: str, fight_id: int) -> li
     return all_events
 
 
+def fetch_damage_done_events(token: str, report_code: str, fight_id: int,
+                             target_ids: set = None) -> list:
+    """Fetch DamageDone events (friendly players dealing damage), with pagination.
+    If target_ids is given, only return events where targetID is in that set.
+    """
+    query = """
+    query ($code: String!, $fightID: Int!, $startTime: Float) {
+        reportData {
+            report(code: $code) {
+                events(dataType: DamageDone, fightIDs: [$fightID], hostilityType: Friendlies,
+                       limit: 10000, startTime: $startTime) {
+                    data
+                    nextPageTimestamp
+                }
+            }
+        }
+    }
+    """
+    all_events = []
+    variables = {"code": report_code, "fightID": fight_id, "startTime": None}
+    while True:
+        result = query_wcl(token, query, variables)
+        page = result["reportData"]["report"]["events"]
+        events = page.get("data", [])
+        if target_ids is not None:
+            events = [e for e in events if e.get("targetID") in target_ids]
+        all_events.extend(events)
+        next_ts = page.get("nextPageTimestamp")
+        if not next_ts:
+            break
+        variables = {"code": report_code, "fightID": fight_id, "startTime": next_ts}
+    return all_events
+
+
 def fetch_uptime_table(token: str, report_code: str, fight_id: int) -> dict:
     """Fetch DPS active time + damage done per player from WCL table endpoint.
     Returns {sourceID: {"activeTime": ms, "total": damage_int}}.
@@ -3577,10 +3611,10 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             # Per-player damage to Colossal Horror (Chimaerus only)
             horror_damage: dict = {}
             if "Chimaerus" in fname and horror_actor_ids:
-                for ev in damage_events:
+                horror_done_events = fetch_damage_done_events(token, report_code, fid,
+                                                              target_ids=horror_actor_ids)
+                for ev in horror_done_events:
                     if ev.get("type") != "damage":
-                        continue
-                    if ev.get("targetID") not in horror_actor_ids:
                         continue
                     src = ev.get("sourceID")
                     if src in actor_lookup:
