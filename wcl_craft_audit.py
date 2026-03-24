@@ -1537,23 +1537,15 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 return ""
 
             def _pid_chip(pid, missed=False, wrong=False, double_up=False):
-                info  = actor_lookup.get(pid, {})
-                name  = info.get("name", f"#{pid}")
-                cls   = info.get("subType", info.get("class", ""))
-                color = CLASS_COLORS.get(cls, "#ccc")
+                info = actor_lookup.get(pid, {})
+                name = info.get("name", f"#{pid}")
                 if missed:
-                    return (f'<span class="ag-chip ag-miss" title="Missed soak">'
-                            f'{escape(name)} ✗</span>')
+                    return f'<span class="ag-chip ag-miss" title="Missed soak">{escape(name)} ✗</span>'
                 if wrong:
-                    return (f'<span class="ag-chip" style="background:#f4a74222;border:1px solid #f4a74266;'
-                            f'color:#f4a742;padding:2px 8px;border-radius:12px;font-size:12px;'
-                            f'white-space:nowrap" title="Wrong group soaked">{escape(name)} ?</span>')
+                    return f'<span class="ag-chip ag-wrong" title="Wrong group soaked">{escape(name)} ?</span>'
                 if double_up:
-                    return (f'<span class="ag-chip ag-double-up" title="Up 2+ waves in a row — missed their soak">'
-                            f'{escape(name)} ⚠</span>')
-                return (f'<span class="ag-chip" style="background:{color}22;border:1px solid {color}55;'
-                        f'color:{color};padding:2px 8px;border-radius:12px;font-size:12px;'
-                        f'white-space:nowrap">{escape(name)}</span>')
+                    return f'<span class="ag-chip ag-double-up" title="Up 2+ waves in a row">{escape(name)} ⚠</span>'
+                return f'<span class="ag-chip">{escape(name)}</span>'
 
             rows = ""
             for w in waves:
