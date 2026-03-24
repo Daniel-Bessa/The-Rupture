@@ -3524,10 +3524,6 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
             frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start,
                                                         cast_events=cast_events)
-            try:
-                timeline_data = fetch_fight_graph(token, report_code, fid)
-            except Exception:
-                timeline_data = {}
             # Extract per-player defensive + external casts for this fight from split_data
             defensive_casts: dict = {}
             external_casts:  dict = {}
