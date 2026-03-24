@@ -1587,6 +1587,97 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 f'<div class="ag-body open">{rows}</div></div>'
             )
 
+        def _build_horror_waves_table(fights_list: list) -> str:
+            """Build per-wave Colossal Horror damage breakdown table for Chimaerus."""
+            horror_waves = []
+            for fd in fights_list:
+                if fd.get("horror_waves"):
+                    horror_waves = fd["horror_waves"]
+                    break
+            if not horror_waves:
+                return ""
+
+            def fmt_dmg(v):
+                if v >= 1_000_000: return f"{v / 1_000_000:.1f}M"
+                if v > 0:          return f"{v // 1000}k"
+                return "—"
+
+            def fmt_time(s):
+                if s is None: return "?"
+                m = int(s) // 60; sec = int(s) % 60
+                return f"{m}:{sec:02d}"
+
+            # Determine ordered player list: Group 1 (odd waves) first, then Group 2
+            all_pids_ordered = []
+            seen = set()
+            if horror_waves:
+                for pid in horror_waves[0].get("down_pids", []):
+                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
+            if len(horror_waves) > 1:
+                for pid in horror_waves[1].get("down_pids", []):
+                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
+            for wave in horror_waves:
+                for pid in wave.get("down_pids", []) + wave.get("up_pids", []):
+                    if pid not in seen: all_pids_ordered.append(pid); seen.add(pid)
+
+            # Table header
+            t = '<div class="horror-waves-wrap">'
+            t += '<div class="hw-title">⚔ Colossal Horror — Wave Breakdown</div>'
+            t += '<table class="boss-table hw-tbl"><thead>'
+            t += '<tr><th class="hw-player-col" rowspan="2">Player</th>'
+            for w in horror_waves:
+                sb = fmt_time(w.get("shield_break_s"))
+                kd = fmt_time(w.get("kill_duration_s"))
+                timing = f'<span class="hw-timing">🛡 {sb} · ⚔ {kd}</span>'
+                t += f'<th colspan="2" class="hw-wave-hdr">Wave {w["wave"]}<br>{timing}</th>'
+            t += '</tr><tr>'
+            for _ in horror_waves:
+                t += '<th class="hw-sub hw-sub-phase">Phase</th><th class="hw-sub hw-sub-dmg">DMG</th>'
+            t += '</tr></thead><tbody>'
+
+            for pid in all_pids_ordered:
+                info  = actor_lookup.get(pid, {})
+                name  = info.get("name", f"#{pid}")
+                cls   = info.get("subType", "")
+                color = CLASS_COLORS.get(cls, "#ccc")
+                t += f'<tr><td class="hw-name" style="color:{color}">{escape(name)}</td>'
+                for w in horror_waves:
+                    pp       = w["per_player"].get(pid, {})
+                    phase    = pp.get("phase", "")
+                    boss_dmg = pp.get("boss_dmg", 0)
+                    add_dmg  = pp.get("small_add_dmg", 0)
+                    if phase == "down":
+                        primary  = pp.get("shield_dmg", 0)
+                        assist   = pp.get("late_assist", 0)
+                        ph_html  = '<span class="hw-phase-down">↓ Down</span>'
+                        # slacker: dealt more to boss than Horror during shield phase
+                        is_slack = boss_dmg > max(primary, 30_000)
+                    elif phase == "up":
+                        primary  = pp.get("kill_dmg", 0)
+                        assist   = 0
+                        ph_html  = '<span class="hw-phase-up">↑ Up</span>'
+                        is_slack = boss_dmg > max(primary, 30_000)
+                    else:
+                        primary = assist = 0
+                        ph_html = '—'
+                        is_slack = False
+
+                    dmg_str = fmt_dmg(primary)
+                    if assist > 0:
+                        dmg_str += f'<span class="hw-assist"> +{fmt_dmg(assist)}</span>'
+                    if is_slack:
+                        slack_tip = f"Boss: {fmt_dmg(boss_dmg)}"
+                        if add_dmg > 10_000:
+                            slack_tip += f" / Adds: {fmt_dmg(add_dmg)}"
+                        dmg_str += f'<span class="hw-slack" title="{slack_tip}"> ⚠</span>'
+
+                    t += f'<td class="hw-phase-cell">{ph_html}</td>'
+                    t += f'<td class="hw-dmg-cell">{dmg_str}</td>'
+                t += '</tr>'
+
+            t += '</tbody></table></div>'
+            return t
+
         # ── Pull selector + panes ──
         boss_wipes = wipe_data.get(boss_name, [])  # oldest → newest
 
