@@ -830,12 +830,12 @@ def analyze_chimaerus_horror_waves(
     # Fetch per-player table stats per wave using time-windowed queries.
     # Querying each (actor_id, wave_window) handles actor reuse across waves.
     wave_stats: dict = {}  # wave_index -> {pid: {dmg, active_ms}}
-    for wi, (ws_ms, we_ms) in enumerate(windows):
-        end_param = we_ms if we_ms != float("inf") else None
+    for wi, (ws_abs, we_abs) in enumerate(windows_abs):
+        end_param = we_abs if we_abs != float("inf") else None
         for actor_id in horror_actor_ids:
             tbl = fetch_damage_table_for_target(
                 token, report_code, fight_id, actor_id,
-                start_ms=ws_ms, end_ms=end_param,
+                start_ms=ws_abs, end_ms=end_param,
             )
             for pid, stats in tbl.items():
                 if wi not in wave_stats:
