@@ -1931,72 +1931,11 @@ function switchTab(name, btn) {{
     applyFilters(name);
   }}
   const tab = document.getElementById('tab-' + name);
-  if (tab) {{
-    tab.querySelectorAll('.pull-pane.active').forEach(renderPaneCharts);
-    tab.querySelectorAll('.timeline-canvas').forEach(c => {{ if (c.offsetWidth > 0 && !c.dataset.rendered) renderTimeline(c); }});
-  }}
-}}
-function renderTimeline(canvas) {{
-  const raw = (key) => {{ try {{ return JSON.parse(canvas.dataset[key] || '[]'); }} catch(e) {{ return []; }} }};
-  const dps = raw('dps'), taken = raw('taken'), heal = raw('heal');
-  const all = dps.concat(taken, heal);
-  if (!all.length) return;
-  const W = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 700;
-  const H = 140;
-  canvas.width  = W;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const PAD = {{top:14, right:12, bottom:22, left:54}};
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top  - PAD.bottom;
-  const maxT = Math.max(...all.map(p => p[0]));
-  const maxV = Math.max(...all.map(p => p[1]));
-  if (!maxT || !maxV) return;
-  const xS = t => PAD.left + (t / maxT) * cW;
-  const yS = v => PAD.top  + cH - (v / maxV) * cH;
-  ctx.fillStyle = '#0d1525';
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = '#1a2540'; ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {{
-    const y = PAD.top + (cH / 4) * i;
-    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
-  }}
-  const fmt = v => v >= 1e9 ? (v/1e9).toFixed(1)+'B' : v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? Math.round(v/1e3)+'k' : String(Math.round(v));
-  ctx.fillStyle = '#455'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
-  for (let i = 0; i <= 2; i++) {{
-    const y = PAD.top + (cH / 2) * i;
-    ctx.fillText(fmt(maxV * (1 - i/2)), PAD.left - 4, y + 4);
-  }}
-  ctx.textAlign = 'center'; ctx.fillStyle = '#445';
-  const steps = Math.min(6, Math.floor(maxT / 30));
-  for (let i = 0; i <= steps; i++) {{
-    const t = maxT * i / steps;
-    const m = Math.floor(t / 60), s = Math.round(t % 60);
-    ctx.fillText(`${{m}}:${{s.toString().padStart(2,'0')}}`, xS(t), H - 4);
-  }}
-  const series = [{{d: dps, c: '#ffb74d'}}, {{d: taken, c: '#e57373'}}, {{d: heal, c: '#81c784'}}];
-  series.forEach(({{d, c}}) => {{
-    if (!d.length) return;
-    ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
-    ctx.beginPath();
-    d.forEach(([t, v], i) => {{ const x = xS(t), y = yS(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }});
-    ctx.stroke();
-  }});
-  canvas.dataset.rendered = '1';
-}}
-function renderPaneCharts(paneEl) {{
-  if (!paneEl) return;
-  paneEl.querySelectorAll('.timeline-canvas').forEach(c => {{ if (c.offsetWidth > 0) renderTimeline(c); }});
 }}
 window.addEventListener('DOMContentLoaded', () => {{
   const h = location.hash.replace('#', '');
   if (h) switchTabByName(h);
   document.querySelectorAll('[id^="class-tags-"]').forEach(el => buildClassTags(el.id.replace('class-tags-', '')));
-  // Render charts in initially-active pull panes
-  document.querySelectorAll('.pull-pane.active').forEach(renderPaneCharts);
-  // Also render charts directly in active tab content (no-wipes case)
-  document.querySelectorAll('.tab-content.active .timeline-canvas').forEach(c => {{ if (c.offsetWidth > 0) renderTimeline(c); }});
 }});
 function switchPull(btn, paneId) {{
   const body = btn.closest('.boss-section-body') || btn.closest('.pull-selector').parentElement;
@@ -2004,7 +1943,7 @@ function switchPull(btn, paneId) {{
   body.querySelectorAll('.pull-pane').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   const pane = document.getElementById('pane-' + paneId);
-  if (pane) {{ pane.classList.add('active'); renderPaneCharts(pane); }}
+  if (pane) {{ pane.classList.add('active'); }}
 }}
 function toggleBoss(titleEl) {{
   titleEl.classList.toggle('collapsed');
