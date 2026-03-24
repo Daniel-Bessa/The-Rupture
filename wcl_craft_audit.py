@@ -2899,7 +2899,9 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
         actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
 
         def pid_name(pid, al=actor_lookup):
-            return al.get(pid, {}).get("name", f"#{pid}")
+            char = al.get(pid, {}).get("name", f"#{pid}")
+            player, _ = lookup_roster(char)
+            return player
 
         boss_data = day_data.get("boss_data", {})
         for bname, fights in boss_data.items():
@@ -3012,6 +3014,15 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
                 f'<div class="tip-wrap">{count}'
                 f'<div class="tip-box">{lines}</div></div></td>')
 
+    def player_color(player_name):
+        """Get class color by matching any char belonging to this player across all pulls."""
+        for pull in reversed(pulls):
+            for actor in pull["actor_lookup"].values():
+                char = actor.get("name", "")
+                if lookup_roster(char)[0] == player_name:
+                    return CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+        return "#ccc"
+
     alndust_rows = ""
     sorted_alndust = sorted(alndust_players, key=lambda n: (
         -(len(player_alndust.get(n, {}).get("wrong",      [])) +
@@ -3023,16 +3034,7 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
         rec      = player_alndust.get(name, {"wrong": [], "missed": [], "double_up": []})
         total    = len(rec["wrong"]) + len(rec["missed"]) + len(rec["double_up"])
         row_cls  = "prog-row-clean" if total == 0 else ""
-        # Get class color from most recent pull's actor_lookup
-        color = "#ccc"
-        for pull in reversed(pulls):
-            for aid, actor in pull["actor_lookup"].items():
-                if actor.get("name", "").lower() == name.lower():
-                    color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
-                    break
-            else:
-                continue
-            break
+        color = player_color(name)
         alndust_rows += (f'<tr class="{row_cls}">'
                          f'<td class="prog-name" style="color:{color}">{_esc(name)}</td>'
                          + tip("wrong",     rec["wrong"])
@@ -3056,15 +3058,7 @@ def write_boss_progression_html(days_data: list, output_path: str, guild_name: s
     sorted_horror = sorted(horror_players, key=lambda n: -horror_stats[n]["avg_dmg"])
     for name in sorted_horror:
         s     = horror_stats[name]
-        color = "#ccc"
-        for pull in reversed(pulls):
-            for aid, actor in pull["actor_lookup"].items():
-                if actor.get("name", "").lower() == name.lower():
-                    color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
-                    break
-            else:
-                continue
-            break
+        color = player_color(name)
         low_cell = ""
         if s["low_pulls"]:
             lines = ""
