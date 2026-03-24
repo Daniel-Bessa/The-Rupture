@@ -5,7 +5,7 @@
 # Add new players or alts here — no code changes needed.
 # ─────────────────────────────────────────────────────────────────────────────
 
-Nope        | Tank   | Nopebrew:Main, Nope:Alt, NopeDK:Alt
+Nope        | Tank   | Nopebrew:Main, Nope:Alt, Nøpæ:Alt
 Phyxius     | Tank   | Phyxius:Main, Phyxy:Alt, Phyxdemon:Alt
 Toshiko     | Healer | Holynooblal:Main, Toshiko:Alt, Evokenooblal:Alt
 Minxy       | Healer | Minxymender:Main, Minxycat:Alt, Drunkminxy:Alt
