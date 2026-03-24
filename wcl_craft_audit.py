@@ -804,10 +804,12 @@ def analyze_chimaerus_horror_waves(
         end   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
         windows.append((start, end))
 
-    # Map each Horror actor to a wave using first damage event timestamp
-    actor_to_wave: dict = {}  # actor_id -> wave_index
-    horror_ev_sorted = sorted(horror_events, key=rel_ms)
-    for ev in horror_ev_sorted:
+    # Map each Horror actor to a wave using NPC death event timestamps.
+    # Each Horror dies at the end of its wave, giving reliable timing.
+    npc_deaths = fetch_npc_death_events(token, report_code, fight_id)
+    actor_to_wave: dict = {}   # actor_id -> wave_index
+    actor_kill_ms: dict = {}   # actor_id -> death timestamp (relative ms)
+    for ev in sorted(npc_deaths, key=rel_ms):
         tid = ev.get("targetID")
         if tid not in horror_actor_ids or tid in actor_to_wave:
             continue
@@ -815,7 +817,21 @@ def analyze_chimaerus_horror_waves(
         for wi, (ws, we) in enumerate(windows):
             if ws <= t < we:
                 actor_to_wave[tid] = wi
+                actor_kill_ms[tid] = t
                 break
+
+    # Fallback: if death events didn't cover some actors, try first damage event
+    if len(actor_to_wave) < len(horror_actor_ids):
+        horror_ev_sorted = sorted(horror_events, key=rel_ms)
+        for ev in horror_ev_sorted:
+            tid = ev.get("targetID")
+            if tid not in horror_actor_ids or tid in actor_to_wave:
+                continue
+            t = rel_ms(ev)
+            for wi, (ws, we) in enumerate(windows):
+                if ws <= t < we:
+                    actor_to_wave[tid] = wi
+                    break
 
     # Fetch per-player table stats for each Horror actor
     # wave_stats[wave_idx][pid] = {dmg, active_ms}
@@ -840,10 +856,13 @@ def analyze_chimaerus_horror_waves(
         down_pids    = set(wave["down_pids"])
         up_pids      = set(wave["up_pids"])
 
-        # Horror kill time: first Horror death event in this wave window
+        # Horror kill time: seconds from wave start to Horror death
         kill_time_s = None
-        for ev in horror_ev_sorted:
-            pass  # death detection requires death events — skipped for now
+        ws_ms_val = windows[i][0]
+        for actor_id, wi in actor_to_wave.items():
+            if wi == i and actor_id in actor_kill_ms:
+                kill_time_s = round((actor_kill_ms[actor_id] - ws_ms_val) / 1000, 1)
+                break
 
         per_player = {}
         stats_for_wave = wave_stats.get(i, {})
