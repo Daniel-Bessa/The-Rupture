@@ -4458,6 +4458,7 @@ def main():
     write_index_html(days_data, "index.html", guild_name=guild_name)
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
+    write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
     write_player_pages(days_data)
 
     # XLSX: most recent day only
