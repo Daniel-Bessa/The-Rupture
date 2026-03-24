@@ -801,12 +801,16 @@ def analyze_chimaerus_horror_waves(
     def rel_ms(ev):
         return ev.get("timestamp", 0) - fight_start_ms
 
-    # Build wave windows (ms, relative to fight start)
+    # Build wave windows (ms, fight-relative — used for rel_ms comparisons).
+    # Also build report-relative windows for WCL table API startTime/endTime.
     windows = []
+    windows_abs = []  # report-relative ms (fight_start_ms + fight-relative)
     for i, wave in enumerate(alndust_groups):
         start = wave["t_s"] * 1000
         end   = alndust_groups[i + 1]["t_s"] * 1000 if i + 1 < len(alndust_groups) else float("inf")
         windows.append((start, end))
+        end_abs = (fight_start_ms + end) if end != float("inf") else float("inf")
+        windows_abs.append((fight_start_ms + start, end_abs))
 
     # Get Horror NPC death events for kill_time_s tracking.
     # Actors may be reused across waves (same actor ID for wave 1 and wave 3, etc.),
