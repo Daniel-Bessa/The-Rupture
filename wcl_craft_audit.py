@@ -1901,7 +1901,30 @@ function switchTabByName(name) {{
   if (btn) btn.classList.add('active');
 }}
 function switchTab(name, btn) {{
+  // Capture filter state from the current active tab before switching
+  const prevEl = document.querySelector('.tab-content.active');
+  const prevId = prevEl ? prevEl.id.replace('tab-', '') : null;
+  let savedRoles = [], savedClasses = [], savedNames = [];
+  if (prevId && prevId !== name) {{
+    const prevFb = document.getElementById('fb-' + prevId);
+    if (prevFb) {{
+      savedRoles   = [...prevFb.querySelectorAll('[data-ftype="role"].active')].map(b => b.dataset.fval);
+      savedClasses = [...prevFb.querySelectorAll('[data-ftype="class"].active')].map(b => b.dataset.fval);
+    }}
+    const prevChips = document.getElementById('chips-' + prevId);
+    if (prevChips) savedNames = [...prevChips.querySelectorAll('.chip')].map(c => c.dataset.val);
+  }}
   switchTabByName(name);
+  // Restore filter state into new tab
+  if (savedRoles.length || savedClasses.length || savedNames.length) {{
+    const newFb = document.getElementById('fb-' + name);
+    if (newFb) {{
+      savedRoles.forEach(v => {{ const b = newFb.querySelector(`[data-ftype="role"][data-fval="${{v}}"]`); if (b) b.classList.add('active'); }});
+      savedClasses.forEach(v => {{ const b = newFb.querySelector(`[data-ftype="class"][data-fval="${{v}}"]`); if (b) b.classList.add('active'); }});
+    }}
+    savedNames.forEach(v => addChip(name, v));
+    applyFilters(name);
+  }}
   const tab = document.getElementById('tab-' + name);
   if (tab) {{
     tab.querySelectorAll('.pull-pane.active').forEach(renderPaneCharts);
@@ -3408,6 +3431,7 @@ def _fix_int_keys(boss_data: dict) -> dict:
     int_key_fields = (
         "uptime_map", "dmg_taken", "healing_map", "interrupts",
         "avoidable_damage", "deaths", "mechanics_data",
+        "defensive_casts", "external_casts",
     )
     for fights in boss_data.values():
         for fight in fights:
@@ -3425,6 +3449,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
         with open(cache, encoding="utf-8") as f:
             result = json.load(f)
         result["boss_data"] = _fix_int_keys(result["boss_data"])
+        result["wipe_data"] = _fix_int_keys(result["wipe_data"])
         return result
 
     print(f"\n[...] Fetching report info for: {report_code}")
