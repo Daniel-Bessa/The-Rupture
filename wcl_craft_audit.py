@@ -3559,7 +3559,6 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "uptime_map": uptime_map, "healing_map": healing_map,
                 "rankings_map": rankings_map, "interrupts": interrupts,
                 "mechanics_data": mechanics_data, "frontal_failures": frontal_failures,
-                "timeline_data": timeline_data,
                 "spec_roles": fight_spec_roles.get(fid, {}),
                 "defensive_casts": defensive_casts,
                 "external_casts":  external_casts,
