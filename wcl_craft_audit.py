@@ -2130,9 +2130,9 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .ag-badge-down {{ background: rgba(229,115,115,0.2); color: #e57373; border: 1px solid rgba(229,115,115,0.4); }}
 .ag-badge-up {{ background: rgba(129,199,132,0.15); color: #81c784; border: 1px solid rgba(129,199,132,0.3); }}
 .ag-chip {{ color: #ccc; font-size: 12px; white-space: nowrap; padding: 2px 4px; }}
-.ag-chip.ag-miss {{ background: rgba(229,115,115,0.2); border: 1px solid rgba(229,115,115,0.6); color: #e57373; font-weight: 700; }}
-.ag-chip.ag-wrong {{ background: rgba(244,167,66,0.15); border: 1px solid rgba(244,167,66,0.5); color: #f4a742; font-weight: 600; }}
-.ag-chip.ag-double-up {{ background: rgba(255,183,77,0.1); border: 1px solid rgba(255,183,77,0.4); color: #ffb74d; font-weight: 600; }}
+.ag-chip.ag-miss {{ background: rgba(229,115,115,0.2); border: 1px solid rgba(229,115,115,0.6); color: #e57373; font-weight: 700; padding: 2px 8px; border-radius: 12px; }}
+.ag-chip.ag-wrong {{ background: rgba(244,167,66,0.15); border: 1px solid rgba(244,167,66,0.5); color: #f4a742; font-weight: 600; padding: 2px 8px; border-radius: 12px; }}
+.ag-chip.ag-double-up {{ background: rgba(255,183,77,0.1); border: 1px solid rgba(255,183,77,0.4); color: #ffb74d; font-weight: 600; padding: 2px 8px; border-radius: 12px; }}
 .ag-miss-count {{ color: #e57373; font-size: 11px; font-weight: 700; margin-left: 8px; }}
 .ag-double-up-count {{ color: #ffb74d; font-size: 11px; font-weight: 700; margin-left: 8px; }}
 /* ── Sort arrows ── */
