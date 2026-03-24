@@ -26,6 +26,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from boss_mechanics import BOSS_MECHANICS, BOSS_HAS_INTERRUPTS
 from tracked_spells import (HEALTHSTONE_IDS, HEALTH_POT_IDS, COMBAT_POT_IDS,
                              CLASS_DEFENSIVE_IDS, CLASS_EXTERNAL_IDS, SPELL_NAMES)
@@ -1323,7 +1324,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     row_cls = "boss-death-row" if death_count > 0 else ""
                     t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
                     slug = pname.lower()
-                    t += f'<td class="player-cell"><a href="player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
+                    t += f'<td class="player-cell"><a href="players/player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
                     if death_count > 0 and death_tip_html:
                         tip_attr = death_tip_html.replace("'", "&#39;")
                         t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
@@ -2137,7 +2138,7 @@ def build_player_profiles(days_data: list) -> dict:
     return profiles
 
 
-def write_player_pages(days_data: list, output_dir: str = ".") -> None:
+def write_player_pages(days_data: list, output_dir: str = "players") -> None:
     """Generate one player_{slug}.html profile page per known player."""
     from html import escape as _esc
 
@@ -2241,7 +2242,7 @@ tr:hover td{{background:#111827}}
 </style>
 </head>
 <body>
-<a class="back" href="index.html">← Back to Raids</a>
+<a class="back" href="../index.html">← Back to Raids</a>
 <h1 style="color:{cls_color}">{_esc(pname)}<span class="role-badge">{_esc(role)}</span></h1>
 
 <h2>Characters</h2>
@@ -2299,6 +2300,7 @@ function sortPerfTable(col, th) {{
 </body>
 </html>"""
 
+        os.makedirs(output_dir, exist_ok=True)
         out_path = os.path.join(output_dir, f"player_{slug}.html")
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
@@ -2516,7 +2518,7 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             cards_html += (
                 f'<div class="player-card">'
                 f'<div class="card-top">'
-                f'<a href="player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
+                f'<a href="players/player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
                 f'{seen_badge}'
                 f'</div>'
                 f'<div class="card-chars">{chars_html}</div>'
