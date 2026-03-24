@@ -3180,12 +3180,21 @@ def load_config(path="wcl_config.txt"):
                     continue
                 key, val = line.split("=", 1)
                 key = key.strip()
-                # Strip inline comments (space + #)
+                # Extract split_start from inline comment before stripping it
+                split_start = 1
+                if " #" in val:
+                    comment = val.split(" #", 1)[1]
+                    for part in comment.split():
+                        if part.startswith("split_start="):
+                            try:
+                                split_start = int(part.split("=", 1)[1])
+                            except ValueError:
+                                pass
                 val = val.split(" #")[0].strip()
                 if not val:
                     continue
                 if key.startswith("REPORT_URL"):
-                    report_urls.append(val)
+                    report_urls.append({"url": val, "split_start": split_start})
                 else:
                     config[key] = val
     except FileNotFoundError:
