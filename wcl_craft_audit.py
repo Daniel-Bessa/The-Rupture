@@ -1206,24 +1206,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             return out
 
         def _build_chart(fight: dict, chart_id: str) -> str:
-            """Build a 3-line canvas timeline chart for a single fight."""
-            td = fight.get("timeline_data") if fight else None
-            if not td or not any(td.get(k) for k in ("dps", "taken", "heal")):
-                return ""
-            dps_j   = _json.dumps(td.get("dps",   []))
-            taken_j = _json.dumps(td.get("taken", []))
-            heal_j  = _json.dumps(td.get("heal",  []))
-            return (
-                f'<div class="timeline-wrap">'
-                f'<canvas class="timeline-canvas" id="tc-{chart_id}" height="140"'
-                f' data-dps=\'{dps_j}\' data-taken=\'{taken_j}\' data-heal=\'{heal_j}\'></canvas>'
-                f'<div class="timeline-legend">'
-                f'<span class="tl-dot" style="background:#ffb74d"></span><span class="tl-lbl">DPS Done</span>'
-                f'<span class="tl-dot" style="background:#e57373"></span><span class="tl-lbl">Dmg Taken</span>'
-                f'<span class="tl-dot" style="background:#81c784"></span><span class="tl-lbl">Healing</span>'
-                f'</div>'
-                f'</div>'
-            )
+            return ""  # parked — see ideas/timeline_chart.html
 
         # ── Shared table renderer (kills + wipes) ──
         def _render_table(fights_list, tbl_id, pids=None):
