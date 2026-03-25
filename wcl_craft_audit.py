@@ -1582,8 +1582,10 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
             wasted_html = f'<div class="cm-multiwarn">⚠ Wasted arrow on CE: {", ".join(wasted)}</div>'
 
         ord_sfx = "st" if im_num == 1 else "nd" if im_num == 2 else "rd"
+        t_s = im["arrows"][0]["t_s"] if im["arrows"] else 0
+        t_lbl = f'{t_s // 60}:{t_s % 60:02d}'
         blocks += (f'<div class="cm-block">'
-                   f'<div class="cm-label">Silverstrike — {im_num}{ord_sfx} Intermission</div>'
+                   f'<div class="cm-label">Silverstrike — {im_num}{ord_sfx} Intermission <span class="cm-t">@ {t_lbl}</span></div>'
                    f'<table class="cm-table"><thead>'
                    f'<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>'
                    f'</thead><tbody>'
