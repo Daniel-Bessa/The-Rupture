@@ -1466,6 +1466,112 @@ SPEC_ROLES: dict = {
 }
 
 
+def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
+    """Render Silverstrike + P3 circle mechanics for a Crown of the Cosmos wipe pane."""
+    from html import escape as _esc
+
+    cm = w.get("crown_mechanics", {})
+    if not cm:
+        return ""
+
+    def norm(raw_name):
+        player, _ = lookup_roster(raw_name)
+        return player
+
+    def pcolor(raw_name):
+        player = norm(raw_name)
+        for a in actor_lookup.values():
+            if lookup_roster(a.get("name", ""))[0] == player:
+                return CLASS_COLORS.get(a.get("subType", ""), "#ccc")
+        return "#ccc"
+
+    blocks = ""
+
+    for im in cm.get("silverstrike", []):
+        # Group hits by timestamp cluster
+        rounds: dict = {}
+        for a in im["arrows"]:
+            player_name = norm(a["name"])
+            rounds.setdefault(a["t_s"], []).append({**a, "player": player_name})
+
+        rows = ""
+        round_num = 0
+        for t_s in sorted(rounds.keys()):
+            round_num += 1
+            for i, a in enumerate(rounds[t_s]):
+                is_multi = im["multi_hit"].get(str(a["pid"]), 0) > 1
+                is_rico  = i > 0
+                row_cls  = ' class="cm-arrow-multi"' if is_multi else (' class="cm-arrow-rico"' if is_rico else "")
+                arrow_lbl = f"↓{round_num}" if not is_rico else ""
+                seq_span  = f' <span class="cm-seq">#{a["seq"]}</span>' if a["seq"] > 1 else ""
+                rows += (f'<tr{row_cls}>'
+                         f'<td class="cm-t">{t_s}s</td>'
+                         f'<td class="cm-arrow">{arrow_lbl}</td>'
+                         f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(a["player"])}{seq_span}</td>'
+                         f'<td class="cm-role">{_esc(a["role"])}</td>'
+                         f'</tr>')
+
+        multi_names = [f'<span style="color:{pcolor(n)}">{_esc(norm(n))}</span> ×{c}'
+                       for n, c in im["multi_hit"].items() if int(c) > 1]
+        multi_warn = (f'<div class="cm-multiwarn">⚠ Multi-hit: {", ".join(multi_names)}</div>'
+                      if multi_names else "")
+
+        blocks += (f'<div class="cm-block">'
+                   f'<div class="cm-label">Silverstrike — Intermission {im["intermission"]}</div>'
+                   f'<table class="cm-table"><thead>'
+                   f'<tr><th>Time</th><th>Arrow</th><th>Player</th><th>Role</th></tr>'
+                   f'</thead><tbody>{rows}</tbody></table>'
+                   f'{multi_warn}</div>')
+
+    for ci, circle_set in enumerate(cm.get("p3_circles", [])):
+        rows = ""
+        for i, p in enumerate(circle_set["players"]):
+            bad = (i == 0 and p["role"] in ("Tank", "Melee")) or \
+                  (i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",) and len(circle_set["players"]) == 3)
+            row_cls = ' class="cm-circle-bad"' if bad else ""
+            hold_s  = f'{p.get("hold_ms", 0)//1000}s' if p.get("hold_ms") else "?"
+            rows += (f'<tr{row_cls}>'
+                     f'<td class="cm-t">Leave #{i+1}</td>'
+                     f'<td class="cm-name" style="color:{pcolor(p["name"])}">{_esc(norm(p["name"]))}</td>'
+                     f'<td class="cm-role">{_esc(p["role"])}</td>'
+                     f'<td class="cm-t">{hold_s}</td>'
+                     f'</tr>')
+        flag_html = "".join(f'<div class="cm-multiwarn">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
+        blocks += (f'<div class="cm-block">'
+                   f'<div class="cm-label">P3 Circles — Set {ci+1}</div>'
+                   f'<table class="cm-table"><thead>'
+                   f'<tr><th>Order</th><th>Player</th><th>Role</th><th>Held</th></tr>'
+                   f'</thead><tbody>{rows}</tbody></table>'
+                   f'{flag_html}</div>')
+
+    if not blocks:
+        return ""
+    return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div><div class="cm-blocks">{blocks}</div></div>'
+
+
+_CROWN_MECHANICS_CSS = """
+.cm-section { margin-top: 14px; }
+.cm-section-title { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase;
+  letter-spacing: .06em; margin-bottom: 8px; }
+.cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; }
+.cm-block { flex: 0 0 auto; }
+.cm-label { font-size: 11px; font-weight: 600; color: #58a6ff; margin-bottom: 5px; }
+.cm-table { border-collapse: collapse; font-size: 12px; }
+.cm-table th { background: #0d1117; color: #8b949e; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; padding: 3px 8px; border: 1px solid #30363d; text-align: left; }
+.cm-table td { padding: 2px 8px; border: 1px solid #21262d; }
+.cm-t { color: #8b949e; min-width: 38px; }
+.cm-arrow { color: #58a6ff; font-weight: 700; min-width: 46px; }
+.cm-name { font-weight: 600; min-width: 100px; }
+.cm-role { color: #8b949e; min-width: 52px; }
+.cm-seq { color: #d29922; font-size: 10px; }
+.cm-arrow-rico td { opacity: 0.5; }
+.cm-arrow-multi td { background: #3d1a1a !important; }
+.cm-circle-bad td { background: #3d1a1a; color: #f85149; }
+.cm-multiwarn { margin-top: 5px; font-size: 11px; color: #f85149; }
+"""
+
+
 def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None) -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
@@ -2000,6 +2106,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         if boss_name in results or not boss_wipes:
             continue
         boss_name_base = boss_name.rsplit(" (", 1)[0]
+        mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
+        has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
         table_id  = f"{id_prefix}-wipeonly-{boss_name_base.lower().replace(' ', '-').replace('&', 'and')}"
         total     = len(boss_wipes)
 
@@ -2024,10 +2132,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
                 key=pid_sort
             )
-            wipe_banners = _build_banners([w])
-            wipe_table   = _render_table([w], wtbl_id, pids=wipe_pids)
-            wipe_chart   = _build_chart(w, wtbl_id)
-            wipe_panes  += f'<div class="pull-pane {active}" id="pane-{wtbl_id}">{wipe_banners}{wipe_table}{wipe_chart}</div>'
+            wipe_banners  = _build_banners([w])
+            wipe_table    = _render_table([w], wtbl_id, pids=wipe_pids)
+            wipe_chart    = _build_chart(w, wtbl_id)
+            crown_html    = _build_crown_mechanics_html(w, actor_lookup) if "Crown" in boss_name_base else ""
+            wipe_panes  += f'<div class="pull-pane {active}" id="pane-{wtbl_id}">{wipe_banners}{wipe_table}{wipe_chart}{crown_html}</div>'
 
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
         results[boss_name] = pull_selector + wipe_panes
@@ -2422,6 +2531,7 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 .pull-pane {{ display: none; }}
 .pull-pane.active {{ display: block; }}
 {_FILTER_BAR_CSS}
+{_CROWN_MECHANICS_CSS}
 </style>
 <script>const whTooltips = {{colorLinks: true, iconizeLinks: true, iconSize: 'small'}};</script>
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
