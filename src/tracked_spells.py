@@ -69,6 +69,8 @@ CLASS_DEFENSIVE_IDS = {
     122783,  # Diffuse Magic
     131645,  # Zen Meditation
     122278,  # Dampen Harm
+    132578,  # Invoke Niuzao, the Black Ox (Brewmaster)
+    1241059, # Celestial Infusion (Brewmaster)
     # Paladin
     642,     # Divine Shield
     31850,   # Ardent Defender
@@ -170,6 +172,7 @@ SPELL_NAMES = {
     # Personal defensives — Monk
     115203: "Fortifying Brew",    122783: "Diffuse Magic",
     131645: "Zen Meditation",     122278: "Dampen Harm",
+    132578: "Invoke Niuzao",      1241059: "Celestial Infusion",
     # Personal defensives — Paladin
     642: "Divine Shield",         31850: "Ardent Defender",
     86659: "Guardian of Ancient Kings", 184662: "Shield of Vengeance",

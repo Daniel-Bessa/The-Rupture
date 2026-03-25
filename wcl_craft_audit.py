@@ -706,7 +706,143 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
     return totals
 
 
-_ALNDUST_SOAK_IDS = {1262305, 1246827}  # Alndust Upheaval — players hit = "went down"
+_ALNDUST_SOAK_IDS   = {1262305, 1246827}   # Alndust Upheaval — players hit = "went down"
+_CROWN_CIRCLE_ID    = 1233887              # P3 Void Circle debuff
+_CROWN_SILVERSTRIKE_HIT_IDS  = {1233649, 1237729}  # Silverstrike damage events
+_CROWN_VOID_STACK_ID         = 1233602             # Void Stacks debuff
+
+
+def fetch_crown_debuff_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch Silverstrike + P3 circle debuff events for a Crown of the Cosmos fight."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Debuffs,
+                fightIDs: [$fightID],
+                hostilityType: Friendlies,
+                filterExpression: "ability.id in (1233887, 1233602)",
+                limit: 500
+            ) { data }
+        }}
+    }
+    """
+    resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return resp.get("data", {}).get("reportData", {}).get("report", {}).get("events", {}).get("data", [])
+
+
+def analyze_crown_mechanics(debuff_events: list, damage_events: list,
+                             actor_lookup: dict, spec_roles: dict,
+                             fight_start_ms: int) -> dict:
+    """Analyze Crown of the Cosmos mechanics from raw events.
+
+    Returns:
+        silverstrike: list of intermission dicts, each with ordered list of arrow recipients
+        p3_circles:   list of circle-set dicts, each with 3 players in leave order
+    """
+    def pid_name(pid):
+        return actor_lookup.get(pid, {}).get("name", f"#{pid}")
+
+    def pid_role(pid):
+        return spec_roles.get(pid, "DPS")
+
+    # ── Silverstrike hits (damage events for hit IDs) ──
+    strike_hits = sorted(
+        [(e["timestamp"] - fight_start_ms, e["targetID"])
+         for e in damage_events
+         if e.get("abilityGameID") in _CROWN_SILVERSTRIKE_HIT_IDS and e.get("targetID") in actor_lookup],
+        key=lambda x: x[0]
+    )
+    # Group into intermissions: gap > 45s = new intermission
+    intermissions = []
+    if strike_hits:
+        current = [strike_hits[0]]
+        for hit in strike_hits[1:]:
+            if hit[0] - current[-1][0] > 45_000:
+                intermissions.append(current)
+                current = [hit]
+            else:
+                current.append(hit)
+        intermissions.append(current)
+
+    # Build intermission summaries
+    silverstrike = []
+    for im_idx, hits in enumerate(intermissions):
+        seen = {}
+        ordered = []
+        for t_ms, pid in hits:
+            seen[pid] = seen.get(pid, 0) + 1
+            ordered.append({"t_s": t_ms // 1000, "pid": pid,
+                             "name": pid_name(pid), "role": pid_role(pid),
+                             "seq": len([h for h in ordered if h["pid"] == pid]) + 1})
+        silverstrike.append({
+            "intermission": im_idx + 1,
+            "arrows": ordered,
+            "multi_hit": {pid: cnt for pid, cnt in seen.items() if cnt > 1},
+        })
+
+    # ── Void stacks (debuff applies without being arrow target) ──
+    void_stack_pids = set()
+    for e in debuff_events:
+        if e.get("abilityGameID") == _CROWN_VOID_STACK_ID and e.get("type") in ("applydebuff", "applydebuffstack"):
+            void_stack_pids.add(e.get("targetID"))
+    arrow_pids = {pid for hits in intermissions for _, pid in hits}
+    # Players with void stacks but no arrow = leeching/unintended stacks
+    no_arrow_stacks = [{"pid": p, "name": pid_name(p)} for p in void_stack_pids - arrow_pids if p in actor_lookup]
+
+    # ── P3 Circles ──
+    circle_events = sorted(
+        [(e["timestamp"] - fight_start_ms, e["type"], e.get("targetID"))
+         for e in debuff_events
+         if e.get("abilityGameID") == _CROWN_CIRCLE_ID and e.get("targetID") in actor_lookup],
+        key=lambda x: x[0]
+    )
+    # Build apply/remove pairs per player
+    active_circles: dict = {}  # pid -> apply_t
+    circle_sets = []
+    current_set = []
+
+    for t_ms, etype, pid in circle_events:
+        if etype == "applydebuff":
+            active_circles[pid] = t_ms
+            current_set.append({"pid": pid, "apply_t": t_ms, "remove_t": None,
+                                  "name": pid_name(pid), "role": pid_role(pid)})
+        elif etype == "removedebuff" and pid in active_circles:
+            apply_t = active_circles.pop(pid)
+            for entry in reversed(current_set):
+                if entry["pid"] == pid and entry["remove_t"] is None:
+                    entry["remove_t"] = t_ms
+                    entry["hold_ms"]  = t_ms - apply_t
+                    break
+            # Check if current_set is "complete" (all entries have remove_t) and non-empty
+            if current_set and all(e.get("remove_t") is not None for e in current_set):
+                # Flush set: sort by remove_t to get leave order
+                current_set.sort(key=lambda e: e["remove_t"])
+                circle_sets.append(current_set)
+                current_set = []
+
+    # Flush any remaining (last set if fight ended with circles active)
+    if current_set:
+        current_set.sort(key=lambda e: (e.get("remove_t") or float("inf")))
+        circle_sets.append(current_set)
+
+    # Flag sets where leave order doesn't match ranged→melee→tank
+    p3_circles = []
+    for s in circle_sets:
+        flags = []
+        for i, entry in enumerate(s):
+            role = entry["role"]
+            if i == 0 and role in ("Tank", "Melee"):
+                flags.append(f'{entry["name"]} ({role}) left FIRST — should be ranged')
+            elif i == len(s) - 1 and role not in ("Tank",) and len(s) == 3:
+                flags.append(f'{entry["name"]} ({role}) left LAST — tank should be last')
+        p3_circles.append({"players": s, "flags": flags})
+
+    return {
+        "silverstrike":   silverstrike,
+        "no_arrow_stacks": no_arrow_stacks,
+        "p3_circles":     p3_circles,
+    }
 
 # ── Chimaerus raid group config (hardcoded per report) ───────────────────────
 # Group A (odd waves 1,3,5) goes down first; Group B (even waves 2,4,6) goes second.
@@ -2743,6 +2879,8 @@ h1 {{ color: #7289DA; font-size: 24px; }}
 .gear-link {{ color: #4caf50; font-size: 20px; text-decoration: none; line-height: 1; }}
 .gear-link:hover {{ color: #81c784; }}
 .roster-link {{ color: #7289DA; font-size: 20px; text-decoration: none; line-height: 1; }}
+.boss-link {{ color: #d29922; font-size: 18px; text-decoration: none; line-height: 1; font-weight: 700; }}
+.boss-link:hover {{ color: #e5cc80; }}
 .subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
 .raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }}
 .raid-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
@@ -2762,7 +2900,7 @@ h1 {{ color: #7289DA; font-size: 24px; }}
 </style>
 </head>
 <body>
-<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}<a href="roster.html" class="roster-link" title="Guild Roster">👥</a></div>
+<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}<a href="roster.html" class="roster-link" title="Guild Roster">👥</a><a href="boss_chimaerus_heroic.html" class="boss-link" title="Boss Progression — Chimaerus (Heroic)">🐲</a><a href="boss_crown_heroic.html" class="boss-link" title="Boss Progression — Crown of the Cosmos (Heroic)">👁</a></div>
 <div class="subtitle">{total_cards} entr{"ies" if total_cards != 1 else "y"} tracked</div>
 <div class="raid-grid">
 {cards_html}
@@ -3239,6 +3377,281 @@ table.prog-tbl td:last-child{{border-right:none}}
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[OK] Boss progression page saved: {output_path}")
+
+
+def write_crown_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write Crown of the Cosmos Heroic boss progression page.
+
+    Shows per-wipe Silverstrike intermission tables (arrow order, multi-hits)
+    and P3 circle leave-order tables. Aggregates multi-hit counts per player
+    across all wipes.
+    """
+    from html import escape as _esc
+
+    TARGET_BOSS = "Crown of the Cosmos"
+    TARGET_DIFF = "Heroic"
+    WCL_BASE    = "https://www.warcraftlogs.com/reports"
+
+    # ── collect all Crown wipes ──────────────────────────────────────────────
+    wipes = []
+    for day_data in sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0)):
+        report_code  = day_data["report_code"]
+        actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
+
+        def normalize_name(raw_name):
+            # raw_name may be a character name — resolve to player name
+            player, _ = lookup_roster(raw_name)
+            return player
+
+        def actor_color(player_name, al=actor_lookup):
+            for a in al.values():
+                if lookup_roster(a.get("name", ""))[0] == player_name:
+                    return CLASS_COLORS.get(a.get("subType", ""), "#ccc")
+            return "#ccc"
+
+        wd = day_data.get("wipe_data", {})
+        for bname, bwipes in wd.items():
+            if TARGET_BOSS not in bname or TARGET_DIFF not in bname:
+                continue
+            for w in bwipes:
+                cm = w.get("crown_mechanics", {})
+                if not cm:
+                    continue
+                dur_s = (w.get("fight_dur_ms") or 0) // 1000
+
+                # Normalise arrow names to player names
+                silverstrike = []
+                for im in cm.get("silverstrike", []):
+                    arrows = []
+                    for a in im["arrows"]:
+                        arrows.append({**a, "name": normalize_name(a["name"])})
+                    multi_named = {}
+                    for pid_str, cnt in im.get("multi_hit", {}).items():
+                        # Find any arrow entry with this pid
+                        pid = int(pid_str)
+                        for a in im["arrows"]:
+                            if a["pid"] == pid:
+                                multi_named[normalize_name(a["name"])] = cnt
+                                break
+                    silverstrike.append({
+                        "intermission": im["intermission"],
+                        "arrows":       arrows,
+                        "multi_hit":    multi_named,
+                    })
+
+                p3_circles = []
+                for s in cm.get("p3_circles", []):
+                    players = [{**p, "name": normalize_name(p["name"])} for p in s["players"]]
+                    p3_circles.append({"players": players, "flags": s["flags"]})
+
+                wipes.append({
+                    "report_code": report_code,
+                    "fight_id":    w["fight_id"],
+                    "wipe_num":    w["wipe_num"],
+                    "dur_s":       dur_s,
+                    "dur_fmt":     f"{dur_s//60}:{dur_s%60:02d}",
+                    "boss_pct":    w.get("boss_pct", 0),
+                    "silverstrike": silverstrike,
+                    "p3_circles":  p3_circles,
+                    "actor_color": actor_color,
+                })
+
+    if not wipes:
+        return
+
+    # ── aggregate multi-hit counts per player across all wipes ───────────────
+    multi_totals: dict = {}  # player_name → total multi-hit count
+    for w in wipes:
+        for im in w["silverstrike"]:
+            for name, cnt in im["multi_hit"].items():
+                multi_totals[name] = multi_totals.get(name, 0) + (cnt - 1)  # extra hits only
+
+    # All players who appeared in any arrow
+    all_arrow_players: set = set()
+    for w in wipes:
+        for im in w["silverstrike"]:
+            for a in im["arrows"]:
+                all_arrow_players.add(a["name"])
+
+    # ── per-player color lookup (first actor_color found across wipes) ────────
+    def player_color(player_name):
+        for w in wipes:
+            c = w["actor_color"](player_name)
+            if c != "#ccc":
+                return c
+        return "#ccc"
+
+    # ── Build summary table rows (sorted by most multi-hits) ─────────────────
+    sorted_players = sorted(all_arrow_players,
+                            key=lambda n: (-multi_totals.get(n, 0), n.lower()))
+    summary_rows = ""
+    for name in sorted_players:
+        extra = multi_totals.get(name, 0)
+        color = player_color(name)
+        cls   = "prog-warn" if extra > 2 else ("prog-caution" if extra > 0 else "prog-ok")
+        summary_rows += (f'<tr>'
+                         f'<td class="prog-name" style="color:{color}">{_esc(name)}</td>'
+                         f'<td class="prog-cell {cls}" data-val="{extra}">'
+                         f'{"—" if extra == 0 else extra}</td>'
+                         f'</tr>')
+
+    # ── Build per-wipe cards ──────────────────────────────────────────────────
+    wipe_cards = ""
+    for w in wipes:
+        wcl_url = f"{WCL_BASE}/{w['report_code']}?fight={w['fight_id']}"
+        pct_lbl = f"{w['boss_pct']:.1f}% boss HP"
+        header  = (f'<div class="wipe-header">'
+                   f'<span class="wipe-title">Wipe {w["wipe_num"]} &nbsp;·&nbsp; {w["dur_fmt"]} &nbsp;·&nbsp; {_esc(pct_lbl)}</span>'
+                   f'<a href="{wcl_url}" target="_blank" class="wipe-wcl">WCL ↗</a>'
+                   f'</div>')
+
+        im_tables = ""
+        for im in w["silverstrike"]:
+            # Group arrows by time clusters (same t_s = same round)
+            rounds: dict = {}  # t_s → list of arrow entries
+            for a in im["arrows"]:
+                rounds.setdefault(a["t_s"], []).append(a)
+
+            round_rows = ""
+            round_num = 0
+            for t_s in sorted(rounds.keys()):
+                round_num += 1
+                for i, a in enumerate(rounds[t_s]):
+                    is_multi = im["multi_hit"].get(a["name"], 0) > 1
+                    multi_cls = " arrow-multi" if is_multi else ""
+                    seq_lbl   = f"#{a['seq']}" if a["seq"] > 1 else ""
+                    ricochet  = i > 0  # first hit at this timestamp = primary; rest = ricochet
+                    rico_cls  = " arrow-rico" if ricochet else ""
+                    round_rows += (f'<tr class="arrow-row{multi_cls}{rico_cls}">'
+                                   f'<td class="arrow-t">{t_s}s</td>'
+                                   f'<td class="arrow-round">{"" if ricochet else f"↓{round_num}"}</td>'
+                                   f'<td class="arrow-name" style="color:{player_color(a["name"])}">'
+                                   f'{_esc(a["name"])}{f" <span class=arrow-seq>{seq_lbl}</span>" if seq_lbl else ""}'
+                                   f'</td>'
+                                   f'<td class="arrow-role">{_esc(a["role"])}</td>'
+                                   f'</tr>')
+
+            multi_names = ", ".join(f'<span style="color:{player_color(n)}">{_esc(n)}</span> ×{c}'
+                                    for n, c in im["multi_hit"].items() if c > 1)
+            multi_warning = (f'<div class="multi-warn">⚠ Multi-hit: {multi_names}</div>'
+                             if multi_names else "")
+
+            im_tables += (f'<div class="im-block">'
+                          f'<div class="im-title">Intermission {im["intermission"]}</div>'
+                          f'<table class="arrow-table"><thead>'
+                          f'<tr><th>Time</th><th>Arrow</th><th>Player</th><th>Role</th></tr>'
+                          f'</thead><tbody>{round_rows}</tbody></table>'
+                          f'{multi_warning}</div>')
+
+        # P3 circles (if any)
+        p3_html = ""
+        for ci, circle_set in enumerate(w["p3_circles"]):
+            circle_rows = ""
+            for i, p in enumerate(circle_set["players"]):
+                order_cls = ""
+                if i == 0 and p["role"] in ("Tank", "Melee"):
+                    order_cls = " circle-bad"
+                elif i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",):
+                    order_cls = " circle-bad"
+                hold_s = f'{p.get("hold_ms",0)//1000}s' if p.get("hold_ms") else "?"
+                circle_rows += (f'<tr class="circle-row{order_cls}">'
+                                 f'<td class="circle-pos">{i+1}</td>'
+                                 f'<td class="circle-name" style="color:{player_color(p["name"])}">{_esc(p["name"])}</td>'
+                                 f'<td class="circle-role">{_esc(p["role"])}</td>'
+                                 f'<td class="circle-hold">{hold_s}</td>'
+                                 f'</tr>')
+            flag_html = "".join(f'<div class="circle-flag">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
+            p3_html += (f'<div class="im-block">'
+                        f'<div class="im-title">P3 Circles — Set {ci+1}</div>'
+                        f'<table class="arrow-table"><thead>'
+                        f'<tr><th>Leave #</th><th>Player</th><th>Role</th><th>Held</th></tr>'
+                        f'</thead><tbody>{circle_rows}</tbody></table>'
+                        f'{flag_html}</div>')
+
+        if not im_tables and not p3_html:
+            im_tables = '<div class="no-data">No mechanic data for this wipe.</div>'
+
+        wipe_cards += (f'<div class="wipe-card">'
+                       f'{header}'
+                       f'<div class="wipe-body">{im_tables}{p3_html}</div>'
+                       f'</div>')
+
+    title = f"Boss Progression — {TARGET_BOSS} ({TARGET_DIFF})"
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_esc(title)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px 28px}}
+a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
+.back{{display:inline-block;margin-bottom:20px;color:#7289DA;font-size:13px}}
+h1{{font-size:20px;font-weight:700;margin-bottom:18px;color:#e6edf3}}
+h2{{font-size:15px;font-weight:600;margin:24px 0 10px;color:#e6edf3;border-bottom:1px solid #30363d;padding-bottom:6px}}
+/* Summary table */
+.summary-table{{border-collapse:collapse;width:320px;margin-bottom:32px}}
+.summary-table th{{background:#161b22;color:#8b949e;font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.05em;padding:6px 10px;border:1px solid #30363d;text-align:left}}
+.summary-table td{{padding:5px 10px;border:1px solid #21262d}}
+.prog-name{{font-weight:600;min-width:120px}}
+.prog-cell{{text-align:center;min-width:80px}}
+.prog-ok{{color:#3fb950}}
+.prog-caution{{color:#d29922}}
+.prog-warn{{color:#f85149;font-weight:700}}
+/* Wipe cards */
+.wipe-card{{background:#161b22;border:1px solid #30363d;border-radius:8px;margin-bottom:20px;overflow:hidden}}
+.wipe-header{{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;
+  background:#1c2128;border-bottom:1px solid #30363d}}
+.wipe-title{{font-weight:600;color:#e6edf3;font-size:13px}}
+.wipe-wcl{{font-size:11px;color:#7289DA}}
+.wipe-body{{padding:12px 14px;display:flex;flex-wrap:wrap;gap:16px}}
+/* Intermission blocks */
+.im-block{{flex:0 0 auto}}
+.im-title{{font-size:12px;font-weight:700;color:#8b949e;text-transform:uppercase;
+  letter-spacing:.05em;margin-bottom:6px}}
+.arrow-table{{border-collapse:collapse;font-size:12px}}
+.arrow-table th{{background:#0d1117;color:#8b949e;font-size:10px;font-weight:600;
+  text-transform:uppercase;padding:4px 8px;border:1px solid #30363d;text-align:left}}
+.arrow-table td{{padding:3px 8px;border:1px solid #21262d}}
+.arrow-t{{color:#8b949e;min-width:40px}}
+.arrow-round{{color:#58a6ff;font-weight:700;min-width:40px}}
+.arrow-name{{font-weight:600;min-width:110px}}
+.arrow-role{{color:#8b949e;min-width:60px}}
+.arrow-seq{{color:#d29922;font-size:10px;margin-left:2px}}
+.arrow-rico{{opacity:0.55}}
+.arrow-multi td{{background:#3d1a1a}}
+.multi-warn{{margin-top:6px;font-size:11px;color:#f85149}}
+.no-data{{color:#8b949e;font-style:italic;padding:8px 0}}
+/* P3 circles */
+.circle-bad td{{background:#3d1a1a;color:#f85149}}
+.circle-pos{{color:#8b949e;min-width:60px}}
+.circle-name{{font-weight:600;min-width:110px}}
+.circle-role{{color:#8b949e;min-width:60px}}
+.circle-hold{{color:#8b949e;min-width:50px}}
+.circle-flag{{margin-top:6px;font-size:11px;color:#f85149}}
+</style>
+</head>
+<body>
+<a href="index.html" class="back">← Back to Index</a>
+<h1>{_esc(title)}</h1>
+<h2>Silverstrike Multi-Hit Summary — {len(wipes)} wipe(s)</h2>
+<table class="summary-table" id="summary-tbl">
+<thead><tr>
+  <th>Player</th>
+  <th>Extra Hits</th>
+</tr></thead>
+<tbody>{summary_rows}</tbody>
+</table>
+<h2>Per-Wipe Details</h2>
+{wipe_cards}
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Crown progression page saved: {output_path}")
 
 
 def write_gear_html(days_data: list, output_path: str, guild_name: str = "") -> None:
@@ -4390,6 +4803,16 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     wipe_defensive_casts = {}
                     wipe_external_casts  = {}
                 all_pids = {pid for pid in (set(dmg_taken) | set(uptime_map) | set(deaths)) if pid in actor_lookup}
+                # Crown-specific mechanic analysis
+                crown_mechanics = {}
+                if "Crown" in fname:
+                    try:
+                        crown_debuffs = fetch_crown_debuff_events(token, report_code, fid)
+                        crown_mechanics = analyze_crown_mechanics(
+                            crown_debuffs, damage_events, actor_lookup,
+                            wipe_spec_roles, fight_start)
+                    except Exception as ce:
+                        print(f"  [WARN] Crown mechanics fetch failed for fight {fid}: {ce}")
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
                     "wipe_num": wipe_num, "boss_pct": boss_pct,
@@ -4402,6 +4825,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     "spec_roles": wipe_spec_roles,
                     "defensive_casts": wipe_defensive_casts,
                     "external_casts":  wipe_external_casts,
+                    "crown_mechanics": crown_mechanics,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
@@ -4524,6 +4948,7 @@ def main():
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
     write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
+    write_crown_progression_html(days_data, "boss_crown_heroic.html", guild_name=guild_name)
     write_player_pages(days_data)
 
     # XLSX: most recent day only
