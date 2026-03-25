@@ -728,12 +728,31 @@ def fetch_crown_debuff_events(token: str, report_code: str, fight_id: int) -> li
     }
     """
     resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
-    return resp.get("data", {}).get("reportData", {}).get("report", {}).get("events", {}).get("data", [])
+    return resp["reportData"]["report"]["events"].get("data", [])
+
+
+def fetch_crown_add_buff_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch Umbral Tether + Corruption Essence buff events on the 3 Crown adds."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Buffs,
+                fightIDs: [$fightID],
+                hostilityType: Enemies,
+                filterExpression: "ability.id in (1233470, 1233778)",
+                limit: 500
+            ) { data }
+        }}
+    }
+    """
+    resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return resp["reportData"]["report"]["events"].get("data", [])
 
 
 def analyze_crown_mechanics(debuff_events: list, damage_events: list,
                              actor_lookup: dict, spec_roles: dict,
-                             fight_start_ms: int) -> dict:
+                             fight_start_ms: int, add_buff_events: list = None) -> dict:
     """Analyze Crown of the Cosmos mechanics from raw events.
 
     Returns:
@@ -753,17 +772,42 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
          if e.get("abilityGameID") in _CROWN_SILVERSTRIKE_HIT_IDS and e.get("targetID") in actor_lookup],
         key=lambda x: x[0]
     )
-    # Group into intermissions: gap > 45s = new intermission
-    intermissions = []
+    # Group into rounds: hits within 5s of each other = same round
+    rounds = []
     if strike_hits:
         current = [strike_hits[0]]
         for hit in strike_hits[1:]:
-            if hit[0] - current[-1][0] > 45_000:
-                intermissions.append(current)
+            if hit[0] - current[0][0] > 5_000:
+                rounds.append(current)
                 current = [hit]
             else:
                 current.append(hit)
-        intermissions.append(current)
+        rounds.append(current)
+    intermissions = rounds  # keep variable name for downstream logic
+
+    # ── Umbral Tether + Corruption Essence on adds ──
+    # Add IDs: Morium=256, Demiar=257, Vorelus=260
+    _ADD_NAMES = {256: "Morium", 257: "Demiar", 260: "Vorelus"}
+    # Expected adds to lose Umbral Tether per round (1-indexed); round 3+ = no adds should need shields
+    _IM_EXPECTED = {1: {256, 257}, 2: {260}}
+
+    umbral_removals = []  # (t_ms, add_id)
+    ce_removals     = []  # (t_ms, add_id)
+    for e in (add_buff_events or []):
+        aid  = e.get("abilityGameID")
+        tid  = e.get("targetID")
+        etype = e.get("type")
+        if tid not in _ADD_NAMES:
+            continue
+        t = e["timestamp"] - fight_start_ms
+        if aid == 1233470 and etype == "removebuff":
+            umbral_removals.append((t, tid))
+        elif aid == 1233778 and etype == "removebuff":
+            ce_removals.append((t, tid))
+
+    # CE removal is "normal" if an Umbral Tether removal on the same add happened within 3s
+    def ce_is_normal(t_ce, add_id):
+        return any(abs(t_ce - t_u) <= 3000 and a == add_id for t_u, a in umbral_removals)
 
     # Build intermission summaries
     silverstrike = []
@@ -775,10 +819,28 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
             ordered.append({"t_s": t_ms // 1000, "pid": pid,
                              "name": pid_name(pid), "role": pid_role(pid),
                              "seq": len([h for h in ordered if h["pid"] == pid]) + 1})
+
+        # Time window: ±5s around the round's first hit
+        im_start = hits[0][0] - 5_000
+        im_end   = hits[0][0] + 5_000
+
+        # Umbral Tether removals that fall in this window
+        shields_removed = [_ADD_NAMES[a] for t, a in umbral_removals if im_start <= t <= im_end]
+        expected        = {_ADD_NAMES[a] for a in _IM_EXPECTED.get(im_idx + 1, set())}  # empty = no shields expected
+        correct         = set(shields_removed) == expected
+
+        # CE removals in this window that are NOT paired with an Umbral Tether removal
+        wasted_ce = [_ADD_NAMES[a] for t, a in ce_removals
+                     if im_start <= t <= im_end and not ce_is_normal(t, a)]
+
         silverstrike.append({
-            "intermission": im_idx + 1,
-            "arrows": ordered,
-            "multi_hit": {pid: cnt for pid, cnt in seen.items() if cnt > 1},
+            "intermission":    im_idx + 1,
+            "arrows":          ordered,
+            "multi_hit":       {pid: cnt for pid, cnt in seen.items() if cnt > 1},
+            "shields_removed": shields_removed,
+            "expected_shields": sorted(expected),
+            "correct":         correct,
+            "wasted_ce":       wasted_ce,
         })
 
     # ── Void stacks (debuff applies without being arrow target) ──
@@ -1488,40 +1550,47 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     blocks = ""
 
     for im in cm.get("silverstrike", []):
-        # Group hits by timestamp cluster
-        rounds: dict = {}
+        im_num = im["intermission"]
+
+        # Arrow holders table
+        rows = ""
         for a in im["arrows"]:
             player_name = norm(a["name"])
-            rounds.setdefault(a["t_s"], []).append({**a, "player": player_name})
+            is_multi = im["multi_hit"].get(a["pid"], 0) > 1
+            row_cls  = ' class="cm-arrow-multi"' if is_multi else ""
+            seq_span = f' <span class="cm-seq">×{a["seq"]}</span>' if a["seq"] > 1 else ""
+            rows += (f'<tr{row_cls}>'
+                     f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}</td>'
+                     f'<td class="cm-role">{_esc(a["role"])}</td>'
+                     f'</tr>')
 
-        rows = ""
-        round_num = 0
-        for t_s in sorted(rounds.keys()):
-            round_num += 1
-            for i, a in enumerate(rounds[t_s]):
-                is_multi = im["multi_hit"].get(str(a["pid"]), 0) > 1
-                is_rico  = i > 0
-                row_cls  = ' class="cm-arrow-multi"' if is_multi else (' class="cm-arrow-rico"' if is_rico else "")
-                arrow_lbl = f"↓{round_num}" if not is_rico else ""
-                seq_span  = f' <span class="cm-seq">#{a["seq"]}</span>' if a["seq"] > 1 else ""
-                rows += (f'<tr{row_cls}>'
-                         f'<td class="cm-t">{t_s}s</td>'
-                         f'<td class="cm-arrow">{arrow_lbl}</td>'
-                         f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(a["player"])}{seq_span}</td>'
-                         f'<td class="cm-role">{_esc(a["role"])}</td>'
-                         f'</tr>')
+        # Shield removal status
+        expected = im.get("expected_shields", [])
+        removed  = im.get("shields_removed", [])
+        shield_cells = ""
+        for add_name in ["Demiar", "Morium", "Vorelus"]:
+            if add_name not in expected:
+                shield_cells += f'<td class="cm-add-na">—</td>'
+            elif add_name in removed:
+                shield_cells += f'<td class="cm-add-ok">✓</td>'
+            else:
+                shield_cells += f'<td class="cm-add-miss">✗</td>'
 
-        multi_names = [f'<span style="color:{pcolor(n)}">{_esc(norm(n))}</span> ×{c}'
-                       for n, c in im["multi_hit"].items() if int(c) > 1]
-        multi_warn = (f'<div class="cm-multiwarn">⚠ Multi-hit: {", ".join(multi_names)}</div>'
-                      if multi_names else "")
+        wasted = im.get("wasted_ce", [])
+        wasted_html = ""
+        if wasted:
+            wasted_html = f'<div class="cm-multiwarn">⚠ Wasted arrow on CE: {", ".join(wasted)}</div>'
 
+        ord_sfx = "st" if im_num == 1 else "nd" if im_num == 2 else "rd"
         blocks += (f'<div class="cm-block">'
-                   f'<div class="cm-label">Silverstrike — Intermission {im["intermission"]}</div>'
+                   f'<div class="cm-label">Silverstrike — {im_num}{ord_sfx} Intermission</div>'
                    f'<table class="cm-table"><thead>'
-                   f'<tr><th>Time</th><th>Arrow</th><th>Player</th><th>Role</th></tr>'
-                   f'</thead><tbody>{rows}</tbody></table>'
-                   f'{multi_warn}</div>')
+                   f'<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>'
+                   f'</thead><tbody>'
+                   f'{rows}'
+                   f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{shield_cells}</tr>'
+                   f'</tbody></table>'
+                   f'{wasted_html}</div>')
 
     for ci, circle_set in enumerate(cm.get("p3_circles", [])):
         rows = ""
@@ -1569,6 +1638,11 @@ _CROWN_MECHANICS_CSS = """
 .cm-arrow-multi td { background: #3d1a1a !important; }
 .cm-circle-bad td { background: #3d1a1a; color: #f85149; }
 .cm-multiwarn { margin-top: 5px; font-size: 11px; color: #f85149; }
+.cm-shield-row td { border-top: 1px solid #444; font-size: 11px; text-align: center; }
+.cm-shield-label { color: #8b949e; text-align: left !important; font-weight: 600; }
+.cm-add-ok   { color: #3fb950; font-weight: 700; }
+.cm-add-miss { color: #f85149; font-weight: 700; }
+.cm-add-na   { color: #444; }
 """
 
 
@@ -4917,10 +4991,12 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 crown_mechanics = {}
                 if "Crown" in fname:
                     try:
-                        crown_debuffs = fetch_crown_debuff_events(token, report_code, fid)
+                        crown_debuffs   = fetch_crown_debuff_events(token, report_code, fid)
+                        crown_add_buffs = fetch_crown_add_buff_events(token, report_code, fid)
                         crown_mechanics = analyze_crown_mechanics(
                             crown_debuffs, damage_events, actor_lookup,
-                            wipe_spec_roles, fight_start)
+                            wipe_spec_roles, fight_start,
+                            add_buff_events=crown_add_buffs)
                     except Exception as ce:
                         print(f"  [WARN] Crown mechanics fetch failed for fight {fid}: {ce}")
                 wipe_data.setdefault(boss_key, []).append({
