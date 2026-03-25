@@ -180,7 +180,19 @@ BOSS_MECHANICS = {
             "label": "Silverstrike",
             "name": "Silverstrike Arrow/Ricochet: Alleria marks a player and fires an arrow — being hit without a Void effect is avoidable.",
             "spell_ids": {1233649, 1237729},
-            "type": "dmg_hits",  # complex interaction with Void effects
+            "type": "dmg_hits",  # hit events
+        },
+        {
+            "label": "Void Stacks",
+            "name": "Void Stacks (1233602): Debuff applied by Silverstrike — grants ability to remove add shields. Track stack count.",
+            "spell_ids": {1233602},
+            "type": "dmg_hits",  # debuff application — used for stack tracking
+        },
+        {
+            "label": "P3 Circle",
+            "name": "Void Circle (P3): 3 random players (ranged → melee → tank) each carry a circle and must leave in correct order.",
+            "spell_ids": {1233887},
+            "type": "avoid",  # leaving out of order = wipe
         },
         {
             "label": "Brstng Empty.",
