@@ -767,7 +767,7 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
 
     # ── Silverstrike hits (damage events for hit IDs) ──
     strike_hits = sorted(
-        [(e["timestamp"] - fight_start_ms, e["targetID"])
+        [(e["timestamp"] - fight_start_ms, e["targetID"], e.get("abilityGameID"))
          for e in damage_events
          if e.get("abilityGameID") in _CROWN_SILVERSTRIKE_HIT_IDS and e.get("targetID") in actor_lookup],
         key=lambda x: x[0]
@@ -814,11 +814,15 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
     for im_idx, hits in enumerate(intermissions):
         seen = {}
         ordered = []
-        for t_ms, pid in hits:
+        first_t   = hits[0][0]
+        spell_id  = hits[0][2]
+        for t_ms, pid, _ in hits:
             seen[pid] = seen.get(pid, 0) + 1
+            is_extra = (t_ms - first_t) > 50   # 50ms threshold: bounced/extra hit
             ordered.append({"t_s": t_ms // 1000, "pid": pid,
                              "name": pid_name(pid), "role": pid_role(pid),
-                             "seq": len([h for h in ordered if h["pid"] == pid]) + 1})
+                             "seq": len([h for h in ordered if h["pid"] == pid]) + 1,
+                             "is_extra": is_extra})
 
         # Time window: ±5s around the round's first hit
         im_start = hits[0][0] - 5_000
@@ -835,6 +839,7 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
 
         silverstrike.append({
             "intermission":    im_idx + 1,
+            "spell_id":        spell_id,
             "arrows":          ordered,
             "multi_hit":       {pid: cnt for pid, cnt in seen.items() if cnt > 1},
             "shields_removed": shields_removed,
@@ -1547,83 +1552,102 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 return CLASS_COLORS.get(a.get("subType", ""), "#ccc")
         return "#ccc"
 
-    blocks = ""
-
-    for im in cm.get("silverstrike", []):
-        im_num = im["intermission"]
-
-        # Arrow holders table
-        rows = ""
+    # ── Helper: build one arrow round block ──────────────────────────────────
+    def _arrow_block(im, show_shields):
+        t_s   = im["arrows"][0]["t_s"] if im["arrows"] else 0
+        t_lbl = f'{t_s // 60}:{t_s % 60:02d}'
+        rows  = ""
         for a in im["arrows"]:
             player_name = norm(a["name"])
-            is_multi = im["multi_hit"].get(a["pid"], 0) > 1
-            row_cls  = ' class="cm-arrow-multi"' if is_multi else ""
-            seq_span = f' <span class="cm-seq">×{a["seq"]}</span>' if a["seq"] > 1 else ""
+            is_extra    = a.get("is_extra", False)
+            is_multi    = im["multi_hit"].get(a["pid"], 0) > 1
+            row_cls     = ' class="cm-arrow-extra"' if is_extra else (' class="cm-arrow-multi"' if is_multi else "")
+            seq_span    = f' <span class="cm-seq">×{a["seq"]}</span>' if a["seq"] > 1 else ""
+            extra_tag   = ' <span class="cm-extra-tag">+extra</span>' if is_extra else ""
             rows += (f'<tr{row_cls}>'
-                     f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}</td>'
+                     f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}{extra_tag}</td>'
                      f'<td class="cm-role">{_esc(a["role"])}</td>'
                      f'</tr>')
-
-        # Shield removal status
-        expected = im.get("expected_shields", [])
-        removed  = im.get("shields_removed", [])
-        shield_cells = ""
-        for add_name in ["Demiar", "Morium", "Vorelus"]:
-            if add_name not in expected:
-                shield_cells += f'<td class="cm-add-na">—</td>'
-            elif add_name in removed:
-                shield_cells += f'<td class="cm-add-ok">✓</td>'
-            else:
-                shield_cells += f'<td class="cm-add-miss">✗</td>'
-
+        shield_row = ""
+        if show_shields:
+            cells = ""
+            for add_name in ["Demiar", "Morium", "Vorelus"]:
+                exp = im.get("expected_shields", [])
+                rem = im.get("shields_removed", [])
+                if add_name not in exp:
+                    cells += f'<td class="cm-add-na">—</td>'
+                elif add_name in rem:
+                    cells += f'<td class="cm-add-ok">✓</td>'
+                else:
+                    cells += f'<td class="cm-add-miss">✗</td>'
+            shield_row = f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{cells}</tr>'
         wasted = im.get("wasted_ce", [])
-        wasted_html = ""
-        if wasted:
-            wasted_html = f'<div class="cm-multiwarn">⚠ Wasted arrow on CE: {", ".join(wasted)}</div>'
+        wasted_html = f'<div class="cm-multiwarn">⚠ Wasted arrow on CE: {", ".join(wasted)}</div>' if wasted else ""
+        thead = '<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>' if show_shields else '<tr><th>Player</th><th>Role</th></tr>'
+        return (f'<div class="cm-block">'
+                f'<div class="cm-label cm-t">@ {t_lbl}</div>'
+                f'<table class="cm-table"><thead>{thead}</thead>'
+                f'<tbody>{rows}{shield_row}</tbody></table>'
+                f'{wasted_html}</div>')
 
-        ord_sfx = "st" if im_num == 1 else "nd" if im_num == 2 else "rd"
-        t_s = im["arrows"][0]["t_s"] if im["arrows"] else 0
-        t_lbl = f'{t_s // 60}:{t_s % 60:02d}'
-        blocks += (f'<div class="cm-block">'
-                   f'<div class="cm-label">Silverstrike — {im_num}{ord_sfx} Intermission <span class="cm-t">@ {t_lbl}</span></div>'
-                   f'<table class="cm-table"><thead>'
-                   f'<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>'
-                   f'</thead><tbody>'
-                   f'{rows}'
-                   f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{shield_cells}</tr>'
-                   f'</tbody></table>'
-                   f'{wasted_html}</div>')
+    # ── Split rounds into P1 (spell 1233649) vs Intermission (spell 1237729) ──
+    _SPELL_P1 = 1233649
+    p1_rounds   = [im for im in cm.get("silverstrike", []) if im.get("spell_id") == _SPELL_P1]
+    im_rounds   = [im for im in cm.get("silverstrike", []) if im.get("spell_id") != _SPELL_P1]
+    p3_circles  = cm.get("p3_circles", [])
 
-    for ci, circle_set in enumerate(cm.get("p3_circles", [])):
-        rows = ""
-        for i, p in enumerate(circle_set["players"]):
-            bad = (i == 0 and p["role"] in ("Tank", "Melee")) or \
-                  (i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",) and len(circle_set["players"]) == 3)
-            row_cls = ' class="cm-circle-bad"' if bad else ""
-            hold_s  = f'{p.get("hold_ms", 0)//1000}s' if p.get("hold_ms") else "?"
-            rows += (f'<tr{row_cls}>'
-                     f'<td class="cm-t">Leave #{i+1}</td>'
-                     f'<td class="cm-name" style="color:{pcolor(p["name"])}">{_esc(norm(p["name"]))}</td>'
-                     f'<td class="cm-role">{_esc(p["role"])}</td>'
-                     f'<td class="cm-t">{hold_s}</td>'
-                     f'</tr>')
-        flag_html = "".join(f'<div class="cm-multiwarn">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
-        blocks += (f'<div class="cm-block">'
-                   f'<div class="cm-label">P3 Circles — Set {ci+1}</div>'
-                   f'<table class="cm-table"><thead>'
-                   f'<tr><th>Order</th><th>Player</th><th>Role</th><th>Held</th></tr>'
-                   f'</thead><tbody>{rows}</tbody></table>'
-                   f'{flag_html}</div>')
+    sections = ""
 
-    if not blocks:
+    # ── P1 ────────────────────────────────────────────────────────────────────
+    if p1_rounds:
+        p1_blocks = "".join(_arrow_block(im, show_shields=True) for im in p1_rounds)
+        sections += (f'<div class="cm-phase-divider">P1 — Silverstrike</div>'
+                     f'<div class="cm-blocks">{p1_blocks}</div>')
+
+    # ── Intermission ──────────────────────────────────────────────────────────
+    if im_rounds:
+        im_blocks = "".join(_arrow_block(im, show_shields=False) for im in im_rounds)
+        sections += (f'<div class="cm-phase-divider">Intermission</div>'
+                     f'<div class="cm-blocks">{im_blocks}</div>')
+
+    # ── P3 ────────────────────────────────────────────────────────────────────
+    if p3_circles:
+        p3_blocks = ""
+        for ci, circle_set in enumerate(p3_circles):
+            rows = ""
+            for i, p in enumerate(circle_set["players"]):
+                bad = (i == 0 and p["role"] in ("Tank", "Melee")) or \
+                      (i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",) and len(circle_set["players"]) == 3)
+                row_cls = ' class="cm-circle-bad"' if bad else ""
+                hold_s  = f'{p.get("hold_ms", 0)//1000}s' if p.get("hold_ms") else "?"
+                rows += (f'<tr{row_cls}>'
+                         f'<td class="cm-t">#{i+1}</td>'
+                         f'<td class="cm-name" style="color:{pcolor(p["name"])}">{_esc(norm(p["name"]))}</td>'
+                         f'<td class="cm-role">{_esc(p["role"])}</td>'
+                         f'<td class="cm-t">{hold_s}</td>'
+                         f'</tr>')
+            flag_html = "".join(f'<div class="cm-multiwarn">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
+            p3_blocks += (f'<div class="cm-block">'
+                          f'<div class="cm-label cm-t">Set {ci+1}</div>'
+                          f'<table class="cm-table"><thead>'
+                          f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
+                          f'</thead><tbody>{rows}</tbody></table>'
+                          f'{flag_html}</div>')
+        sections += (f'<div class="cm-phase-divider">P3 — Circles</div>'
+                     f'<div class="cm-blocks">{p3_blocks}</div>')
+
+    if not sections:
         return ""
-    return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div><div class="cm-blocks">{blocks}</div></div>'
+    return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div>{sections}</div>'
 
 
 _CROWN_MECHANICS_CSS = """
 .cm-section { margin-top: 14px; }
 .cm-section-title { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase;
   letter-spacing: .06em; margin-bottom: 8px; }
+.cm-phase-divider { font-size: 11px; font-weight: 700; color: #58a6ff; text-transform: uppercase;
+  letter-spacing: .08em; margin: 10px 0 6px; padding: 3px 8px;
+  border-left: 3px solid #58a6ff; background: #0d1525; display: inline-block; }
 .cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; }
 .cm-block { flex: 0 0 auto; }
 .cm-label { font-size: 11px; font-weight: 600; color: #58a6ff; margin-bottom: 5px; }
@@ -1638,6 +1662,9 @@ _CROWN_MECHANICS_CSS = """
 .cm-seq { color: #d29922; font-size: 10px; }
 .cm-arrow-rico td { opacity: 0.5; }
 .cm-arrow-multi td { background: #3d1a1a !important; }
+.cm-arrow-extra td { background: #2a1f00 !important; }
+.cm-extra-tag { font-size: 9px; color: #d29922; background: #2a1f00; border: 1px solid #5a4000;
+  border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: middle; }
 .cm-circle-bad td { background: #3d1a1a; color: #f85149; }
 .cm-multiwarn { margin-top: 5px; font-size: 11px; color: #f85149; }
 .cm-shield-row td { border-top: 1px solid #444; font-size: 11px; text-align: center; }
