@@ -1613,9 +1613,10 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     p3_circles = cm.get("p3_circles", [])
     sections   = ""
 
-    def _phase_section(label, blocks_html):
+    def _phase_section(label, blocks_html, is_interm=False):
         """Wrap a phase label + content in a collapsible <details> panel."""
-        return (f'<details class="cm-phase" open>'
+        cls = "cm-phase cm-interm" if is_interm else "cm-phase"
+        return (f'<details class="{cls}" open>'
                 f'<summary class="cm-phase-divider">{_esc(label)}</summary>'
                 f'<div class="cm-blocks">{blocks_html}</div>'
                 f'</details>')
@@ -1664,15 +1665,16 @@ _CROWN_MECHANICS_CSS = """
 .cm-section { margin-top: 14px; }
 .cm-section-title { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase;
   letter-spacing: .06em; margin-bottom: 8px; }
-.cm-phase { margin: 8px 0; }
-.cm-phase-divider { list-style: none; font-size: 11px; font-weight: 700; color: #58a6ff;
-  text-transform: uppercase; letter-spacing: .08em; padding: 3px 8px 3px 22px;
-  border-left: 3px solid #58a6ff; background: #0d1525; display: block; cursor: pointer;
-  user-select: none; position: relative; }
-.cm-phase-divider::before { content: "\25BC"; position: absolute; left: 6px; font-size: 8px;
-  top: 50%; transform: translateY(-50%); transition: transform .15s; }
-.cm-phase[open] > .cm-phase-divider::before { transform: translateY(-50%) rotate(0deg); }
+.cm-phase { margin: 6px 0; }
+.cm-phase-divider { list-style: none; display: block; cursor: pointer; user-select: none;
+  background: #16213e; color: #7289DA; padding: 8px 10px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  white-space: nowrap; position: relative; padding-left: 24px; }
+.cm-phase-divider::before { content: "\25BC"; position: absolute; left: 8px;
+  font-size: 8px; top: 50%; transform: translateY(-50%); opacity: 0.6;
+  transition: transform .15s; }
 .cm-phase:not([open]) > .cm-phase-divider::before { transform: translateY(-50%) rotate(-90deg); }
+.cm-phase.cm-interm > .cm-phase-divider { color: #e57373; }
 .cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 0 2px; }
 .cm-block { flex: 0 0 auto; }
 .cm-label { font-size: 11px; font-weight: 600; color: #58a6ff; margin-bottom: 5px; }
