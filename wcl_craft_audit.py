@@ -1912,14 +1912,17 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
     sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
 
+    _iw = cm.get("interm_windows", [])
     sections += _phase_section("Intermission: Crushing Singularity",
-                                _interm_table(interm_buckets[0]), is_interm=True)
+                                _interm_table(interm_buckets[0], _iw[0] if len(_iw) > 0 else None),
+                                is_interm=True)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
     sections += _phase_section("Stage Two: The Severed Rift", blocks)
 
     sections += _phase_section("Intermission: Shattering Singularity",
-                                _interm_table(interm_buckets[1]), is_interm=True)
+                                _interm_table(interm_buckets[1], _iw[1] if len(_iw) > 1 else None),
+                                is_interm=True)
 
     # ── Stage Three: The End of the End — Circles ─────────────────────────────
     p3_blocks = ""
