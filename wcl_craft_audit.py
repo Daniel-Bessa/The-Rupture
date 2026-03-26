@@ -824,7 +824,11 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
 
     umbral_removals = []  # (t_ms, add_id)
     ce_removals     = []  # (t_ms, add_id)
-    for e in (add_buff_events or []):
+    # CE stack timeline per add: {add_id: [(t_ms, stack_count), ...]} sorted by time
+    ce_stack_timeline: dict = {aid: [] for aid in _ADD_NAMES}
+    _ce_cur = {aid: 0 for aid in _ADD_NAMES}
+
+    for e in sorted((add_buff_events or []), key=lambda x: x["timestamp"]):
         aid  = e.get("abilityGameID")
         tid  = e.get("targetID")
         etype = e.get("type")
@@ -833,8 +837,25 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
         t = e["timestamp"] - fight_start_ms
         if aid == 1233470 and etype == "removebuff":
             umbral_removals.append((t, tid))
-        elif aid == 1233778 and etype == "removebuff":
-            ce_removals.append((t, tid))
+        elif aid == 1233778:
+            if etype == "removebuff":
+                ce_removals.append((t, tid))
+                _ce_cur[tid] = 0
+            elif etype == "applybuff":
+                _ce_cur[tid] = 1
+            elif etype in ("applybuffstack", "removebuffstack"):
+                _ce_cur[tid] = e.get("stack", _ce_cur[tid])
+            ce_stack_timeline[tid].append((t, _ce_cur[tid]))
+
+    def ce_stacks_at(add_id: int, t_ms: int) -> int:
+        """Return CE stack count on add_id at time t_ms (last known value ≤ t_ms)."""
+        count = 0
+        for t, c in ce_stack_timeline.get(add_id, []):
+            if t <= t_ms:
+                count = c
+            else:
+                break
+        return count
 
     # CE removal is "normal" if an Umbral Tether removal on the same add happened within 3s
     def ce_is_normal(t_ce, add_id):
