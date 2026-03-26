@@ -1648,18 +1648,33 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
         rows = "".join(_player_row(a) for a in main_list)
 
         shield_row = ""
+        stacks_row = ""
         if show_shields:
-            cells = ""
+            shield_cells = ""
+            stacks_cells = ""
             for add_name in ["Demiar", "Morium", "Vorelus"]:
                 exp = im.get("expected_shields", [])
                 rem = im.get("shields_removed", [])
                 if add_name not in exp:
-                    cells += f'<td class="cm-add-na">—</td>'
+                    shield_cells += f'<td class="cm-add-na">—</td>'
                 elif add_name in rem:
-                    cells += f'<td class="cm-add-ok">✓</td>'
+                    shield_cells += f'<td class="cm-add-ok">✓</td>'
                 else:
-                    cells += f'<td class="cm-add-miss">✗</td>'
-            shield_row = f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{cells}</tr>'
+                    shield_cells += f'<td class="cm-add-miss">✗</td>'
+
+                bef = im.get("ce_before", {}).get(add_name, 0)
+                aft = im.get("ce_after",  {}).get(add_name, 0)
+                if bef == 0 and aft == 0:
+                    stacks_cells += f'<td class="cm-add-na">—</td>'
+                elif aft > bef:
+                    stacks_cells += f'<td class="cm-stacks-bad">{bef}→{aft}</td>'
+                elif aft < bef:
+                    stacks_cells += f'<td class="cm-stacks-ok">{bef}→{aft}</td>'
+                else:
+                    stacks_cells += f'<td class="cm-stacks-same">{bef}</td>'
+
+            shield_row = f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{shield_cells}</tr>'
+            stacks_row = f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">CE stacks</td>{stacks_cells}</tr>'
 
         thead = '<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>' if show_shields else '<tr><th>Player</th><th>Role</th></tr>'
 
@@ -1677,7 +1692,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
         return (f'<div class="cm-block">'
                 f'<div class="cm-label cm-t">@ {t_lbl}</div>'
                 f'<table class="cm-table"><thead>{thead}</thead>'
-                f'<tbody>{rows}{shield_row}</tbody></table>'
+                f'<tbody>{rows}{shield_row}{stacks_row}</tbody></table>'
                 f'{extra_html}{wasted_html}</div>')
 
     # ── Split silverstrike rounds into 4 phase buckets (chronological order) ──
