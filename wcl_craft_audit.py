@@ -1755,18 +1755,69 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 f'<div class="cm-blocks">{blocks_html}</div>'
                 f'</details>')
 
+    # ── Helper: intermission player×round table ───────────────────────────────
+    def _interm_table(rounds: list) -> str:
+        """Unified table: rows=players, cols=rounds, cells=SE/arrows."""
+        if not rounds:
+            return ""
+        # Collect all players who appear in any round, in first-appearance order
+        seen_order: list = []
+        seen_set:   set  = set()
+        for im in rounds:
+            for a in im["arrows"]:
+                key = (a["pid"], a["name"])
+                if key not in seen_set:
+                    seen_set.add(key)
+                    seen_order.append(a)
+
+        # Column headers: round timers
+        th_cols = "".join(
+            f'<th class="cm-im-rnd">@ {im["arrows"][0]["t_s"]//60}:{im["arrows"][0]["t_s"]%60:02d}</th>'
+            if im["arrows"] else '<th class="cm-im-rnd">—</th>'
+            for im in rounds
+        )
+        thead = f'<tr><th class="cm-name">Player</th><th class="cm-role">Role</th>{th_cols}</tr>'
+
+        rows = ""
+        for a_ref in seen_order:
+            pid  = a_ref["pid"]
+            name = norm(a_ref["name"])
+            role = a_ref["role"]
+            cells = ""
+            for im in rounds:
+                # collect all hits on this player in this round
+                hits_this = [a for a in im["arrows"] if a["pid"] == pid]
+                if not hits_this:
+                    cells += '<td class="cm-im-empty">—</td>'
+                else:
+                    parts = []
+                    for h in hits_this:
+                        se  = h.get("se_stacks", 0)
+                        tot = h.get("arrow_total", "?")
+                        # colour: SE=0 = bad (no stacks consumed), SE≥1 = good
+                        cls = "cm-im-bad" if se == 0 else "cm-im-ok"
+                        parts.append(f'<span class="{cls}">{se}</span>/<span class="cm-im-seq">{tot}</span>')
+                    cells += f'<td class="cm-im-cell">{" ".join(parts)}</td>'
+            _ref_name = a_ref["name"]
+            rows += (f'<tr>'
+                     f'<td class="cm-name" style="color:{pcolor(_ref_name)}">{_esc(name)}</td>'
+                     f'<td class="cm-role">{_esc(role)}</td>'
+                     f'{cells}</tr>')
+
+        return f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
+
     # ── Fixed 5-phase layout — all dividers always rendered ───────────────────
     blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
     sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
 
-    blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[0])
-    sections += _phase_section("Intermission: Crushing Singularity", blocks, is_interm=True)
+    sections += _phase_section("Intermission: Crushing Singularity",
+                                _interm_table(interm_buckets[0]), is_interm=True)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
     sections += _phase_section("Stage Two: The Severed Rift", blocks)
 
-    blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[1])
-    sections += _phase_section("Intermission: Shattering Singularity", blocks, is_interm=True)
+    sections += _phase_section("Intermission: Shattering Singularity",
+                                _interm_table(interm_buckets[1]), is_interm=True)
 
     # ── Stage Three: The End of the End — Circles ─────────────────────────────
     p3_blocks = ""
