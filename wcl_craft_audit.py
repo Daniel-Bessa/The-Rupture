@@ -713,7 +713,7 @@ _CROWN_VOID_STACK_ID         = 1233602             # Void Stacks debuff
 
 
 def fetch_crown_debuff_events(token: str, report_code: str, fight_id: int) -> list:
-    """Fetch Silverstrike + P3 circle debuff events for a Crown of the Cosmos fight."""
+    """Fetch Silverstrike + P3 circle + Stellar Emission debuff events for a Crown fight."""
     query = """
     query ($code: String!, $fightID: Int!) {
         reportData { report(code: $code) {
@@ -721,8 +721,8 @@ def fetch_crown_debuff_events(token: str, report_code: str, fight_id: int) -> li
                 dataType: Debuffs,
                 fightIDs: [$fightID],
                 hostilityType: Friendlies,
-                filterExpression: "ability.id in (1233887, 1233602)",
-                limit: 500
+                filterExpression: "ability.id in (1233887, 1233602, 1237038)",
+                limit: 1000
             ) { data }
         }}
     }
