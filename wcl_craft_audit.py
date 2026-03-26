@@ -881,18 +881,24 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
                              "seq": len([h for h in ordered if h["pid"] == pid]) + 1,
                              "is_extra": is_extra})
 
+        last_t = hits[-1][0]
+
         # Time window: ±5s around the round's first hit
-        im_start = hits[0][0] - 5_000
-        im_end   = hits[0][0] + 5_000
+        im_start = first_t - 5_000
+        im_end   = first_t + 5_000
 
         # Umbral Tether removals that fall in this window
         shields_removed = [_ADD_NAMES[a] for t, a in umbral_removals if im_start <= t <= im_end]
-        expected        = {_ADD_NAMES[a] for a in _IM_EXPECTED.get(im_idx + 1, set())}  # empty = no shields expected
+        expected        = {_ADD_NAMES[a] for a in _IM_EXPECTED.get(im_idx + 1, set())}
         correct         = set(shields_removed) == expected
 
         # CE removals in this window that are NOT paired with an Umbral Tether removal
         wasted_ce = [_ADD_NAMES[a] for t, a in ce_removals
                      if im_start <= t <= im_end and not ce_is_normal(t, a)]
+
+        # CE stacks on each add just before and just after the arrow round
+        ce_before = {_ADD_NAMES[a]: ce_stacks_at(a, first_t - 50)  for a in _ADD_NAMES}
+        ce_after  = {_ADD_NAMES[a]: ce_stacks_at(a, last_t  + 500) for a in _ADD_NAMES}
 
         assigned_list = [{"pid": p, "name": pid_name(p), "role": pid_role(p)}
                          for p in assigned_pids]
@@ -900,12 +906,14 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
             "intermission":    im_idx + 1,
             "spell_id":        spell_id,
             "arrows":          ordered,
-            "assigned":        assigned_list,   # debuff-marked targets (the mechanic)
+            "assigned":        assigned_list,
             "multi_hit":       {pid: cnt for pid, cnt in seen.items() if cnt > 1},
             "shields_removed": shields_removed,
             "expected_shields": sorted(expected),
             "correct":         correct,
             "wasted_ce":       wasted_ce,
+            "ce_before":       ce_before,   # {add_name: stack_count} before arrow
+            "ce_after":        ce_after,    # {add_name: stack_count} after arrow
         })
 
     # ── Void stacks (debuff applies without being arrow target) ──
