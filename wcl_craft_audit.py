@@ -1807,11 +1807,15 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                     parts = []
                     for h in hits_this:
                         se  = h.get("se_stacks", 0)
-                        cls = "cm-im-bad" if se == 0 else "cm-im-ok"
-                        parts.append(f'<span class="{cls}">{se}</span>')
-                    cells += f'<td class="cm-im-cell">{" + ".join(parts)}</td>'
+                        tot = h.get("arrow_total", "?")
+                        se_cls = "cm-im-bad" if se == 0 else "cm-im-ok"
+                        # SE stacks / cumulative arrow count
+                        parts.append(f'<span class="{se_cls}">{se}</span>'
+                                     f'<span class="cm-im-sep">/</span>'
+                                     f'<span class="cm-im-seq">{tot}</span>')
+                    cells += f'<td class="cm-im-cell">{"  ".join(parts)}</td>'
 
-            # Stacks summary column
+            # Stacks summary: how many Silverstrike Barrage hits total
             if stacked:
                 stacks_cell = f'<td class="cm-im-stacked">×{n_rounds}</td>'
             else:
