@@ -853,7 +853,7 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
     for e in debuff_events:
         if e.get("abilityGameID") == _CROWN_VOID_STACK_ID and e.get("type") in ("applydebuff", "applydebuffstack"):
             void_stack_pids.add(e.get("targetID"))
-    arrow_pids = {pid for hits in intermissions for _, pid in hits}
+    arrow_pids = {pid for hits in intermissions for _, pid, *_ in hits}
     # Players with void stacks but no arrow = leeching/unintended stacks
     no_arrow_stacks = [{"pid": p, "name": pid_name(p)} for p in void_stack_pids - arrow_pids if p in actor_lookup]
 
@@ -1590,54 +1590,75 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 f'<tbody>{rows}{shield_row}</tbody></table>'
                 f'{wasted_html}</div>')
 
-    # ── Split rounds into P1 (spell 1233649) vs Intermission (spell 1237729) ──
-    _SPELL_P1 = 1233649
-    p1_rounds   = [im for im in cm.get("silverstrike", []) if im.get("spell_id") == _SPELL_P1]
-    im_rounds   = [im for im in cm.get("silverstrike", []) if im.get("spell_id") != _SPELL_P1]
-    p3_circles  = cm.get("p3_circles", [])
+    # ── Split silverstrike rounds into 4 phase buckets (chronological order) ──
+    _SPELL_STAGE = 1233649  # Stage One / Stage Two: Silverstrike
+    stage_buckets:  list = [[], []]   # index 0 = Stage One, 1 = Stage Two
+    interm_buckets: list = [[], []]   # index 0 = Intermission 1, 1 = Intermission 2
+    prev_spell = None
+    stage_idx  = -1
+    interm_idx = -1
+    for im in cm.get("silverstrike", []):
+        s = im.get("spell_id")
+        if s != prev_spell:
+            prev_spell = s
+            if s == _SPELL_STAGE:
+                stage_idx = min(stage_idx + 1, 1)
+            else:
+                interm_idx = min(interm_idx + 1, 1)
+        if s == _SPELL_STAGE and 0 <= stage_idx <= 1:
+            stage_buckets[stage_idx].append(im)
+        elif s != _SPELL_STAGE and 0 <= interm_idx <= 1:
+            interm_buckets[interm_idx].append(im)
 
-    sections = ""
+    p3_circles = cm.get("p3_circles", [])
+    sections   = ""
 
-    # ── P1 ────────────────────────────────────────────────────────────────────
-    if p1_rounds:
-        p1_blocks = "".join(_arrow_block(im, show_shields=True) for im in p1_rounds)
-        sections += (f'<div class="cm-phase-divider">P1 — Silverstrike</div>'
-                     f'<div class="cm-blocks">{p1_blocks}</div>')
+    # ── Fixed 5-phase layout — dividers always rendered ───────────────────────
+    # Phase 1: Stage One
+    blocks = "".join(_arrow_block(im, show_shields=True) for im in stage_buckets[0])
+    sections += (f'<div class="cm-phase-divider">Stage One: The Void\u2019s Spire</div>'
+                 f'<div class="cm-blocks">{blocks}</div>')
 
-    # ── Intermission ──────────────────────────────────────────────────────────
-    if im_rounds:
-        im_blocks = "".join(_arrow_block(im, show_shields=False) for im in im_rounds)
-        sections += (f'<div class="cm-phase-divider">Intermission</div>'
-                     f'<div class="cm-blocks">{im_blocks}</div>')
+    # Phase 2: Intermission 1
+    blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[0])
+    sections += (f'<div class="cm-phase-divider">Intermission: Crushing Singularity</div>'
+                 f'<div class="cm-blocks">{blocks}</div>')
 
-    # ── P3 ────────────────────────────────────────────────────────────────────
-    if p3_circles:
-        p3_blocks = ""
-        for ci, circle_set in enumerate(p3_circles):
-            rows = ""
-            for i, p in enumerate(circle_set["players"]):
-                bad = (i == 0 and p["role"] in ("Tank", "Melee")) or \
-                      (i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",) and len(circle_set["players"]) == 3)
-                row_cls = ' class="cm-circle-bad"' if bad else ""
-                hold_s  = f'{p.get("hold_ms", 0)//1000}s' if p.get("hold_ms") else "?"
-                rows += (f'<tr{row_cls}>'
-                         f'<td class="cm-t">#{i+1}</td>'
-                         f'<td class="cm-name" style="color:{pcolor(p["name"])}">{_esc(norm(p["name"]))}</td>'
-                         f'<td class="cm-role">{_esc(p["role"])}</td>'
-                         f'<td class="cm-t">{hold_s}</td>'
-                         f'</tr>')
-            flag_html = "".join(f'<div class="cm-multiwarn">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
-            p3_blocks += (f'<div class="cm-block">'
-                          f'<div class="cm-label cm-t">Set {ci+1}</div>'
-                          f'<table class="cm-table"><thead>'
-                          f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
-                          f'</thead><tbody>{rows}</tbody></table>'
-                          f'{flag_html}</div>')
-        sections += (f'<div class="cm-phase-divider">P3 — Circles</div>'
-                     f'<div class="cm-blocks">{p3_blocks}</div>')
+    # Phase 3: Stage Two
+    blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
+    sections += (f'<div class="cm-phase-divider">Stage Two: The Severed Rift</div>'
+                 f'<div class="cm-blocks">{blocks}</div>')
 
-    if not sections:
-        return ""
+    # Phase 4: Intermission 2
+    blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[1])
+    sections += (f'<div class="cm-phase-divider">Intermission: Shattering Singularity</div>'
+                 f'<div class="cm-blocks">{blocks}</div>')
+
+    # ── Stage Three: The End of the End — Circles (always shown) ─────────────
+    p3_blocks = ""
+    for ci, circle_set in enumerate(p3_circles):
+        rows = ""
+        for i, p in enumerate(circle_set["players"]):
+            bad = (i == 0 and p["role"] in ("Tank", "Melee")) or \
+                  (i == len(circle_set["players"]) - 1 and p["role"] not in ("Tank",) and len(circle_set["players"]) == 3)
+            row_cls = ' class="cm-circle-bad"' if bad else ""
+            hold_s  = f'{p.get("hold_ms", 0)//1000}s' if p.get("hold_ms") else "?"
+            rows += (f'<tr{row_cls}>'
+                     f'<td class="cm-t">#{i+1}</td>'
+                     f'<td class="cm-name" style="color:{pcolor(p["name"])}">{_esc(norm(p["name"]))}</td>'
+                     f'<td class="cm-role">{_esc(p["role"])}</td>'
+                     f'<td class="cm-t">{hold_s}</td>'
+                     f'</tr>')
+        flag_html = "".join(f'<div class="cm-multiwarn">⚠ {_esc(fl)}</div>' for fl in circle_set["flags"])
+        p3_blocks += (f'<div class="cm-block">'
+                      f'<div class="cm-label cm-t">Set {ci+1}</div>'
+                      f'<table class="cm-table"><thead>'
+                      f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
+                      f'</thead><tbody>{rows}</tbody></table>'
+                      f'{flag_html}</div>')
+    sections += (f'<div class="cm-phase-divider">Stage Three: The End of the End</div>'
+                 f'<div class="cm-blocks">{p3_blocks}</div>')
+
     return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div>{sections}</div>'
 
 
