@@ -873,10 +873,13 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
         wasted_ce = [_ADD_NAMES[a] for t, a in ce_removals
                      if im_start <= t <= im_end and not ce_is_normal(t, a)]
 
+        assigned_list = [{"pid": p, "name": pid_name(p), "role": pid_role(p)}
+                         for p in assigned_pids]
         silverstrike.append({
             "intermission":    im_idx + 1,
             "spell_id":        spell_id,
             "arrows":          ordered,
+            "assigned":        assigned_list,   # debuff-marked targets (the mechanic)
             "multi_hit":       {pid: cnt for pid, cnt in seen.items() if cnt > 1},
             "shields_removed": shields_removed,
             "expected_shields": sorted(expected),
