@@ -945,6 +945,52 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
             "ce_after":        ce_after,    # {add_name: stack_count} after arrow
         })
 
+    # ── Intermission SE windows (dynamic per-fight timing) ──────────────────────
+    # Group consecutive intermission (1237729) rounds into sessions (>60s gap = new intermission)
+    _IM_SPELL = 1237729
+    all_im_rounds = [r for r in intermissions if r[0][2] == _IM_SPELL]
+    im_sessions: list = []
+    if all_im_rounds:
+        cur_session = [all_im_rounds[0]]
+        for r in all_im_rounds[1:]:
+            if r[0][0] - cur_session[-1][-1][0] > 60_000:
+                im_sessions.append(cur_session)
+                cur_session = [r]
+            else:
+                cur_session.append(r)
+        im_sessions.append(cur_session)
+
+    interm_windows: list = []
+    for session in im_sessions:
+        first_t = session[0][0][0]
+        last_t  = session[-1][-1][0]
+        # Window start: earliest SE applydebuff within 120s before first arrow
+        window_start = first_t
+        for t, tid, etype, stack in _se_sorted:
+            if etype == "applydebuff" and 0 <= first_t - t <= 120_000:
+                window_start = min(window_start, t)
+        window_end = last_t + 2_000
+        # Peak SE stacks per player during the window
+        peak_se: dict = {}
+        cur_se:  dict = {}
+        for t, tid, etype, stack in _se_sorted:
+            if t < window_start or t > window_end:
+                continue
+            if etype == "applydebuff":
+                cur_se[tid] = 1
+            elif etype == "applydebuffstack":
+                cur_se[tid] = stack if stack is not None else cur_se.get(tid, 0) + 1
+            elif etype == "removedebuff":
+                cur_se[tid] = 0
+            v = cur_se.get(tid, 0)
+            if v > peak_se.get(tid, 0):
+                peak_se[tid] = v
+        interm_windows.append({
+            "window_start": window_start,
+            "window_end":   window_end,
+            "peak_se":      peak_se,
+        })
+
     # ── Void stacks (debuff applies without being arrow target) ──
     void_stack_pids = set()
     for e in debuff_events:
