@@ -796,6 +796,31 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
                 return apids
         return frozenset()
 
+    # ── Stellar Emission (1237038) stack timeline per player ──
+    # Debuff is consumed (removedebuff fires) right as the arrow hits — ignore removes
+    # that happen within 500ms of a hit (caused BY the hit), use last apply stack count.
+    _SE_ID = 1237038
+    _se_sorted = sorted(
+        [(e["timestamp"] - fight_start_ms, e["targetID"], e["type"], e.get("stack", None))
+         for e in debuff_events if e.get("abilityGameID") == _SE_ID],
+        key=lambda x: x[0]
+    )
+
+    def se_stacks_before_hit(pid: int, t_hit_ms: int) -> int:
+        """Stellar Emission stacks on pid just before arrow hit at t_hit_ms.
+        Removes within 500ms of t_hit_ms are treated as caused by the hit and ignored."""
+        val = 0
+        for t, tid, etype, stack in _se_sorted:
+            if tid != pid or t > t_hit_ms:
+                continue
+            if etype == "applydebuff":
+                val = 1
+            elif etype == "applydebuffstack":
+                val = stack if stack is not None else val + 1
+            elif etype == "removedebuff" and t < t_hit_ms - 500:
+                val = 0   # genuine prior remove (not caused by this hit)
+        return val
+
     # ── Silverstrike hits (damage events for hit IDs) ──
     strike_hits = sorted(
         [(e["timestamp"] - fight_start_ms, e["targetID"], e.get("abilityGameID"))
