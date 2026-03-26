@@ -1596,21 +1596,27 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
         t_s   = im["arrows"][0]["t_s"] if im["arrows"] else 0
         t_lbl = f'{t_s // 60}:{t_s % 60:02d}'
 
-        assigned = [a for a in im["arrows"] if not a.get("is_extra", False)]
-        extras   = [a for a in im["arrows"] if     a.get("is_extra", False)]
+        # Use debuff-assigned players as the primary list; fall back to non-extra hits
+        assigned_raw = im.get("assigned", [])
+        if assigned_raw:
+            main_list   = assigned_raw
+            also_hit    = [a for a in im["arrows"] if a["pid"] not in {x["pid"] for x in assigned_raw}]
+        else:
+            main_list   = [a for a in im["arrows"] if not a.get("is_extra", False)]
+            also_hit    = [a for a in im["arrows"] if     a.get("is_extra", False)]
 
         def _player_row(a, extra=False):
             player_name = norm(a["name"])
             is_multi    = im["multi_hit"].get(a["pid"], 0) > 1
             row_cls     = ' class="cm-arrow-extra"' if extra else (' class="cm-arrow-multi"' if is_multi else "")
-            seq_span    = f' <span class="cm-seq">×{a["seq"]}</span>' if a["seq"] > 1 else ""
+            seq_span    = f' <span class="cm-seq">×{a["seq"]}</span>' if a.get("seq", 1) > 1 else ""
             return (f'<tr{row_cls}>'
                     f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}</td>'
                     f'<td class="cm-role">{_esc(a["role"])}</td>'
                     f'</tr>')
 
-        # Main rows: assigned targets only
-        rows = "".join(_player_row(a) for a in assigned)
+        # Main rows: debuff-assigned targets
+        rows = "".join(_player_row(a) for a in main_list)
 
         shield_row = ""
         if show_shields:
