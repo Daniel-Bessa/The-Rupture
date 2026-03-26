@@ -1664,10 +1664,16 @@ _CROWN_MECHANICS_CSS = """
 .cm-section { margin-top: 14px; }
 .cm-section-title { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase;
   letter-spacing: .06em; margin-bottom: 8px; }
-.cm-phase-divider { font-size: 11px; font-weight: 700; color: #58a6ff; text-transform: uppercase;
-  letter-spacing: .08em; margin: 10px 0 6px; padding: 3px 8px;
-  border-left: 3px solid #58a6ff; background: #0d1525; display: inline-block; }
-.cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; }
+.cm-phase { margin: 8px 0; }
+.cm-phase-divider { list-style: none; font-size: 11px; font-weight: 700; color: #58a6ff;
+  text-transform: uppercase; letter-spacing: .08em; padding: 3px 8px 3px 22px;
+  border-left: 3px solid #58a6ff; background: #0d1525; display: block; cursor: pointer;
+  user-select: none; position: relative; }
+.cm-phase-divider::before { content: "\25BC"; position: absolute; left: 6px; font-size: 8px;
+  top: 50%; transform: translateY(-50%); transition: transform .15s; }
+.cm-phase[open] > .cm-phase-divider::before { transform: translateY(-50%) rotate(0deg); }
+.cm-phase:not([open]) > .cm-phase-divider::before { transform: translateY(-50%) rotate(-90deg); }
+.cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 0 2px; }
 .cm-block { flex: 0 0 auto; }
 .cm-label { font-size: 11px; font-weight: 600; color: #58a6ff; margin-bottom: 5px; }
 .cm-table { border-collapse: collapse; font-size: 12px; }
