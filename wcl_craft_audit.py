@@ -1626,13 +1626,13 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[0])
-    sections += _phase_section("Intermission: Crushing Singularity", blocks)
+    sections += _phase_section("Intermission: Crushing Singularity", blocks, is_interm=True)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
     sections += _phase_section("Stage Two: The Severed Rift", blocks)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[1])
-    sections += _phase_section("Intermission: Shattering Singularity", blocks)
+    sections += _phase_section("Intermission: Shattering Singularity", blocks, is_interm=True)
 
     # ── Stage Three: The End of the End — Circles ─────────────────────────────
     p3_blocks = ""
@@ -1656,7 +1656,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                       f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
                       f'</thead><tbody>{rows}</tbody></table>'
                       f'{flag_html}</div>')
-    sections += _phase_section("Stage Three: The End of the End", p3_blocks)
+    sections += _phase_section("Stage Three: The End of the End", p3_blocks, is_interm=False)
 
     return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div>{sections}</div>'
 
