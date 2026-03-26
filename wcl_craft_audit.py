@@ -1757,10 +1757,14 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
 
     # ── Helper: intermission player×round table ───────────────────────────────
     def _interm_table(rounds: list) -> str:
-        """Unified table: rows=players, cols=rounds, cells=SE/arrows."""
+        """Unified table: rows=players, cols=rounds.
+        Cell = SE stacks player had when hit (green ≥1, red 0).
+        Players hit in multiple rounds are flagged (stacked Silverstrike Barrage).
+        """
         if not rounds:
             return ""
-        # Collect all players who appear in any round, in first-appearance order
+
+        # Collect all players in first-appearance order
         seen_order: list = []
         seen_set:   set  = set()
         for im in rounds:
@@ -1770,22 +1774,32 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                     seen_set.add(key)
                     seen_order.append(a)
 
-        # Column headers: round timers
+        # Count how many rounds each player was hit in
+        rounds_hit: dict = {}   # pid -> count of rounds where they appear
+        for im in rounds:
+            pids_this_round = {a["pid"] for a in im["arrows"]}
+            for pid in pids_this_round:
+                rounds_hit[pid] = rounds_hit.get(pid, 0) + 1
+
+        # Column headers: round timers + "×" stacked column
         th_cols = "".join(
-            f'<th class="cm-im-rnd">@ {im["arrows"][0]["t_s"]//60}:{im["arrows"][0]["t_s"]%60:02d}</th>'
-            if im["arrows"] else '<th class="cm-im-rnd">—</th>'
+            (f'<th class="cm-im-rnd">@ {im["arrows"][0]["t_s"]//60}:{im["arrows"][0]["t_s"]%60:02d}</th>'
+             if im["arrows"] else '<th class="cm-im-rnd">—</th>')
             for im in rounds
         )
-        thead = f'<tr><th class="cm-name">Player</th><th class="cm-role">Role</th>{th_cols}</tr>'
+        thead = (f'<tr><th class="cm-name">Player</th><th class="cm-role">Role</th>'
+                 f'{th_cols}<th class="cm-im-rnd">Stacks</th></tr>')
 
         rows = ""
         for a_ref in seen_order:
-            pid  = a_ref["pid"]
-            name = norm(a_ref["name"])
-            role = a_ref["role"]
+            pid      = a_ref["pid"]
+            name     = norm(a_ref["name"])
+            role     = a_ref["role"]
+            n_rounds = rounds_hit.get(pid, 0)
+            stacked  = n_rounds > 1   # hit in more than one round = stacked barrage
+
             cells = ""
             for im in rounds:
-                # collect all hits on this player in this round
                 hits_this = [a for a in im["arrows"] if a["pid"] == pid]
                 if not hits_this:
                     cells += '<td class="cm-im-empty">—</td>'
@@ -1793,16 +1807,22 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                     parts = []
                     for h in hits_this:
                         se  = h.get("se_stacks", 0)
-                        tot = h.get("arrow_total", "?")
-                        # colour: SE=0 = bad (no stacks consumed), SE≥1 = good
                         cls = "cm-im-bad" if se == 0 else "cm-im-ok"
-                        parts.append(f'<span class="{cls}">{se}</span>/<span class="cm-im-seq">{tot}</span>')
-                    cells += f'<td class="cm-im-cell">{" ".join(parts)}</td>'
+                        parts.append(f'<span class="{cls}">{se}</span>')
+                    cells += f'<td class="cm-im-cell">{" + ".join(parts)}</td>'
+
+            # Stacks summary column
+            if stacked:
+                stacks_cell = f'<td class="cm-im-stacked">×{n_rounds}</td>'
+            else:
+                stacks_cell = '<td class="cm-im-empty">—</td>'
+
+            row_cls = ' class="cm-im-row-stacked"' if stacked else ""
             _ref_name = a_ref["name"]
-            rows += (f'<tr>'
+            rows += (f'<tr{row_cls}>'
                      f'<td class="cm-name" style="color:{pcolor(_ref_name)}">{_esc(name)}</td>'
                      f'<td class="cm-role">{_esc(role)}</td>'
-                     f'{cells}</tr>')
+                     f'{cells}{stacks_cell}</tr>')
 
         return f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
 
