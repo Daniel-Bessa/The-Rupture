@@ -1613,28 +1613,27 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     p3_circles = cm.get("p3_circles", [])
     sections   = ""
 
-    # ── Fixed 5-phase layout — dividers always rendered ───────────────────────
-    # Phase 1: Stage One
-    blocks = "".join(_arrow_block(im, show_shields=True) for im in stage_buckets[0])
-    sections += (f'<div class="cm-phase-divider">Stage One: The Void\u2019s Spire</div>'
-                 f'<div class="cm-blocks">{blocks}</div>')
+    def _phase_section(label, blocks_html):
+        """Wrap a phase label + content in a collapsible <details> panel."""
+        return (f'<details class="cm-phase" open>'
+                f'<summary class="cm-phase-divider">{_esc(label)}</summary>'
+                f'<div class="cm-blocks">{blocks_html}</div>'
+                f'</details>')
 
-    # Phase 2: Intermission 1
+    # ── Fixed 5-phase layout — all dividers always rendered ───────────────────
+    blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
+    sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
+
     blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[0])
-    sections += (f'<div class="cm-phase-divider">Intermission: Crushing Singularity</div>'
-                 f'<div class="cm-blocks">{blocks}</div>')
+    sections += _phase_section("Intermission: Crushing Singularity", blocks)
 
-    # Phase 3: Stage Two
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
-    sections += (f'<div class="cm-phase-divider">Stage Two: The Severed Rift</div>'
-                 f'<div class="cm-blocks">{blocks}</div>')
+    sections += _phase_section("Stage Two: The Severed Rift", blocks)
 
-    # Phase 4: Intermission 2
     blocks = "".join(_arrow_block(im, show_shields=False) for im in interm_buckets[1])
-    sections += (f'<div class="cm-phase-divider">Intermission: Shattering Singularity</div>'
-                 f'<div class="cm-blocks">{blocks}</div>')
+    sections += _phase_section("Intermission: Shattering Singularity", blocks)
 
-    # ── Stage Three: The End of the End — Circles (always shown) ─────────────
+    # ── Stage Three: The End of the End — Circles ─────────────────────────────
     p3_blocks = ""
     for ci, circle_set in enumerate(p3_circles):
         rows = ""
@@ -1656,8 +1655,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                       f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
                       f'</thead><tbody>{rows}</tbody></table>'
                       f'{flag_html}</div>')
-    sections += (f'<div class="cm-phase-divider">Stage Three: The End of the End</div>'
-                 f'<div class="cm-blocks">{p3_blocks}</div>')
+    sections += _phase_section("Stage Three: The End of the End", p3_blocks)
 
     return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div>{sections}</div>'
 
