@@ -1049,9 +1049,10 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
         p3_circles.append({"players": s, "flags": flags})
 
     return {
-        "silverstrike":   silverstrike,
+        "silverstrike":    silverstrike,
         "no_arrow_stacks": no_arrow_stacks,
-        "p3_circles":     p3_circles,
+        "p3_circles":      p3_circles,
+        "interm_windows":  interm_windows,
     }
 
 # ── Chimaerus raid group config (hardcoded per report) ───────────────────────
