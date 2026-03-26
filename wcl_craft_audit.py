@@ -750,9 +750,29 @@ def fetch_crown_add_buff_events(token: str, report_code: str, fight_id: int) -> 
     return resp["reportData"]["report"]["events"].get("data", [])
 
 
+def fetch_crown_cast_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch Silversunder Catastrophe (1234546) begincast events — marks intermission start."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Casts,
+                fightIDs: [$fightID],
+                hostilityType: Enemies,
+                filterExpression: "ability.id = 1234546 and type = 'begincast'",
+                limit: 50
+            ) { data }
+        }}
+    }
+    """
+    resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return resp["reportData"]["report"]["events"].get("data", [])
+
+
 def analyze_crown_mechanics(debuff_events: list, damage_events: list,
                              actor_lookup: dict, spec_roles: dict,
-                             fight_start_ms: int, add_buff_events: list = None) -> dict:
+                             fight_start_ms: int, add_buff_events: list = None,
+                             cast_events: list = None) -> dict:
     """Analyze Crown of the Cosmos mechanics from raw events.
 
     Returns:
@@ -960,10 +980,22 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
                 cur_session.append(r)
         im_sessions.append(cur_session)
 
+    # Silversunder Catastrophe (1234546) begincast times — marks true intermission start
+    _silversunder_casts = sorted(
+        [(e["timestamp"] - fight_start_ms)
+         for e in (cast_events or [])
+         if e.get("abilityGameID") == 1234546],
+    )
+
     interm_windows: list = []
     for session in im_sessions:
         first_t = session[0][0][0]
         last_t  = session[-1][-1][0]
+        # Intermission start: nearest Silversunder Catastrophe cast before first arrow (within 120s)
+        interm_start_t = next(
+            (t for t in reversed(_silversunder_casts) if 0 <= first_t - t <= 120_000),
+            None
+        )
         # Window start: earliest SE applydebuff within 120s before first arrow
         window_start = first_t
         for t, tid, etype, stack in _se_sorted:
@@ -986,9 +1018,11 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
             if v > peak_se.get(tid, 0):
                 peak_se[tid] = v
         interm_windows.append({
-            "window_start": window_start,
-            "window_end":   window_end,
-            "peak_se":      peak_se,
+            "window_start":   window_start,
+            "window_end":     window_end,
+            "interm_start_t": interm_start_t,  # ms, or None if cast not found
+            "interm_end_t":   last_t,
+            "peak_se":        peak_se,
         })
 
     # ── Void stacks (debuff applies without being arrow target) ──
@@ -1900,11 +1934,8 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
         return f'<div style="display:flex;gap:20px;align-items:flex-start">{hits_table}{count_table}</div>'
 
     # ── Fixed 5-phase layout — all dividers always rendered ───────────────────
-    blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
-    sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
-
-    def _interm_timer(bucket: list) -> str:
-        """Return ' — MM:SS - MM:SS' timing label for an intermission bucket, or ''."""
+    def _phase_timer(bucket: list) -> str:
+        """Return ' — MM:SS – MM:SS' from first to last arrow in a bucket, or ''."""
         all_arrows = [a for im in bucket for a in im.get("arrows", [])]
         if not all_arrows:
             return ""
@@ -1912,17 +1943,29 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
         t1 = max(a["t_s"] for a in all_arrows)
         return f"  \u2014  {t0//60}:{t0%60:02d} \u2013 {t1//60}:{t1%60:02d}"
 
+    blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
+    sections += _phase_section(f"Stage One: The Void\u2019s Spire{_phase_timer(stage_buckets[0])}", blocks)
+
+    def _iw_timer(iw: dict) -> str:
+        """Format intermission timer from stored interm_start_t / interm_end_t."""
+        s = iw.get("interm_start_t")
+        e = iw.get("interm_end_t")
+        if s is None or e is None:
+            return ""
+        s //= 1000; e //= 1000
+        return f"  \u2014  {s//60}:{s%60:02d} \u2013 {e//60}:{e%60:02d}"
+
     _iw = cm.get("interm_windows", [])
     sections += _phase_section(
-        f"Intermission: Crushing Singularity (WORK IN PROGRESS){_interm_timer(interm_buckets[0])}",
+        f"Intermission: Crushing Singularity (WORK IN PROGRESS){_iw_timer(_iw[0]) if len(_iw) > 0 else ''}",
         _interm_table(interm_buckets[0], _iw[0] if len(_iw) > 0 else None),
         is_interm=True)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
-    sections += _phase_section("Stage Two: The Severed Rift (WORK IN PROGRESS)", blocks)
+    sections += _phase_section(f"Stage Two: The Severed Rift (WORK IN PROGRESS){_phase_timer(stage_buckets[1])}", blocks)
 
     sections += _phase_section(
-        f"Intermission: Shattering Singularity (WORK IN PROGRESS){_interm_timer(interm_buckets[1])}",
+        f"Intermission: Shattering Singularity (WORK IN PROGRESS){_iw_timer(_iw[1]) if len(_iw) > 1 else ''}",
         _interm_table(interm_buckets[1], _iw[1] if len(_iw) > 1 else None),
         is_interm=True)
 
@@ -5360,10 +5403,12 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     try:
                         crown_debuffs   = fetch_crown_debuff_events(token, report_code, fid)
                         crown_add_buffs = fetch_crown_add_buff_events(token, report_code, fid)
+                        crown_casts     = fetch_crown_cast_events(token, report_code, fid)
                         crown_mechanics = analyze_crown_mechanics(
                             crown_debuffs, damage_events, actor_lookup,
                             wipe_spec_roles, fight_start,
-                            add_buff_events=crown_add_buffs)
+                            add_buff_events=crown_add_buffs,
+                            cast_events=crown_casts)
                     except Exception as ce:
                         print(f"  [WARN] Crown mechanics fetch failed for fight {fid}: {ce}")
                 wipe_data.setdefault(boss_key, []).append({
