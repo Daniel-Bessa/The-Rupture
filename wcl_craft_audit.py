@@ -888,23 +888,27 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
 
     # Build intermission summaries
     silverstrike = []
+    _arrow_hit_cumulative: dict = {}   # pid -> total arrow hits across all rounds so far
     for im_idx, hits in enumerate(intermissions):
         seen = {}
         ordered = []
         first_t       = hits[0][0]
         spell_id      = hits[0][2]
-        assigned_pids = find_assigned_pids(first_t)   # set of pids from debuff marker
+        assigned_pids = find_assigned_pids(first_t)
         for t_ms, pid, _ in hits:
             seen[pid] = seen.get(pid, 0) + 1
-            # is_extra: not in the assigned debuff set (fall back to >50ms if no debuff data)
+            _arrow_hit_cumulative[pid] = _arrow_hit_cumulative.get(pid, 0) + 1
             if assigned_pids:
                 is_extra = pid not in assigned_pids
             else:
                 is_extra = (t_ms - first_t) > 50
+            se_stacks = se_stacks_before_hit(pid, t_ms)
             ordered.append({"t_s": t_ms // 1000, "pid": pid,
                              "name": pid_name(pid), "role": pid_role(pid),
                              "seq": len([h for h in ordered if h["pid"] == pid]) + 1,
-                             "is_extra": is_extra})
+                             "is_extra": is_extra,
+                             "se_stacks": se_stacks,
+                             "arrow_total": _arrow_hit_cumulative[pid]})
 
         last_t = hits[-1][0]
 
