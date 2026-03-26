@@ -1803,18 +1803,18 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 f'</details>')
 
     # ── Helper: intermission summary table ───────────────────────────────────
-    def _interm_table(rounds: list, window_data: dict = None) -> str:
-        """Simple table: rows=ALL raid players.
-        Columns: Player | Role | Peak SE stacks (during intermission window) | Arrows Hit (total count).
+    def _interm_table(rounds: list, window_data: dict = None) -> str:  # noqa: ARG001
+        """Table: rows=ALL raid players, one hits column showing SE+arrow# per hit.
+        Format per hit: {se_stacks}+{cumulative_arrow_number}, e.g. '6+1 || 2+2 || 8+3'
         """
         if not rounds:
             return ""
 
-        spec_r  = w.get("spec_roles", {})   # {pid: role}
-        peak_se = window_data.get("peak_se", {}) if window_data else {}
+        # spec_roles keys may be stored as strings in JSON cache — normalise to int
+        spec_r = {int(k): v for k, v in w.get("spec_roles", {}).items()}
 
-        # All raid pids if window data available, else just those hit
-        if window_data and spec_r:
+        # All raid pids if we have spec_roles, else just those hit
+        if spec_r:
             all_pids = list(spec_r.keys())
         else:
             seen_set: set = set()
@@ -1825,25 +1825,27 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                         seen_set.add(a["pid"])
                         all_pids.append(a["pid"])
 
-        # Total arrow hits per pid across all rounds
-        total_hits: dict = {}
+        # Collect ordered hits per pid (chronological across all rounds)
+        pid_hits: dict = {}   # pid -> [{"se": int, "total": int, "t_s": int}, ...]
         for im in rounds:
             for a in im["arrows"]:
-                total_hits[a["pid"]] = total_hits.get(a["pid"], 0) + 1
+                pid = a["pid"]
+                pid_hits.setdefault(pid, []).append({
+                    "se":    a.get("se_stacks", 0),
+                    "total": a.get("arrow_total", 0),
+                    "t_s":   a.get("t_s", 0),
+                })
 
-        # Sort: hit players first (by hit count desc), then by peak SE desc
+        # Sort: hit players first (most hits → top), then alphabetical
         sorted_pids = sorted(
             all_pids,
-            key=lambda pid: (0 if total_hits.get(pid, 0) > 0 else 1,
-                             -total_hits.get(pid, 0),
-                             -peak_se.get(pid, 0))
+            key=lambda pid: (0 if pid in pid_hits else 1, -len(pid_hits.get(pid, [])))
         )
 
         thead = ('<tr>'
                  '<th class="cm-name">Player</th>'
                  '<th class="cm-role">Role</th>'
-                 '<th class="cm-im-rnd">Peak SE</th>'
-                 '<th class="cm-im-rnd">Arrows Hit</th>'
+                 '<th class="cm-im-hits">Hits  <span style="font-weight:400;color:#555">(SE stacks + arrow #)</span></th>'
                  '</tr>')
 
         rows = ""
@@ -1851,31 +1853,31 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
             raw_name = actor_lookup.get(pid, {}).get("name", f"#{pid}")
             name     = norm(raw_name)
             role     = spec_r.get(pid, "DPS")
-            p_se     = peak_se.get(pid, 0)
-            n_hit    = total_hits.get(pid, 0)
+            hits     = pid_hits.get(pid, [])
+            n_hit    = len(hits)
             stacked  = n_hit > 1
 
-            # Peak SE: red if hit with 0, green if ≥1, grey if not hit + 0
-            if n_hit > 0 and p_se == 0:
-                se_cell = '<td class="cm-im-bad" style="text-align:center">0</td>'
-            elif p_se > 0:
-                se_cell = f'<td class="cm-im-ok" style="text-align:center">{p_se}</td>'
+            if not hits:
+                hits_cell = '<td class="cm-im-empty">—</td>'
             else:
-                se_cell = '<td class="cm-im-empty" style="text-align:center">—</td>'
-
-            # Arrows hit: red+bold if >1, green if 1, grey dash if 0
-            if stacked:
-                hit_cell = f'<td class="cm-im-stacked">×{n_hit}</td>'
-            elif n_hit == 1:
-                hit_cell = '<td style="text-align:center;color:#3fb950;font-weight:700">1</td>'
-            else:
-                hit_cell = '<td class="cm-im-empty" style="text-align:center">—</td>'
+                parts = []
+                for h in hits:
+                    se  = h["se"]
+                    tot = h["total"]
+                    se_cls = "cm-im-bad" if se == 0 else "cm-im-ok"
+                    parts.append(
+                        f'<span class="{se_cls}">{se}</span>'
+                        f'<span class="cm-im-sep">+</span>'
+                        f'<span class="cm-im-seq">{tot}</span>'
+                    )
+                sep = '<span class="cm-im-div"> || </span>'
+                hits_cell = f'<td class="cm-im-hits-cell">{sep.join(parts)}</td>'
 
             row_cls = ' class="cm-im-row-stacked"' if stacked else ""
             rows += (f'<tr{row_cls}>'
                      f'<td class="cm-name" style="color:{pcolor(raw_name)}">{_esc(name)}</td>'
                      f'<td class="cm-role">{_esc(role)}</td>'
-                     f'{se_cell}{hit_cell}</tr>')
+                     f'{hits_cell}</tr>')
 
         return f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
 
@@ -1964,18 +1966,20 @@ _CROWN_MECHANICS_CSS = """
 .cm-stacks-bad  { color: #f85149; font-weight: 700; font-size: 11px; }
 .cm-stacks-ok   { color: #3fb950; font-weight: 700; font-size: 11px; }
 .cm-stacks-same { color: #8b949e; font-size: 11px; }
-/* ── Intermission player×round table ── */
+/* ── Intermission summary table ── */
 .cm-im-table { border-collapse: collapse; font-size: 12px; }
 .cm-im-table th { background: #0d1117; color: #8b949e; font-size: 10px; font-weight: 600;
-  text-transform: uppercase; padding: 3px 8px; border: 1px solid #30363d; text-align: center; }
+  text-transform: uppercase; padding: 3px 8px; border: 1px solid #30363d; text-align: left; }
 .cm-im-table td { padding: 3px 8px; border: 1px solid #21262d; }
-.cm-im-rnd   { min-width: 60px; }
-.cm-im-cell  { text-align: center; white-space: nowrap; }
+.cm-im-rnd       { min-width: 60px; }
+.cm-im-hits      { min-width: 200px; }
+.cm-im-hits-cell { white-space: nowrap; }
 .cm-im-empty { text-align: center; color: #444; }
 .cm-im-ok    { color: #3fb950; font-weight: 700; }
 .cm-im-bad   { color: #f85149; font-weight: 700; }
 .cm-im-seq   { color: #8b949e; }
-.cm-im-sep   { color: #444; margin: 0 1px; }
+.cm-im-sep   { color: #58a6ff; margin: 0 1px; }
+.cm-im-div   { color: #444; margin: 0 4px; }
 .cm-im-stacked     { text-align: center; color: #f85149; font-weight: 700; }
 .cm-im-row-stacked td { background: #200a0a; }
 """
