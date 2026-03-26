@@ -1805,6 +1805,9 @@ _CROWN_MECHANICS_CSS = """
 .cm-add-ok   { color: #3fb950; font-weight: 700; }
 .cm-add-miss { color: #f85149; font-weight: 700; }
 .cm-add-na   { color: #444; }
+.cm-stacks-bad  { color: #f85149; font-weight: 700; font-size: 11px; }
+.cm-stacks-ok   { color: #3fb950; font-weight: 700; font-size: 11px; }
+.cm-stacks-same { color: #8b949e; font-size: 11px; }
 """
 
 
