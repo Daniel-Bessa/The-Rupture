@@ -1802,20 +1802,18 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 f'<div class="cm-blocks">{blocks_html}</div>'
                 f'</details>')
 
-    # ── Helper: intermission player×round table ───────────────────────────────
+    # ── Helper: intermission summary table ───────────────────────────────────
     def _interm_table(rounds: list, window_data: dict = None) -> str:
-        """Unified table: rows=ALL raid players, cols=rounds.
-        Shows peak Stellar Emission stacks per player during the intermission window,
-        and per-round arrow hit data (SE stacks / cumulative arrow count).
-        Players hit in multiple rounds are highlighted in red.
+        """Simple table: rows=ALL raid players.
+        Columns: Player | Role | Peak SE stacks (during intermission window) | Arrows Hit (total count).
         """
         if not rounds:
             return ""
 
-        spec_r   = w.get("spec_roles", {})           # {pid: role}
-        peak_se  = window_data.get("peak_se", {}) if window_data else {}
+        spec_r  = w.get("spec_roles", {})   # {pid: role}
+        peak_se = window_data.get("peak_se", {}) if window_data else {}
 
-        # All raid pids if we have window data + spec_roles; else fall back to hit players only
+        # All raid pids if window data available, else just those hit
         if window_data and spec_r:
             all_pids = list(spec_r.keys())
         else:
@@ -1827,84 +1825,57 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                         seen_set.add(a["pid"])
                         all_pids.append(a["pid"])
 
-        # hit_map[pid][round_idx] = [arrow_entry, ...]
-        hit_map: dict = {}
-        for ridx, im in enumerate(rounds):
+        # Total arrow hits per pid across all rounds
+        total_hits: dict = {}
+        for im in rounds:
             for a in im["arrows"]:
-                hit_map.setdefault(a["pid"], {}).setdefault(ridx, []).append(a)
+                total_hits[a["pid"]] = total_hits.get(a["pid"], 0) + 1
 
-        # Rounds each pid was hit in
-        n_rounds_hit = {pid: sum(1 for ridx in range(len(rounds)) if ridx in hit_map.get(pid, {}))
-                        for pid in all_pids}
-
-        # Sort: hit players first (by earliest hit), then by peak SE desc
-        def _sort_key(pid):
-            first_t = 999999
-            for hit_list in hit_map.get(pid, {}).values():
-                for a in hit_list:
-                    if a["t_s"] < first_t:
-                        first_t = a["t_s"]
-            return (0 if n_rounds_hit.get(pid, 0) > 0 else 1, first_t, -peak_se.get(pid, 0))
-
-        sorted_pids = sorted(all_pids, key=_sort_key)
-
-        # Column headers
-        th_cols = "".join(
-            (f'<th class="cm-im-rnd">@ {im["arrows"][0]["t_s"]//60}:{im["arrows"][0]["t_s"]%60:02d}</th>'
-             if im["arrows"] else '<th class="cm-im-rnd">—</th>')
-            for im in rounds
+        # Sort: hit players first (by hit count desc), then by peak SE desc
+        sorted_pids = sorted(
+            all_pids,
+            key=lambda pid: (0 if total_hits.get(pid, 0) > 0 else 1,
+                             -total_hits.get(pid, 0),
+                             -peak_se.get(pid, 0))
         )
-        thead = (f'<tr><th class="cm-name">Player</th><th class="cm-role">Role</th>'
-                 f'<th class="cm-im-rnd">Peak SE</th>{th_cols}<th class="cm-im-rnd">Hit</th></tr>')
+
+        thead = ('<tr>'
+                 '<th class="cm-name">Player</th>'
+                 '<th class="cm-role">Role</th>'
+                 '<th class="cm-im-rnd">Peak SE</th>'
+                 '<th class="cm-im-rnd">Arrows Hit</th>'
+                 '</tr>')
 
         rows = ""
         for pid in sorted_pids:
-            a_actor  = actor_lookup.get(pid, {})
-            raw_name = a_actor.get("name", f"#{pid}")
+            raw_name = actor_lookup.get(pid, {}).get("name", f"#{pid}")
             name     = norm(raw_name)
             role     = spec_r.get(pid, "DPS")
             p_se     = peak_se.get(pid, 0)
-            n_hit    = n_rounds_hit.get(pid, 0)
+            n_hit    = total_hits.get(pid, 0)
             stacked  = n_hit > 1
 
-            # Peak SE cell: red if hit but had 0 stacks, green if ≥1, grey if never hit
+            # Peak SE: red if hit with 0, green if ≥1, grey if not hit + 0
             if n_hit > 0 and p_se == 0:
-                se_cell = f'<td class="cm-im-bad" style="text-align:center">0</td>'
+                se_cell = '<td class="cm-im-bad" style="text-align:center">0</td>'
             elif p_se > 0:
                 se_cell = f'<td class="cm-im-ok" style="text-align:center">{p_se}</td>'
             else:
                 se_cell = '<td class="cm-im-empty" style="text-align:center">—</td>'
 
-            # Per-round cells
-            cells = ""
-            for ridx in range(len(rounds)):
-                hits_this = hit_map.get(pid, {}).get(ridx, [])
-                if not hits_this:
-                    cells += '<td class="cm-im-empty">—</td>'
-                else:
-                    parts = []
-                    for h in hits_this:
-                        se  = h.get("se_stacks", 0)
-                        tot = h.get("arrow_total", "?")
-                        sc  = "cm-im-bad" if se == 0 else "cm-im-ok"
-                        parts.append(f'<span class="{sc}">{se}</span>'
-                                     f'<span class="cm-im-sep">/</span>'
-                                     f'<span class="cm-im-seq">{tot}</span>')
-                    cells += f'<td class="cm-im-cell">{"  ".join(parts)}</td>'
-
-            # Hit summary cell
+            # Arrows hit: red+bold if >1, green if 1, grey dash if 0
             if stacked:
                 hit_cell = f'<td class="cm-im-stacked">×{n_hit}</td>'
             elif n_hit == 1:
-                hit_cell = '<td class="cm-im-empty" style="text-align:center;color:#3fb950">✓</td>'
+                hit_cell = '<td style="text-align:center;color:#3fb950;font-weight:700">1</td>'
             else:
-                hit_cell = '<td class="cm-im-empty">—</td>'
+                hit_cell = '<td class="cm-im-empty" style="text-align:center">—</td>'
 
             row_cls = ' class="cm-im-row-stacked"' if stacked else ""
             rows += (f'<tr{row_cls}>'
                      f'<td class="cm-name" style="color:{pcolor(raw_name)}">{_esc(name)}</td>'
                      f'<td class="cm-role">{_esc(role)}</td>'
-                     f'{se_cell}{cells}{hit_cell}</tr>')
+                     f'{se_cell}{hit_cell}</tr>')
 
         return f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
 
@@ -2773,7 +2744,7 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
 
     tab_buttons = ""
     split_divs  = ""
-    for bi, (boss_name, boss_html) in enumerate(boss_htmls.items()):
+    for bi, (boss_name, boss_html) in enumerate(reversed(list(boss_htmls.items()))):
         boss_display = boss_name.rsplit(" (", 1)[0]  # strip difficulty suffix
         tab_id    = f"boss-{bi}"
         active    = "active" if bi == 0 else ""
