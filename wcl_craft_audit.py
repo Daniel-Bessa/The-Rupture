@@ -1917,12 +1917,15 @@ _CROWN_MECHANICS_CSS = """
 .cm-im-table th { background: #0d1117; color: #8b949e; font-size: 10px; font-weight: 600;
   text-transform: uppercase; padding: 3px 8px; border: 1px solid #30363d; text-align: center; }
 .cm-im-table td { padding: 3px 8px; border: 1px solid #21262d; }
-.cm-im-rnd  { min-width: 52px; }
-.cm-im-cell { text-align: center; white-space: nowrap; }
+.cm-im-rnd   { min-width: 60px; }
+.cm-im-cell  { text-align: center; white-space: nowrap; }
 .cm-im-empty { text-align: center; color: #444; }
-.cm-im-ok  { color: #3fb950; font-weight: 700; }
-.cm-im-bad { color: #f85149; font-weight: 700; }
-.cm-im-seq { color: #8b949e; }
+.cm-im-ok    { color: #3fb950; font-weight: 700; }
+.cm-im-bad   { color: #f85149; font-weight: 700; }
+.cm-im-seq   { color: #8b949e; }
+.cm-im-sep   { color: #444; margin: 0 1px; }
+.cm-im-stacked     { text-align: center; color: #f85149; font-weight: 700; }
+.cm-im-row-stacked td { background: #200a0a; }
 """
 
 
