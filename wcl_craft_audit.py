@@ -765,6 +765,37 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
     def pid_role(pid):
         return spec_roles.get(pid, "DPS")
 
+    # ── Silverstrike targeting debuff (1233602) — who was ASSIGNED the mechanic ──
+    # Applied to exactly 2 players simultaneously, ~6s before the arrow hits.
+    assign_applies = sorted(
+        [(e["timestamp"] - fight_start_ms, e["targetID"])
+         for e in debuff_events
+         if e.get("abilityGameID") == _CROWN_VOID_STACK_ID   # 1233602 reused as assign ID
+         and e.get("type") == "applydebuff"
+         and e.get("targetID") in actor_lookup],
+        key=lambda x: x[0]
+    )
+    # Group into assignment rounds: applies within 500ms of each other = same round
+    assign_rounds: list = []   # list of (t_ms, frozenset_of_pids)
+    if assign_applies:
+        cur_t, _  = assign_applies[0]
+        cur_grp   = [assign_applies[0]]
+        for t, pid in assign_applies[1:]:
+            if t - cur_t > 500:
+                assign_rounds.append((cur_t, frozenset(p for _, p in cur_grp)))
+                cur_grp = [(t, pid)]
+                cur_t   = t
+            else:
+                cur_grp.append((t, pid))
+        assign_rounds.append((cur_t, frozenset(p for _, p in cur_grp)))
+
+    def find_assigned_pids(round_first_t: int) -> frozenset:
+        """Return the set of assigned pids whose debuff apply is within 8s of the round."""
+        for at, apids in assign_rounds:
+            if abs(at - round_first_t) <= 8_000:
+                return apids
+        return frozenset()
+
     # ── Silverstrike hits (damage events for hit IDs) ──
     strike_hits = sorted(
         [(e["timestamp"] - fight_start_ms, e["targetID"], e.get("abilityGameID"))
