@@ -1556,18 +1556,23 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     def _arrow_block(im, show_shields):
         t_s   = im["arrows"][0]["t_s"] if im["arrows"] else 0
         t_lbl = f'{t_s // 60}:{t_s % 60:02d}'
-        rows  = ""
-        for a in im["arrows"]:
+
+        assigned = [a for a in im["arrows"] if not a.get("is_extra", False)]
+        extras   = [a for a in im["arrows"] if     a.get("is_extra", False)]
+
+        def _player_row(a, extra=False):
             player_name = norm(a["name"])
-            is_extra    = a.get("is_extra", False)
             is_multi    = im["multi_hit"].get(a["pid"], 0) > 1
-            row_cls     = ' class="cm-arrow-extra"' if is_extra else (' class="cm-arrow-multi"' if is_multi else "")
+            row_cls     = ' class="cm-arrow-extra"' if extra else (' class="cm-arrow-multi"' if is_multi else "")
             seq_span    = f' <span class="cm-seq">×{a["seq"]}</span>' if a["seq"] > 1 else ""
-            extra_tag   = ' <span class="cm-extra-tag">+extra</span>' if is_extra else ""
-            rows += (f'<tr{row_cls}>'
-                     f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}{extra_tag}</td>'
-                     f'<td class="cm-role">{_esc(a["role"])}</td>'
-                     f'</tr>')
+            return (f'<tr{row_cls}>'
+                    f'<td class="cm-name" style="color:{pcolor(a["name"])}">{_esc(player_name)}{seq_span}</td>'
+                    f'<td class="cm-role">{_esc(a["role"])}</td>'
+                    f'</tr>')
+
+        # Main rows: assigned targets only
+        rows = "".join(_player_row(a) for a in assigned)
+
         shield_row = ""
         if show_shields:
             cells = ""
@@ -1581,14 +1586,25 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 else:
                     cells += f'<td class="cm-add-miss">✗</td>'
             shield_row = f'<tr class="cm-shield-row"><td colspan="2" class="cm-shield-label">Shield removed</td>{cells}</tr>'
+
+        thead = '<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>' if show_shields else '<tr><th>Player</th><th>Role</th></tr>'
+
+        # Extra hits section (bounced / unintended)
+        extra_html = ""
+        if extras:
+            extra_rows = "".join(_player_row(a, extra=True) for a in extras)
+            extra_html = (f'<div class="cm-extra-section">'
+                          f'<div class="cm-extra-hdr">Also hit</div>'
+                          f'<table class="cm-table"><tbody>{extra_rows}</tbody></table>'
+                          f'</div>')
+
         wasted = im.get("wasted_ce", [])
         wasted_html = f'<div class="cm-multiwarn">⚠ Wasted arrow on CE: {", ".join(wasted)}</div>' if wasted else ""
-        thead = '<tr><th>Player</th><th>Role</th><th>Demiar</th><th>Morium</th><th>Vorelus</th></tr>' if show_shields else '<tr><th>Player</th><th>Role</th></tr>'
         return (f'<div class="cm-block">'
                 f'<div class="cm-label cm-t">@ {t_lbl}</div>'
                 f'<table class="cm-table"><thead>{thead}</thead>'
                 f'<tbody>{rows}{shield_row}</tbody></table>'
-                f'{wasted_html}</div>')
+                f'{extra_html}{wasted_html}</div>')
 
     # ── Split silverstrike rounds into 4 phase buckets (chronological order) ──
     _SPELL_STAGE = 1233649  # Stage One / Stage Two: Silverstrike
