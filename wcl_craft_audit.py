@@ -1797,7 +1797,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
     def _phase_section(label, blocks_html, is_interm=False):
         """Wrap a phase label + content in a collapsible <details> panel."""
         cls = "cm-phase cm-interm" if is_interm else "cm-phase"
-        return (f'<details class="{cls}" open>'
+        return (f'<details class="{cls}">'
                 f'<summary class="cm-phase-divider">{_esc(label)}</summary>'
                 f'<div class="cm-blocks">{blocks_html}</div>'
                 f'</details>')
@@ -1876,23 +1876,55 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                      f'<td class="cm-role">{_esc(role)}</td>'
                      f'{hits_cell}</tr>')
 
-        return f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
+        hits_table = f'<table class="cm-table cm-im-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
+
+        # ── Right: simple arrow count table (all players, sorted by count desc) ──
+        count_sorted = sorted(all_pids, key=lambda pid: -len(pid_hits.get(pid, [])))
+        count_rows = ""
+        for pid in count_sorted:
+            raw_name = actor_lookup.get(pid, {}).get("name", f"#{pid}")
+            name     = norm(raw_name)
+            n        = len(pid_hits.get(pid, []))
+            if n == 0:
+                count_cell = '<td class="cm-im-empty" style="text-align:center">—</td>'
+            elif n > 1:
+                count_cell = f'<td class="cm-im-stacked" style="text-align:center">×{n}</td>'
+            else:
+                count_cell = '<td style="text-align:center;color:#3fb950;font-weight:700">1</td>'
+            count_rows += (f'<tr>'
+                           f'<td class="cm-name" style="color:{pcolor(raw_name)}">{_esc(name)}</td>'
+                           f'{count_cell}</tr>')
+        count_thead = '<tr><th class="cm-name">Player</th><th class="cm-im-rnd">Arrows Hit</th></tr>'
+        count_table = f'<table class="cm-table cm-im-table"><thead>{count_thead}</thead><tbody>{count_rows}</tbody></table>'
+
+        return f'<div style="display:flex;gap:20px;align-items:flex-start">{hits_table}{count_table}</div>'
 
     # ── Fixed 5-phase layout — all dividers always rendered ───────────────────
     blocks = "".join(_arrow_block(im, show_shields=True)  for im in stage_buckets[0])
     sections += _phase_section("Stage One: The Void\u2019s Spire", blocks)
 
+    def _interm_timer(bucket: list) -> str:
+        """Return ' — MM:SS - MM:SS' timing label for an intermission bucket, or ''."""
+        all_arrows = [a for im in bucket for a in im.get("arrows", [])]
+        if not all_arrows:
+            return ""
+        t0 = min(a["t_s"] for a in all_arrows)
+        t1 = max(a["t_s"] for a in all_arrows)
+        return f"  \u2014  {t0//60}:{t0%60:02d} \u2013 {t1//60}:{t1%60:02d}"
+
     _iw = cm.get("interm_windows", [])
-    sections += _phase_section("Intermission: Crushing Singularity",
-                                _interm_table(interm_buckets[0], _iw[0] if len(_iw) > 0 else None),
-                                is_interm=True)
+    sections += _phase_section(
+        f"Intermission: Crushing Singularity (WORK IN PROGRESS){_interm_timer(interm_buckets[0])}",
+        _interm_table(interm_buckets[0], _iw[0] if len(_iw) > 0 else None),
+        is_interm=True)
 
     blocks = "".join(_arrow_block(im, show_shields=False) for im in stage_buckets[1])
-    sections += _phase_section("Stage Two: The Severed Rift", blocks)
+    sections += _phase_section("Stage Two: The Severed Rift (WORK IN PROGRESS)", blocks)
 
-    sections += _phase_section("Intermission: Shattering Singularity",
-                                _interm_table(interm_buckets[1], _iw[1] if len(_iw) > 1 else None),
-                                is_interm=True)
+    sections += _phase_section(
+        f"Intermission: Shattering Singularity (WORK IN PROGRESS){_interm_timer(interm_buckets[1])}",
+        _interm_table(interm_buckets[1], _iw[1] if len(_iw) > 1 else None),
+        is_interm=True)
 
     # ── Stage Three: The End of the End — Circles ─────────────────────────────
     p3_blocks = ""
@@ -1916,7 +1948,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                       f'<tr><th>#</th><th>Player</th><th>Role</th><th>Held</th></tr>'
                       f'</thead><tbody>{rows}</tbody></table>'
                       f'{flag_html}</div>')
-    sections += _phase_section("Stage Three: The End of the End", p3_blocks, is_interm=False)
+    sections += _phase_section("Stage Three: The End of the End (WORK IN PROGRESS)", p3_blocks, is_interm=False)
 
     return f'<div class="cm-section"><div class="cm-section-title">Crown Mechanics</div>{sections}</div>'
 
@@ -1930,10 +1962,10 @@ _CROWN_MECHANICS_CSS = """
   background: #16213e; color: #7289DA; padding: 8px 10px;
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
   white-space: nowrap; position: relative; padding-left: 24px; }
-.cm-phase-divider::before { content: "\25BC"; position: absolute; left: 8px;
+.cm-phase-divider::before { content: "▼"; position: absolute; left: 8px;
   font-size: 8px; top: 50%; transform: translateY(-50%); opacity: 0.6;
   transition: transform .15s; }
-.cm-phase:not([open]) > .cm-phase-divider::before { transform: translateY(-50%) rotate(-90deg); }
+.cm-phase:not([open]) > .cm-phase-divider::before { content: "▶"; transform: translateY(-50%); }
 .cm-phase.cm-interm > .cm-phase-divider { color: #e57373; }
 .cm-blocks { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 0 2px; }
 .cm-block { flex: 0 0 auto; }
