@@ -845,11 +845,16 @@ def analyze_crown_mechanics(debuff_events: list, damage_events: list,
     for im_idx, hits in enumerate(intermissions):
         seen = {}
         ordered = []
-        first_t   = hits[0][0]
-        spell_id  = hits[0][2]
+        first_t       = hits[0][0]
+        spell_id      = hits[0][2]
+        assigned_pids = find_assigned_pids(first_t)   # set of pids from debuff marker
         for t_ms, pid, _ in hits:
             seen[pid] = seen.get(pid, 0) + 1
-            is_extra = (t_ms - first_t) > 50   # 50ms threshold: bounced/extra hit
+            # is_extra: not in the assigned debuff set (fall back to >50ms if no debuff data)
+            if assigned_pids:
+                is_extra = pid not in assigned_pids
+            else:
+                is_extra = (t_ms - first_t) > 50
             ordered.append({"t_s": t_ms // 1000, "pid": pid,
                              "name": pid_name(pid), "role": pid_role(pid),
                              "seq": len([h for h in ordered if h["pid"] == pid]) + 1,
