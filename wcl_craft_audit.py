@@ -1706,8 +1706,9 @@ _CROWN_MECHANICS_CSS = """
 .cm-arrow-rico td { opacity: 0.5; }
 .cm-arrow-multi td { background: #3d1a1a !important; }
 .cm-arrow-extra td { background: #2a1f00 !important; }
-.cm-extra-tag { font-size: 9px; color: #d29922; background: #2a1f00; border: 1px solid #5a4000;
-  border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: middle; }
+.cm-extra-section { margin-top: 5px; }
+.cm-extra-hdr { font-size: 10px; font-weight: 700; color: #d29922; text-transform: uppercase;
+  letter-spacing: .05em; padding: 2px 0; border-top: 1px solid #444; margin-bottom: 2px; }
 .cm-circle-bad td { background: #3d1a1a; color: #f85149; }
 .cm-multiwarn { margin-top: 5px; font-size: 11px; color: #f85149; }
 .cm-shield-row td { border-top: 1px solid #444; font-size: 11px; text-align: center; }
