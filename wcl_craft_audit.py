@@ -1636,8 +1636,8 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
 
         # Extra hits section (bounced / unintended)
         extra_html = ""
-        if extras:
-            extra_rows = "".join(_player_row(a, extra=True) for a in extras)
+        if also_hit:
+            extra_rows = "".join(_player_row(a, extra=True) for a in also_hit)
             extra_html = (f'<div class="cm-extra-section">'
                           f'<div class="cm-extra-hdr">Also hit</div>'
                           f'<table class="cm-table"><tbody>{extra_rows}</tbody></table>'
