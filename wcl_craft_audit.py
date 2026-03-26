@@ -1853,9 +1853,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
             raw_name = actor_lookup.get(pid, {}).get("name", f"#{pid}")
             name     = norm(raw_name)
             role     = spec_r.get(pid, "DPS")
-            hits     = pid_hits.get(pid, [])
-            n_hit    = len(hits)
-            stacked  = n_hit > 1
+            hits = pid_hits.get(pid, [])
 
             if not hits:
                 hits_cell = '<td class="cm-im-empty">—</td>'
@@ -1873,8 +1871,7 @@ def _build_crown_mechanics_html(w: dict, actor_lookup: dict) -> str:
                 sep = '<span class="cm-im-div"> || </span>'
                 hits_cell = f'<td class="cm-im-hits-cell">{sep.join(parts)}</td>'
 
-            row_cls = ' class="cm-im-row-stacked"' if stacked else ""
-            rows += (f'<tr{row_cls}>'
+            rows += (f'<tr>'
                      f'<td class="cm-name" style="color:{pcolor(raw_name)}">{_esc(name)}</td>'
                      f'<td class="cm-role">{_esc(role)}</td>'
                      f'{hits_cell}</tr>')
@@ -1981,7 +1978,6 @@ _CROWN_MECHANICS_CSS = """
 .cm-im-sep   { color: #58a6ff; margin: 0 1px; }
 .cm-im-div   { color: #444; margin: 0 4px; }
 .cm-im-stacked     { text-align: center; color: #f85149; font-weight: 700; }
-.cm-im-row-stacked td { background: #200a0a; }
 """
 
 
