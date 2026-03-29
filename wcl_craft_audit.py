@@ -1114,6 +1114,28 @@ _CHIMAERUS_RAID_GROUPS: dict = {
                     "Minxy", "Hypno", "Bolters", "Brunaine", "Yoruichi",
                     "Zodiacos", "Nizze", "Pyxius"},
     },
+    # 6WXZfKwGzgckamPt — split 1
+    "6WXZfKwGzgckamPt_1": {
+        # G1(Phyxius,Uncleyoinky,Gëpeto,Hypno,Brunaineevo) + G3(Doomkry,?,Toshiko,Nype,Mostlock) + G5(Devert,Nizze,Tinet)
+        "group_a": {"Phyxius", "Uncleyoinky", "Gëpeto", "Hypno", "Brunaineevo",
+                    "Doomkry", "Toshiko", "Nype", "Mostlock",
+                    "Devert", "Nizze", "Tinet"},
+        # G2(Nøpæ,Rödinhas,Shamishan,Shaggyzard,Icecöld) + G4(Madonis,Beldrýk,Züsh,Minxymender,Kazeofscales) + G6(Zodiacos,Potrenu,Kutcherdh)
+        "group_b": {"Nøpæ", "Rödinhas", "Shamishan", "Shaggyzard", "Icecöld",
+                    "Madonis", "Beldrýk", "Züsh", "Minxymender", "Kazeofscales",
+                    "Zodiacos", "Potrenu", "Kutcherdh"},
+    },
+    # 6WXZfKwGzgckamPt — split 2
+    "6WXZfKwGzgckamPt_2": {
+        # G1(Nøpæ,Allblues,Malheiro,Brunaineevo,Madhmag) + G3(Mindhacker,Holynooblal,Wype,Icecoldleap,Ipala) + G5(Mostbanned,Kutcherdh,Potrenu)
+        "group_a": {"Nøpæ", "Allblues", "Malheiro", "Brunaineevo", "Madhmag",
+                    "Mindhacker", "Holynooblal", "Wype", "Icecoldleap", "Ipala",
+                    "Mostbanned", "Kutcherdh", "Potrenu"},
+        # G2(Phyxy,Pumppaladin,Hypnodh,Samdracson,Madonismagus) + G4(Upyeah,Beldryc,Drunkminxy,Züsh,Kazehakase) + G6(Zodiacos,Nizzedk,Pingveryhigh)
+        "group_b": {"Phyxy", "Pumppaladin", "Hypnodh", "Samdracson", "Madonismagus",
+                    "Upyeah", "Beldryc", "Drunkminxy", "Züsh", "Kazehakase",
+                    "Zodiacos", "Nizzedk", "Pingveryhigh"},
+    },
 }
 _CHIMAERUS_BOSS_GAME_ID       = 256116
 _CHIMAERUS_SMALL_ADD_GAME_IDS = {245555, 245575}  # Swarming Shade, Haunting Essence
@@ -1121,7 +1143,8 @@ _CHIMAERUS_SMALL_ADD_GAME_IDS = {245555, 245575}  # Swarming Shade, Haunting Ess
 def analyze_alndust_groups(damage_events: list, player_pids: set,
                             fight_start_ms: int = 0,
                             report_code: str = "",
-                            actor_lookup: dict = None) -> list:
+                            actor_lookup: dict = None,
+                            split_num: int = 1) -> list:
     """Detect who soaked each Alndust Upheaval wave (went 'down') on Chimaerus.
     If a hardcoded group config exists for this report (in _CHIMAERUS_RAID_GROUPS),
     uses it to determine expected groups per wave. Otherwise falls back to N-2 reference.
@@ -1146,8 +1169,10 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
     group_a_pids: set = set()
     group_b_pids: set = set()
     use_hardcoded = False
-    if report_code and actor_lookup and report_code in _CHIMAERUS_RAID_GROUPS:
-        cfg = _CHIMAERUS_RAID_GROUPS[report_code]
+    split_key = f"{report_code}_{split_num}"
+    lookup_key = split_key if split_key in _CHIMAERUS_RAID_GROUPS else report_code
+    if report_code and actor_lookup and lookup_key in _CHIMAERUS_RAID_GROUPS:
+        cfg = _CHIMAERUS_RAID_GROUPS[lookup_key]
         for pid, actor in actor_lookup.items():
             char = actor.get("name", "")
             pname, _ = lookup_roster(char)
@@ -5295,7 +5320,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             all_pids = {pid for pid in all_pids if pid in actor_lookup}
             alndust_groups = (analyze_alndust_groups(damage_events, all_pids, fight_start,
                                                       report_code=report_code,
-                                                      actor_lookup=actor_lookup)
+                                                      actor_lookup=actor_lookup,
+                                                      split_num=split_num)
                               if "Chimaerus" in fname else [])
             # Per-player damage to Colossal Horror + per-wave analysis (Chimaerus only)
             horror_damage: dict = {}
