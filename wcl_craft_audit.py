@@ -707,6 +707,8 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
 
 
 _ALNDUST_SOAK_IDS   = {1262305, 1246827}   # Alndust Upheaval — players hit = "went down"
+_GLOOM_SPELL_ID          = 1245391  # Gloom — Vaelgor & Ezzorak purple ball soak
+_GLOOMTOUCHED_DEBUFF_ID  = 1245554  # Gloomtouched — debuff applied when a player soaks Gloom
 _CROWN_CIRCLE_ID    = 1233887              # P3 Void Circle debuff
 _CROWN_SILVERSTRIKE_HIT_IDS  = {1233649, 1237729}  # Silverstrike damage events
 _CROWN_VOID_STACK_ID         = 1233602             # Void Stacks debuff
@@ -1219,6 +1221,56 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
             "missed_pids": missed_pids, "wrong_pids": wrong_pids,
             "double_up_pids": double_up_pids,
         })
+    return result
+
+
+def fetch_gloom_debuff_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch Gloomtouched (1245554) applydebuff events for a Vaelgor & Ezzorak fight."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Debuffs,
+                fightIDs: [$fightID],
+                hostilityType: Friendlies,
+                filterExpression: "ability.id = 1245554 and type = 'applydebuff'",
+                limit: 500
+            ) { data }
+        }}
+    }
+    """
+    resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return resp["reportData"]["report"]["events"].get("data", [])
+
+
+def analyze_gloom_soaks(debuff_events: list, player_pids: set,
+                         fight_start_ms: int = 0) -> list:
+    """Detect who soaked each Gloom cast on Vaelgor & Ezzorak via Gloomtouched debuff."""
+    hits = []
+    for e in debuff_events:
+        if e.get("abilityGameID") == _GLOOMTOUCHED_DEBUFF_ID and e.get("targetID") in player_pids:
+            t_ms = e.get("timestamp", 0) - fight_start_ms
+            hits.append((t_ms, e["targetID"]))
+    if not hits:
+        return []
+    hits.sort()
+    # Group into waves: gap > 20 s = new Gloom cast
+    waves = [[hits[0]]]
+    for h in hits[1:]:
+        if h[0] - waves[-1][-1][0] <= 20_000:
+            waves[-1].append(h)
+        else:
+            waves.append([h])
+    result = []
+    for wi, wave in enumerate(waves):
+        seen: set = set()
+        hit_pids: list = []
+        for _, pid in wave:
+            if pid not in seen:
+                hit_pids.append(pid)
+                seen.add(pid)
+        t_s = wave[0][0] // 1000
+        result.append({"wave": wi + 1, "t_s": t_s, "hit_pids": hit_pids})
     return result
 
 
@@ -2404,6 +2456,37 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 f'<div class="ag-body open">{rows}</div></div>'
             )
 
+        def _build_gloom_panel(fights_list: list) -> str:
+            """Render per-wave Gloomfield soak list for Vaelgor & Ezzorak."""
+            soaks = []
+            for fd in fights_list:
+                if fd.get("gloom_soaks"):
+                    soaks = fd["gloom_soaks"]
+                    break
+            if not soaks:
+                return ""
+            rows = ""
+            for w in soaks:
+                m, s   = divmod(w["t_s"], 60)
+                t_str  = f"{m}:{s:02d}"
+                chips  = " ".join(
+                    f'<span class="ag-chip">{escape(actor_lookup.get(p, {}).get("name", f"#{p}"))}</span>'
+                    for p in w["hit_pids"]
+                )
+                rows += (
+                    f'<div class="ag-wave">'
+                    f'<div class="ag-wave-label">Soak {w["wave"]} <span class="ag-time">({t_str})</span></div>'
+                    f'<div class="ag-group ag-down">{chips}</div>'
+                    f'</div>'
+                )
+            return (
+                f'<div class="alndust-panel">'
+                f'<div class="ag-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                f'<span class="ag-title">&#127761; Gloomfield — Who Got Hit</span>'
+                f'<span class="ag-chevron">&#9660;</span></div>'
+                f'<div class="ag-body open">{rows}</div></div>'
+            )
+
         def _build_horror_waves_table(fights_list: list) -> str:
             """Build per-wave Colossal Horror damage + uptime table for Chimaerus."""
             horror_waves = []
@@ -2572,7 +2655,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_chart   = _build_chart(fights[0] if fights else {}, f"{table_id}-kill")
         kill_alndust       = _build_alndust_panel(fights)        if "Chimaerus" in boss_name else ""
         kill_horror_waves  = _build_horror_waves_table(fights)   if "Chimaerus" in boss_name else ""
-        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust
+        kill_gloom         = _build_gloom_panel(fights)          if "Vaelgor"   in boss_name else ""
+        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -5323,6 +5407,11 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                                                       actor_lookup=actor_lookup,
                                                       split_num=split_num)
                               if "Chimaerus" in fname else [])
+            if "Vaelgor" in fname:
+                gloom_debuffs = fetch_gloom_debuff_events(token, report_code, fid)
+                gloom_soaks   = analyze_gloom_soaks(gloom_debuffs, all_pids, fight_start)
+            else:
+                gloom_soaks = []
             # Per-player damage to Colossal Horror + per-wave analysis (Chimaerus only)
             horror_damage: dict = {}
             horror_waves: list  = []
@@ -5353,6 +5442,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "defensive_casts": defensive_casts,
                 "external_casts":  external_casts,
                 "alndust_groups":  alndust_groups,
+                "gloom_soaks":     gloom_soaks,
                 "horror_damage":   horror_damage,
                 "horror_waves":    horror_waves,
             })
