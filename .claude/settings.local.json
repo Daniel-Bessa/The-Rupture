@@ -5,7 +5,10 @@
       "WebFetch(domain:www.mythictrap.com)",
       "WebFetch(domain:www.method.gg)",
       "WebFetch(domain:www.icy-veins.com)",
-      "Bash(python -m py_compile wcl_craft_audit.py)"
+      "Bash(python -m py_compile wcl_craft_audit.py)",
+      "Bash(while kill:*)",
+      "Bash(do sleep:*)",
+      "Bash(done)"
     ],
     "defaultMode": "bypassPermissions"
   }

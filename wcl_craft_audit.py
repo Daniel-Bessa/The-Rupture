@@ -3277,10 +3277,15 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     all_pids_set | {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
                     key=pid_sort
                 )
-                wipe_banners = _build_banners([w])
-                wipe_table   = _render_table([w], wtbl_id, pids=wipe_pids)
-                wipe_chart   = _build_chart(w, wtbl_id)
-                wipe_panes += f'<div class="pull-pane" id="pane-{wtbl_id}">{wipe_banners}{wipe_table}{wipe_chart}</div>'
+                wipe_banners         = _build_banners([w])
+                wipe_table           = _render_table([w], wtbl_id, pids=wipe_pids)
+                wipe_chart           = _build_chart(w, wtbl_id)
+                wipe_sal_wipe        = _build_salhadaar_wipe_banner([w])     if "Salhadaar" in boss_name else ""
+                wipe_vorasius_swap   = _build_vorasius_tank_swap_banner([w]) if "Vorasius"  in boss_name else ""
+                wipe_sal_interrupts  = _build_salhadaar_interrupt_table([w]) if "Salhadaar" in boss_name else ""
+                wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
+                               f'{wipe_sal_wipe}{wipe_vorasius_swap}{wipe_banners}'
+                               f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}</div>')
 
             pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
             kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_content}</div>'
@@ -3319,11 +3324,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
                 key=pid_sort
             )
-            wipe_banners  = _build_banners([w])
-            wipe_table    = _render_table([w], wtbl_id, pids=wipe_pids)
-            wipe_chart    = _build_chart(w, wtbl_id)
-            crown_html    = _build_crown_mechanics_html(w, actor_lookup) if "Crown" in boss_name_base else ""
-            wipe_panes  += f'<div class="pull-pane {active}" id="pane-{wtbl_id}">{wipe_banners}{wipe_table}{wipe_chart}{crown_html}</div>'
+            wipe_banners        = _build_banners([w])
+            wipe_table          = _render_table([w], wtbl_id, pids=wipe_pids)
+            wipe_chart          = _build_chart(w, wtbl_id)
+            crown_html          = _build_crown_mechanics_html(w, actor_lookup) if "Crown"     in boss_name_base else ""
+            wo_sal_wipe         = _build_salhadaar_wipe_banner([w])            if "Salhadaar" in boss_name_base else ""
+            wo_vorasius_swap    = _build_vorasius_tank_swap_banner([w])        if "Vorasius"  in boss_name_base else ""
+            wo_sal_interrupts   = _build_salhadaar_interrupt_table([w])        if "Salhadaar" in boss_name_base else ""
+            wipe_panes  += (f'<div class="pull-pane {active}" id="pane-{wtbl_id}">'
+                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
+                            f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}</div>')
 
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
         results[boss_name] = pull_selector + wipe_panes
