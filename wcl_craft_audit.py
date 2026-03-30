@@ -1515,6 +1515,17 @@ _CHIMAERUS_RAID_GROUPS: dict = {
                     "Upyeah", "Beldryc", "Drunkminxy", "Züsh", "Kazehakase",
                     "Zodiacos", "Nizzedk", "Pingveryhigh"},
     },
+    # h8j147qKHy9BMpkL — 2026-03-31 Mythic
+    # Groups 1+2 down first, Groups 3+4 down second
+    # Post-pull-3 config: Zodiacos swapped into group_b, Madhmag swapped into group_a
+    "h8j147qKHy9BMpkL": {
+        # G1(Nøpæ,Shamishan,Hypno,Upyeah,Nizze) + G2(Bolters/Devert,Potrenu,Minxy,Jimy/Madhmag,Hipe/Wype)
+        "group_a": {"Nope", "Shamishan", "Hypno", "Upyeah", "Nizze",
+                    "Bolters", "Potrenu", "Minxy", "Jimy", "Hipe"},
+        # G3(Phyxius,Zush,Beldryk,Kutcher,Madonis) + G4(Uncleyoinky,Toshiko,Tinet,Ice,Zodiacos)
+        "group_b": {"Phyxius", "Zush", "Beldryk", "Kutcher", "Madonis",
+                    "Uncleyoinky", "Toshiko", "Tinet", "Ice", "Zodiacos"},
+    },
 }
 _CHIMAERUS_BOSS_GAME_ID       = 256116
 _CHIMAERUS_SMALL_ADD_GAME_IDS = {245555, 245575}  # Swarming Shade, Haunting Essence
@@ -1561,8 +1572,26 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
                 group_b_pids.add(pid)
         use_hardcoded = True
 
+    # Pre-pass: detect which wave indices are cycle resets (same group as previous wave)
+    # Mythic pattern: G1, G2, G1(intermission), G1(new cycle), G2 ...
+    # The "new cycle" wave has high overlap with the previous wave (consecutive same group).
+    cycle_reset_indices: set = set()
+    _prev_down: set = set()
+    for wi, wave in enumerate(waves):
+        _ds = set(pid for _, pid in wave)
+        if wi > 0 and _prev_down:
+            jaccard = len(_ds & _prev_down) / max(len(_ds | _prev_down), 1)
+            if jaccard > 0.5:
+                cycle_reset_indices.add(wi)
+        _prev_down = _ds
+    # The wave just before each cycle reset is the "intermission" wave
+    intermission_indices: set = {wi - 1 for wi in cycle_reset_indices if wi > 0}
+
     result = []
     consecutive_ups: dict = {pid: 0 for pid in player_pids}
+    # Cycle position tracking: 1 = group_a expected, 2 = group_b expected
+    cycle_pos   = 1
+    last_at_pos: dict = {}   # cycle_pos → last result index where that pos was used (fallback)
 
     for wi, wave in enumerate(waves):
         wave_num  = wi + 1
@@ -1570,24 +1599,36 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
         down_set  = set(down_pids)
         up_pids   = [pid for pid in sorted(player_pids) if pid not in down_set]
         t_s       = wave[0][0] // 1000
+        is_cycle_reset    = wi in cycle_reset_indices
+        is_intermission   = wi in intermission_indices
+
+        # On a cycle reset, restart cycle position back to 1
+        if is_cycle_reset:
+            cycle_pos = 1
 
         if use_hardcoded:
-            # Odd waves → group_a should go down; even waves → group_b should go down
-            expected = group_a_pids if wave_num % 2 == 1 else group_b_pids
-            wrong_group = group_b_pids if wave_num % 2 == 1 else group_a_pids
+            expected    = group_a_pids if cycle_pos == 1 else group_b_pids
+            wrong_group = group_b_pids if cycle_pos == 1 else group_a_pids
             missed_pids    = [p for p in expected if p not in down_set and p in player_pids]
             wrong_pids     = [p for p in down_set if p in wrong_group]
             double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1 and p in expected]
-        elif wave_num <= 2:
+        elif is_cycle_reset or cycle_pos not in last_at_pos:
+            # First time at this position or post-intermission reset — no reference yet
             missed_pids    = []
             wrong_pids     = []
             double_up_pids = []
         else:
-            expected    = set(result[wi - 2]["down_pids"])
-            missed_pids = [p for p in expected if p not in down_set]
-            wrong_pids  = [p for p in down_set if p not in expected
-                           and consecutive_ups.get(p, 0) < 2]
+            # Compare to the last wave where this cycle_pos was active
+            ref = result[last_at_pos[cycle_pos]]
+            expected       = set(ref["down_pids"])
+            missed_pids    = [p for p in expected if p not in down_set]
+            wrong_pids     = [p for p in down_set if p not in expected
+                               and consecutive_ups.get(p, 0) < 2]
             double_up_pids = [p for p in up_pids if consecutive_ups.get(p, 0) >= 1]
+
+        last_at_pos[cycle_pos] = wi
+        # Advance cycle position for next wave
+        cycle_pos = 2 if cycle_pos == 1 else 1
 
         for pid in player_pids:
             consecutive_ups[pid] = 0 if pid in down_set else consecutive_ups.get(pid, 0) + 1
@@ -1597,6 +1638,8 @@ def analyze_alndust_groups(damage_events: list, player_pids: set,
             "down_pids": down_pids, "up_pids": up_pids,
             "missed_pids": missed_pids, "wrong_pids": wrong_pids,
             "double_up_pids": double_up_pids,
+            "is_intermission": is_intermission,
+            "is_cycle_reset":  is_cycle_reset,
         })
     return result
 
