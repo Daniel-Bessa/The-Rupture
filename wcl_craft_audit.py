@@ -490,17 +490,139 @@ def analyze_mechanic_timestamps(damage_events: list, actor_lookup: dict,
     return result
 
 
+# Spell IDs for CC abilities that stop Fractured Image casts on Salhadaar.
+# Includes hard stuns, silences, incapacitates, knockbacks that interrupt.
+_SALHADAAR_CC_IDS = {
+    # Death Knight
+    108194,  # Asphyxiate
+    47476,   # Strangulate
+    49576,   # Death Grip
+    # Demon Hunter
+    179057,  # Chaos Nova
+    202137,  # Sigil of Silence
+    217832,  # Imprison
+    # Druid
+    33786,   # Cyclone
+    99,      # Incapacitating Roar
+    5211,    # Mighty Bash
+    132469,  # Typhoon
+    # Evoker
+    360806,  # Sleep Walk
+    357214,  # Landslide
+    368970,  # Tail Swipe (racial)
+    357215,  # Wing Buffet (racial)
+    # Hunter
+    187650,  # Freezing Trap
+    19577,   # Intimidation
+    109248,  # Binding Shot
+    213691,  # Scatter Shot
+    # Mage
+    118,     # Polymorph
+    113724,  # Ring of Frost
+    31661,   # Dragon's Breath
+    157997,  # Ice Nova
+    157980,  # Supernova
+    # Monk
+    115078,  # Paralysis
+    119381,  # Leg Sweep
+    116844,  # Ring of Peace
+    # Paladin
+    853,     # Hammer of Justice
+    115750,  # Blinding Light
+    20066,   # Repentance
+    # Priest
+    8122,    # Psychic Scream
+    64044,   # Psychic Horror
+    88625,   # Holy Word: Chastise
+    # Rogue
+    1833,    # Cheap Shot
+    408,     # Kidney Shot
+    1776,    # Gouge
+    2094,    # Blind
+    # Shaman
+    192058,  # Capacitor Totem
+    51514,   # Hex
+    # Warlock
+    5782,    # Fear
+    30283,   # Shadowfury
+    6789,    # Mortal Coil
+    19647,   # Spell Lock (Felhunter)
+    # Warrior
+    107570,  # Storm Bolt
+    46968,   # Shockwave
+    5246,    # Intimidating Shout
+}
+
+_SALHADAAR_CC_NAMES = {
+    108194: "Asphyxiate",     47476: "Strangulate",      49576: "Death Grip",
+    179057: "Chaos Nova",     202137: "Sigil of Silence", 217832: "Imprison",
+    33786:  "Cyclone",        99:    "Incap. Roar",        5211:  "Mighty Bash",
+    132469: "Typhoon",
+    360806: "Sleep Walk",     357214: "Landslide",
+    368970: "Tail Swipe",    357215: "Wing Buffet",
+    187650: "Freezing Trap",  19577:  "Intimidation",     109248: "Binding Shot",
+    213691: "Scatter Shot",
+    118:    "Polymorph",      113724: "Ring of Frost",    31661:  "Dragon's Breath",
+    157997: "Ice Nova",       157980: "Supernova",
+    115078: "Paralysis",      119381: "Leg Sweep",        116844: "Ring of Peace",
+    853:    "Hammer of Justice", 115750: "Blinding Light", 20066: "Repentance",
+    8122:   "Psychic Scream", 64044:  "Psychic Horror",   88625:  "Holy Word: Chastise",
+    1833:   "Cheap Shot",     408:    "Kidney Shot",       1776:   "Gouge",       2094: "Blind",
+    192058: "Capacitor Totem", 51514: "Hex",
+    5782:   "Fear",           30283:  "Shadowfury",        6789:   "Mortal Coil", 19647: "Spell Lock",
+    107570: "Storm Bolt",     46968:  "Shockwave",          5246:   "Int. Shout",
+}
+
+
+def fetch_salhadaar_cc_events(token: str, report_code: str, fight_id: int,
+                               fight_start: float, fight_end: float) -> list:
+    """Fetch friendly crowd-control cast events targeting Fractured Images."""
+    _FRACTURED_IMAGE_GAME_ID = 251791
+    # Use a filter to only get CC spell IDs cast by friendlies
+    id_list = ",".join(str(x) for x in sorted(_SALHADAAR_CC_IDS))
+    filter_expr = f"ability.id in ({id_list}) and target.type = 'NPC'"
+    query = """
+    query ($code: String!, $fightID: Int!, $start: Float!, $end: Float!, $filter: String!) {
+        reportData { report(code: $code) {
+            events(dataType: Casts, fightIDs: [$fightID], hostilityType: Friendlies,
+                   startTime: $start, endTime: $end, filterExpression: $filter, limit: 10000)
+            { data nextPageTimestamp }
+        }}
+    }
+    """
+    all_events = []
+    cursor = float(fight_start)
+    while True:
+        result = query_wcl(token, query, {
+            "code": report_code, "fightID": fight_id,
+            "start": cursor, "end": float(fight_end), "filter": filter_expr,
+        })
+        page = result["reportData"]["report"]["events"]
+        # Only keep events targeting Fractured Image NPCs
+        for ev in page.get("data", []):
+            all_events.append(ev)
+        nxt = page.get("nextPageTimestamp")
+        if not nxt:
+            break
+        cursor = nxt
+    return all_events
+
+
 def analyze_salhadaar_fracture_waves(interrupt_events: list, actor_lookup: dict,
                                       fight_start_ms: int, ability_names: dict = None,
-                                      spell_names_map: dict = None) -> list:
-    """Group friendly interrupts on Fractured Images into waves for Fallen-King Salhadaar.
-    Filters to interrupts of spells with 'fracture' in the ability name (via ability_names lookup).
+                                      spell_names_map: dict = None,
+                                      cc_events: list = None) -> list:
+    """Group friendly interrupts + CC on Fractured Images into waves for Fallen-King Salhadaar.
+    Filters interrupts to spells with 'fracture' in the interrupted ability name.
     Returns list of {wave_num, wave_start_s, wave_end_s, players: {pid: [{spell, time_str}]}}.
     """
-    ability_names  = ability_names  or {}
+    ability_names   = ability_names  or {}
     spell_names_map = spell_names_map or {}
+    cc_events       = cc_events or []
 
     relevant = []
+
+    # Interrupts of Shadow Fracture
     for ev in interrupt_events:
         extra_id = ev.get("extraAbilityGameID", 0)
         if ability_names:
@@ -517,12 +639,28 @@ def analyze_salhadaar_fracture_waves(interrupt_events: list, actor_lookup: dict,
         relevant.append({"ts_s": ts_s, "pid": pid, "spell": spell_name,
                           "time_str": f"{m2}:{s2:02d}"})
 
+    # CC casts on Fractured Images
+    for ev in cc_events:
+        if ev.get("type") != "cast":
+            continue
+        pid = ev.get("sourceID")
+        if pid not in actor_lookup:
+            continue
+        spell_id = ev.get("abilityGameID", 0)
+        if spell_id not in _SALHADAAR_CC_IDS:
+            continue
+        spell_name = _SALHADAAR_CC_NAMES.get(spell_id, ability_names.get(spell_id, f"#{spell_id}"))
+        ts_s       = (ev["timestamp"] - fight_start_ms) / 1000
+        m2, s2     = divmod(int(ts_s), 60)
+        relevant.append({"ts_s": ts_s, "pid": pid, "spell": spell_name,
+                          "time_str": f"{m2}:{s2:02d}"})
+
     if not relevant:
         return []
 
     relevant.sort(key=lambda x: x["ts_s"])
 
-    # Group into waves: gap > 20s between individual interrupts = new wave
+    # Group into waves: gap > 20s = new wave
     waves_raw = [[relevant[0]]]
     for item in relevant[1:]:
         if item["ts_s"] - waves_raw[-1][-1]["ts_s"] <= 20:
@@ -537,7 +675,7 @@ def analyze_salhadaar_fracture_waves(interrupt_events: list, actor_lookup: dict,
             players.setdefault(item["pid"], []).append(
                 {"spell": item["spell"], "time_str": item["time_str"]})
         result.append({
-            "wave_num":    wi,
+            "wave_num":     wi,
             "wave_start_s": items[0]["ts_s"],
             "wave_end_s":   items[-1]["ts_s"],
             "players":      players,
@@ -6311,13 +6449,16 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             # All bosses: per-mechanic hit timestamps (for table tooltips)
             mechanic_timestamps = analyze_mechanic_timestamps(
                 damage_events, actor_lookup, fight_start, mech_defs)
-            # Salhadaar: Shadow Fracture interrupt wave table + Void Infusion wipe flags
+            # Salhadaar: Shadow Fracture interrupt+CC wave table + Void Infusion wipe flags
             salhadaar_fracture_waves = []
             salhadaar_wipe_events    = []
             if "Salhadaar" in fname:
+                sal_cc_events = fetch_salhadaar_cc_events(
+                    token, report_code, fid, fight_start, fight_start + fight_dur_ms)
                 salhadaar_fracture_waves = analyze_salhadaar_fracture_waves(
                     interrupt_events, actor_lookup, fight_start,
-                    ability_names=ability_names, spell_names_map=SPELL_NAMES)
+                    ability_names=ability_names, spell_names_map=SPELL_NAMES,
+                    cc_events=sal_cc_events)
                 salhadaar_wipe_events = detect_salhadaar_wipe_events(
                     cast_events, fight_start, ability_names=ability_names)
             boss_data.setdefault(boss_key, []).append({
@@ -6433,9 +6574,12 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 w_sal_fracture_waves = []
                 w_sal_wipe_events    = []
                 if "Salhadaar" in fname:
+                    w_sal_cc_events = fetch_salhadaar_cc_events(
+                        token, report_code, fid, fight_start, fight.get("endTime", 0))
                     w_sal_fracture_waves = analyze_salhadaar_fracture_waves(
                         interrupt_events, actor_lookup, fight_start,
-                        ability_names=ability_names, spell_names_map=SPELL_NAMES)
+                        ability_names=ability_names, spell_names_map=SPELL_NAMES,
+                        cc_events=w_sal_cc_events)
                     w_sal_wipe_events = detect_salhadaar_wipe_events(
                         cast_events, fight_start, ability_names=ability_names)
                 wipe_data.setdefault(boss_key, []).append({
