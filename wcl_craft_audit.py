@@ -564,36 +564,85 @@ def fetch_uptime_table(token: str, report_code: str, fight_id: int) -> dict:
             for e in entries if "id" in e}
 
 
-def fetch_add_instance_damage(token: str, report_code: str, fight_id: int,
-                              actor_id: int, fight_dur_ms: int) -> list:
-    """Fetch per-player damage + active time for each instance of an add (actor_id).
-    Loops through instances 10001, 10002, ... until no data is returned.
-    Returns list of {instance, players: {pid: {dmg, active_ms}}}, ordered by instance.
+def fetch_add_instance_damage(token: str, report_code: str,
+                              fight_start_ms: int, fight_end_ms: int,
+                              add_game_id: int) -> list:
+    """Fetch per-player damage + active time per add wave (time window).
+
+    Uses absolute report timestamps so pagination works correctly.
+    Step 1: collect all add damage events to auto-detect wave windows (gap > 12s).
+    Step 2: query WCL table per window to get WCL-computed activeTime + total damage.
+
+    Returns list of {wave_num, wave_start_s, wave_end_s, players: {pid: {dmg, active_ms}}}.
     """
-    query = """
-    query ($code: String!, $fightID: Int!, $filter: String!) {
+    # Step 1: paginate all add damage events with absolute timestamps
+    ev_query = """
+    query ($code: String!, $filter: String!, $start: Float!, $end: Float!) {
         reportData { report(code: $code) {
-            table(dataType: DamageDone, fightIDs: [$fightID], filterExpression: $filter)
+            events(dataType: DamageDone, startTime: $start, endTime: $end,
+                   filterExpression: $filter, limit: 1000)
+            { data nextPageTimestamp }
+        }}
+    }
+    """
+    filter_expr = f"target.id = {add_game_id}"
+    all_timestamps = []
+    cursor = float(fight_start_ms)
+    while True:
+        resp = query_wcl(token, ev_query, {
+            "code": report_code, "filter": filter_expr,
+            "start": cursor, "end": float(fight_end_ms),
+        })
+        ed = resp["reportData"]["report"]["events"]
+        all_timestamps.extend(e["timestamp"] for e in ed["data"])
+        nxt = ed.get("nextPageTimestamp")
+        if not nxt or nxt >= fight_end_ms:
+            break
+        cursor = nxt
+
+    if not all_timestamps:
+        return []
+
+    # Step 2: detect wave windows (gap > 12s between consecutive events)
+    all_timestamps.sort()
+    GAP_MS = 12_000
+    windows = []
+    w_start = all_timestamps[0]
+    w_end   = all_timestamps[0]
+    for ts in all_timestamps[1:]:
+        if ts - w_end > GAP_MS:
+            windows.append((w_start, w_end))
+            w_start = ts
+        w_end = ts
+    windows.append((w_start, w_end))
+
+    # Step 3: query WCL table per window (absolute startTime/endTime)
+    tbl_query = """
+    query ($code: String!, $filter: String!, $start: Float!, $end: Float!) {
+        reportData { report(code: $code) {
+            table(dataType: DamageDone, startTime: $start, endTime: $end,
+                  filterExpression: $filter)
         }}
     }
     """
     results = []
-    for inst in range(1, 30):  # up to 29 instances
-        filter_expr = f"target.id = {actor_id}.{10000 + inst}"
-        resp    = query_wcl(token, query, {"code": report_code, "fightID": fight_id, "filter": filter_expr})
+    for i, (ws, we) in enumerate(windows, start=1):
+        resp  = query_wcl(token, tbl_query, {
+            "code": report_code, "filter": filter_expr,
+            "start": float(ws), "end": float(we + 1000),  # +1s buffer
+        })
         table   = resp["reportData"]["report"]["table"]
         entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
-        if not entries:
-            break
-        players = {}
-        for e in entries:
-            if "id" not in e:
-                continue
-            players[e["id"]] = {
-                "dmg":       e.get("total", 0),
-                "active_ms": e.get("activeTime", 0),
-            }
-        results.append({"instance": inst, "players": players})
+        players = {
+            e["id"]: {"dmg": e.get("total", 0), "active_ms": e.get("activeTime", 0)}
+            for e in entries if "id" in e
+        }
+        results.append({
+            "wave_num":     i,
+            "wave_start_s": (ws - fight_start_ms) // 1000,
+            "wave_end_s":   (we - fight_start_ms) // 1000,
+            "players":      players,
+        })
     return results
 
 
@@ -2649,7 +2698,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 body = ""
                 for wi, wave in enumerate(waves, 1):
                     chips = ""
-                    for m in sorted(wave, key=lambda x: x["t_s"]):
+                    for m in sorted(wave, key=lambda x: (x["dispel_t_s"] is None, x["dispel_t_s"] or 0)):
                         apply_str = _ts(m["t_s"])
                         if m["dispel_t_s"] is not None:
                             remove_str = _ts(m["dispel_t_s"])
@@ -2689,56 +2738,66 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     vm_marks     = fd.get("void_marked", [])
                     break
 
-            # Handle old dict/list-of-tuples cache formats gracefully
-            if not instances or not isinstance(instances, list) or not isinstance(instances[0], dict):
+            if not instances or not isinstance(instances, list) or not isinstance(instances[0], dict) \
+                    or "wave_num" not in instances[0]:
                 body = '<div style="color:#555;font-size:12px;padding:8px 4px;">No add damage recorded.</div>'
             else:
-                vm_waves    = _group_void_marked_waves(vm_marks)
-                wave_labels = [f"{w[0]['t_s']//60}:{w[0]['t_s']%60:02d}" for w in vm_waves]
-                # Label each add instance with the corresponding wave time if available
-                def _add_label(i):
-                    lbl = f"Add {i}"
-                    if i - 1 < len(wave_labels):
-                        lbl += f' <span class="ag-time">({wave_labels[i - 1]})</span>'
-                    return lbl
-
                 def fmt(v):
                     if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
                     if v >= 1_000:     return f"{v/1_000:.0f}k"
                     return str(int(v)) if v else "—"
 
-                # Collect all player IDs across all instances, sorted by total damage
+                def _add_label(wave):
+                    ws = wave["wave_start_s"]
+                    m, s = divmod(ws, 60)
+                    return f'Add {wave["wave_num"]} <span class="ag-time">({m}:{s:02d})</span>'
+
+                # Collect all player IDs as ints (JSON loads dict keys as strings)
                 all_pids_set: set = set()
-                for inst in instances:
-                    all_pids_set.update(inst["players"].keys())
+                for wave in instances:
+                    all_pids_set.update(int(k) for k in wave["players"].keys())
                 sorted_pids = sorted(all_pids_set,
-                                     key=lambda p: sum(inst["players"].get(p, {}).get("dmg", 0) for inst in instances),
+                                     key=lambda p: sum(w["players"].get(str(p), w["players"].get(p, {})).get("dmg", 0) for w in instances),
                                      reverse=True)
 
+                n_waves   = len(instances)
+                total_col = 1 + n_waves * 2  # Player=0, then pairs, total at end
+
+                th_style  = 'style="border-left:1px solid #2a2a4a;cursor:pointer;user-select:none"'
                 thead = '<tr><th rowspan="2">Player</th>'
-                for inst in instances:
-                    thead += f'<th colspan="2" style="text-align:center;border-left:1px solid #2a2a4a">{_add_label(inst["instance"])}</th>'
-                thead += '<th rowspan="2" style="border-left:1px solid #2a2a4a">Total</th></tr>'
+                for wave in instances:
+                    thead += f'<th colspan="2" style="text-align:center;border-left:1px solid #2a2a4a">{_add_label(wave)}</th>'
+                thead += (f'<th rowspan="2" data-col="{total_col}" onclick="sortAddTable(this)" '
+                          f'style="border-left:1px solid #2a2a4a;cursor:pointer;user-select:none">'
+                          f'Total<span class="sort-arrow"></span></th></tr>')
                 thead += '<tr>'
-                for _ in instances:
-                    thead += '<th style="border-left:1px solid #2a2a4a">Dmg</th><th>Uptime</th>'
+                for i, _ in enumerate(instances):
+                    dmg_col    = 1 + i * 2
+                    uptime_col = 2 + i * 2
+                    thead += (f'<th data-col="{dmg_col}" onclick="sortAddTable(this)" {th_style}>'
+                              f'Dmg<span class="sort-arrow"></span></th>'
+                              f'<th data-col="{uptime_col}" onclick="sortAddTable(this)" {th_style}>'
+                              f'Uptime<span class="sort-arrow"></span></th>')
                 thead += '</tr>'
 
                 rows = ""
                 for pid in sorted_pids:
-                    name      = actor_lookup.get(pid, {}).get("name", f"#{pid}")
-                    total_dmg = sum(inst["players"].get(pid, {}).get("dmg", 0) for inst in instances)
-                    rows += f'<tr><td>{escape(name)}</td>'
-                    for inst in instances:
-                        pdata = inst["players"].get(pid)
+                    actor     = actor_lookup.get(pid, {})
+                    name      = escape(actor.get("name", f"#{pid}"))
+                    color     = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                    total_dmg = sum(w["players"].get(str(pid), w["players"].get(pid, {})).get("dmg", 0) for w in instances)
+                    rows += f'<tr><td data-val="0"><span style="color:{color};font-weight:600">{name}</span></td>'
+                    for wave in instances:
+                        pdata    = wave["players"].get(str(pid), wave["players"].get(pid))
+                        wave_dur = max((wave["wave_end_s"] - wave["wave_start_s"]) * 1000, 1)
                         if pdata and pdata["dmg"]:
                             active_ms = pdata.get("active_ms", 0)
-                            uptime_p  = min(active_ms / fight_dur_ms * 100, 100) if fight_dur_ms > 0 else 0
-                            rows += (f'<td class="add-dmg-val" style="border-left:1px solid #2a2a4a">{fmt(pdata["dmg"])}</td>'
-                                     f'<td class="add-dmg-val">{uptime_p:.0f}%</td>')
+                            uptime_p  = min(active_ms / wave_dur * 100, 100)
+                            rows += (f'<td class="add-dmg-val" data-val="{pdata["dmg"]}" style="border-left:1px solid #2a2a4a">{fmt(pdata["dmg"])}</td>'
+                                     f'<td class="add-dmg-val" data-val="{uptime_p:.1f}">{uptime_p:.0f}%</td>')
                         else:
-                            rows += '<td class="add-dmg-val" style="border-left:1px solid #2a2a4a;color:#444">—</td><td class="add-dmg-val" style="color:#444">—</td>'
-                    rows += f'<td class="add-dmg-val" style="border-left:1px solid #2a2a4a;font-weight:600">{fmt(total_dmg)}</td></tr>'
+                            rows += '<td class="add-dmg-val" data-val="0" style="border-left:1px solid #2a2a4a;color:#444">—</td><td class="add-dmg-val" data-val="0" style="color:#444">—</td>'
+                    rows += f'<td class="add-dmg-val" data-val="{total_dmg}" style="border-left:1px solid #2a2a4a;font-weight:600">{fmt(total_dmg)}</td></tr>'
 
                 body = f'<table class="add-dmg-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
 
@@ -2750,17 +2809,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 f'<div class="ag-body open">{body}</div></div>'
             )
 
-        def _build_add_debuff_panel(_fights_list: list) -> str:
-            """Placeholder — tracks who dispels the stacking debuff off Abyssal Voidshapers."""
-            return (
-                f'<div class="alndust-panel">'
-                f'<div class="ag-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
-                f'<span class="ag-title">&#128165; Abyssal Voidshaper — Debuff Soaks</span>'
-                f'<span class="ag-chevron">&#9660;</span></div>'
-                f'<div class="ag-body open">'
-                f'<div style="color:#555;font-size:12px;padding:8px 4px;">No data — debuff tracking available on Mythic difficulty.</div>'
-                f'</div></div>'
-            )
 
         def _build_horror_waves_table(fights_list: list) -> str:
             """Build per-wave Colossal Horror damage + uptime table for Chimaerus."""
@@ -2933,8 +2981,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_gloom         = _build_gloom_panel(fights)          if "Vaelgor"   in boss_name else ""
         kill_void_marked   = _build_void_marked_panel(fights)    if "Averzian"  in boss_name else ""
         kill_add_damage    = _build_add_damage_panel(fights)     if "Averzian"  in boss_name else ""
-        kill_add_debuff    = _build_add_debuff_panel(fights)     if "Averzian"  in boss_name else ""
-        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom + kill_void_marked + kill_add_damage + kill_add_debuff
+        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom + kill_void_marked + kill_add_damage
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -3134,6 +3181,24 @@ function applyFilters(splitId) {
         row.style.display = (!hasFilters || roleVis[row.dataset.role]) ? '' : 'none';
     });
   });
+}
+function sortAddTable(th) {
+  const col = parseInt(th.dataset.col);
+  const table = th.closest('table');
+  const tbody = table.querySelector('tbody');
+  const rows  = [...tbody.querySelectorAll('tr')];
+  const asc   = th.dataset.dir !== 'asc';
+  // Clear indicators
+  table.querySelectorAll('th[data-col]').forEach(h => { h.dataset.dir = ''; h.querySelector('.sort-arrow') && (h.querySelector('.sort-arrow').textContent = ''); });
+  th.dataset.dir = asc ? 'asc' : 'desc';
+  const arrow = th.querySelector('.sort-arrow');
+  if (arrow) arrow.textContent = asc ? ' ▲' : ' ▼';
+  rows.sort((a, b) => {
+    const va = parseFloat(a.cells[col]?.dataset.val ?? 0);
+    const vb = parseFloat(b.cells[col]?.dataset.val ?? 0);
+    return asc ? va - vb : vb - va;
+  });
+  rows.forEach(r => tbody.appendChild(r));
 }
 """
 
@@ -5917,13 +5982,11 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             if "Averzian" in fname:
                 void_marked_events = fetch_void_marked_events(token, report_code, fid)
                 void_marked_data   = analyze_void_marked(void_marked_events, all_pids, fight_start)
-                # add_damage: list of per-instance dicts from WCL table endpoint
-                add_damage: list = []
-                voidshaper_actor = next((a["id"] for a in npc_actors
-                                         if a.get("gameID") == 252918), None)
-                if voidshaper_actor:
-                    add_damage = fetch_add_instance_damage(
-                        token, report_code, fid, voidshaper_actor, fight_dur_ms)
+                # add_damage: list of per-wave dicts from WCL table endpoint
+                add_damage = fetch_add_instance_damage(
+                    token, report_code,
+                    fight_start, fight_start + fight_dur_ms,
+                    252918)  # Abyssal Voidshaper game ID
             else:
                 void_marked_data = []
                 add_damage       = {}

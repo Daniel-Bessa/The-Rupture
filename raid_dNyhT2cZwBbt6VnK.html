@@ -504,6 +504,24 @@ function applyFilters(splitId) {
     });
   });
 }
+function sortAddTable(th) {
+  const col = parseInt(th.dataset.col);
+  const table = th.closest('table');
+  const tbody = table.querySelector('tbody');
+  const rows  = [...tbody.querySelectorAll('tr')];
+  const asc   = th.dataset.dir !== 'asc';
+  // Clear indicators
+  table.querySelectorAll('th[data-col]').forEach(h => { h.dataset.dir = ''; h.querySelector('.sort-arrow') && (h.querySelector('.sort-arrow').textContent = ''); });
+  th.dataset.dir = asc ? 'asc' : 'desc';
+  const arrow = th.querySelector('.sort-arrow');
+  if (arrow) arrow.textContent = asc ? ' ▲' : ' ▼';
+  rows.sort((a, b) => {
+    const va = parseFloat(a.cells[col]?.dataset.val ?? 0);
+    const vb = parseFloat(b.cells[col]?.dataset.val ?? 0);
+    return asc ? va - vb : vb - va;
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
 
 </script>
 </body>
