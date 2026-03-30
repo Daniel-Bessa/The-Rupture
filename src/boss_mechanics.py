@@ -78,7 +78,7 @@ BOSS_MECHANICS = {
             "label": "Void Breath",
             "name": "Void Breath: Vorasius sweeps a deadly frontal beam — stand behind the boss.",
             "spell_ids": {1257607},
-            "type": "frontal",
+            "type": "dmg_hits",
         },
     ],
 

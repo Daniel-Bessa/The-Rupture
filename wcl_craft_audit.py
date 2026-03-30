@@ -408,6 +408,162 @@ def analyze_frontal_failures(damage_events: list, actor_lookup: dict, mechanics:
     return failures
 
 
+def analyze_vorasius_tank_swaps(damage_events: list, actor_lookup: dict,
+                                 fight_start_ms: int, spec_roles: dict) -> list:
+    """Detect Shadowclaw Slam tank swap failures for Vorasius.
+    Returns list of {player, time_str, slam_num} when the same tank soaks 3+ consecutive slams.
+    """
+    SLAM_IDS = {1241808, 1281954, 1281906, 1272328}
+    tank_hits = []
+    for ev in damage_events:
+        if ev.get("type") != "damage":
+            continue
+        if ev.get("abilityGameID", 0) not in SLAM_IDS:
+            continue
+        pid = ev.get("targetID")
+        if pid not in actor_lookup:
+            continue
+        if spec_roles.get(pid) != "Tank":
+            continue
+        tank_hits.append({"ts": ev["timestamp"], "pid": pid})
+
+    if not tank_hits:
+        return []
+
+    tank_hits.sort(key=lambda x: x["ts"])
+
+    # Group into discrete slam events (hits within 1500ms = same slam instance)
+    slams = [[tank_hits[0]]]
+    for hit in tank_hits[1:]:
+        if hit["ts"] - slams[-1][-1]["ts"] < 1500:
+            slams[-1].append(hit)
+        else:
+            slams.append([hit])
+
+    # One entry per slam: whichever tank was primarily hit
+    slam_seq = [{"ts": s[0]["ts"], "pid": s[0]["pid"]} for s in slams]
+
+    failures = []
+    run_start = 0
+    for i in range(1, len(slam_seq)):
+        if slam_seq[i]["pid"] == slam_seq[i - 1]["pid"]:
+            if i - run_start >= 2:  # 3rd+ consecutive hit on same tank
+                pid      = slam_seq[i]["pid"]
+                elapsed  = (slam_seq[i]["ts"] - fight_start_ms) / 1000
+                m, s     = divmod(int(elapsed), 60)
+                failures.append({
+                    "player":   actor_lookup.get(pid, {}).get("name", f"#{pid}"),
+                    "time_str": f"{m}:{s:02d}",
+                    "slam_num": i + 1,
+                })
+        else:
+            run_start = i
+
+    return failures
+
+
+def analyze_mechanic_timestamps(damage_events: list, actor_lookup: dict,
+                                 fight_start_ms: int, mechanics: list) -> dict:
+    """Track per-hit timestamps for dmg_hits mechanics (used for table cell tooltips).
+    Returns {pid: {label: ["0:23", "1:05", ...]}}
+    """
+    spell_to_label = {}
+    for m in mechanics:
+        if m.get("type") == "dmg_hits":
+            for sid in m["spell_ids"]:
+                spell_to_label[sid] = m["label"]
+    if not spell_to_label:
+        return {}
+    result = {}
+    for ev in damage_events:
+        if ev.get("type") != "damage":
+            continue
+        pid = ev.get("targetID")
+        if pid not in actor_lookup:
+            continue
+        label = spell_to_label.get(ev.get("abilityGameID", 0))
+        if label is None:
+            continue
+        elapsed = (ev["timestamp"] - fight_start_ms) / 1000
+        m2, s2  = divmod(int(elapsed), 60)
+        result.setdefault(pid, {}).setdefault(label, []).append(f"{m2}:{s2:02d}")
+    return result
+
+
+def analyze_salhadaar_fracture_waves(interrupt_events: list, actor_lookup: dict,
+                                      fight_start_ms: int, ability_names: dict = None,
+                                      spell_names_map: dict = None) -> list:
+    """Group friendly interrupts on Fractured Images into waves for Fallen-King Salhadaar.
+    Filters to interrupts of spells with 'fracture' in the ability name (via ability_names lookup).
+    Returns list of {wave_num, wave_start_s, wave_end_s, players: {pid: [{spell, time_str}]}}.
+    """
+    ability_names  = ability_names  or {}
+    spell_names_map = spell_names_map or {}
+
+    relevant = []
+    for ev in interrupt_events:
+        extra_id = ev.get("extraAbilityGameID", 0)
+        if ability_names:
+            interrupted_name = ability_names.get(extra_id, "").lower()
+            if "fracture" not in interrupted_name:
+                continue
+        pid = ev.get("sourceID")
+        if pid not in actor_lookup:
+            continue
+        spell_id   = ev.get("abilityGameID", 0)
+        spell_name = spell_names_map.get(spell_id) or ability_names.get(spell_id, f"#{spell_id}")
+        ts_s       = (ev["timestamp"] - fight_start_ms) / 1000
+        m2, s2     = divmod(int(ts_s), 60)
+        relevant.append({"ts_s": ts_s, "pid": pid, "spell": spell_name,
+                          "time_str": f"{m2}:{s2:02d}"})
+
+    if not relevant:
+        return []
+
+    relevant.sort(key=lambda x: x["ts_s"])
+
+    # Group into waves: gap > 20s between individual interrupts = new wave
+    waves_raw = [[relevant[0]]]
+    for item in relevant[1:]:
+        if item["ts_s"] - waves_raw[-1][-1]["ts_s"] <= 20:
+            waves_raw[-1].append(item)
+        else:
+            waves_raw.append([item])
+
+    result = []
+    for wi, items in enumerate(waves_raw, 1):
+        players: dict = {}
+        for item in items:
+            players.setdefault(item["pid"], []).append(
+                {"spell": item["spell"], "time_str": item["time_str"]})
+        result.append({
+            "wave_num":    wi,
+            "wave_start_s": items[0]["ts_s"],
+            "wave_end_s":   items[-1]["ts_s"],
+            "players":      players,
+        })
+    return result
+
+
+def detect_salhadaar_wipe_events(boss_cast_events: list, fight_start_ms: int,
+                                  ability_names: dict = None) -> list:
+    """Detect Void Infusion casts (orb reached the boss) from enemy cast events.
+    Returns list of {event_type, time_str}.
+    """
+    ability_names = ability_names or {}
+    flags = []
+    for ev in boss_cast_events:
+        if ev.get("type") != "cast":
+            continue
+        aid  = ev.get("abilityGameID", 0)
+        name = ability_names.get(aid, "").lower()
+        if "void infusion" in name:
+            elapsed = (ev["timestamp"] - fight_start_ms) / 1000
+            m, s    = divmod(int(elapsed), 60)
+            flags.append({"event_type": "Void Infusion", "time_str": f"{m}:{s:02d}"})
+    return flags
+
+
 def fetch_boss_cast_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch enemy cast events for a fight (boss casts), with pagination."""
     query = """
@@ -2537,11 +2693,20 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     if has_interrupts:
                         t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
                     pid_mechs = fight_mechs.get(pid, {})
+                    pid_mts   = fight.get("mechanic_timestamps", {}).get(pid, {})
                     for m in mech_defs:
-                        cnt = pid_mechs.get(m["label"], 0)
+                        cnt   = pid_mechs.get(m["label"], 0)
+                        times = pid_mts.get(m["label"], [])
                         if cnt:
                             bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                            t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                            if times:
+                                tip_html = "<br>".join(escape(t2) for t2 in times)
+                                tip_attr = tip_html.replace("'", "&#39;")
+                                t += (f'<td class="center" style="background:{bg};cursor:help"'
+                                      f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
+                                      f' onmouseleave="hideHTip()">{cnt}</td>')
+                            else:
+                                t += f'<td class="center" style="background:{bg}">{cnt}</td>'
                         else:
                             t += '<td class="center">—</td>'
                     if has_void_marked:
@@ -2969,6 +3134,105 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
 """
             return t
 
+        def _build_vorasius_tank_swap_banner(fights_list: list) -> str:
+            """Orange warning for Shadowclaw Slam tank swap failures."""
+            all_swaps = [ev for fd in fights_list for ev in fd.get("vorasius_tank_swaps", [])]
+            if not all_swaps:
+                return ""
+            items = ""
+            for ev in all_swaps:
+                items += (f'<div class="ts-item">'
+                          f'<span class="ts-player">{escape(ev["player"])}</span>'
+                          f' <span class="ts-time">({escape(ev["time_str"])})</span>'
+                          f" didn't swap — Slam #{ev['slam_num']}"
+                          f'</div>')
+            return (f'<div class="tank-swap-warn">'
+                    f'<div class="ts-header">'
+                    f'<span class="ts-title">&#9888;&#65039; Tank Swap Missed — Shadowclaw Slam</span>'
+                    f'</div>'
+                    f'<div class="ts-body">{items}</div></div>')
+
+        def _build_salhadaar_wipe_banner(fights_list: list) -> str:
+            """Red banner if Void Infusion (orb reached boss) was detected."""
+            all_flags = [ev for fd in fights_list for ev in fd.get("salhadaar_wipe_events", [])]
+            if not all_flags:
+                return ""
+            items = ""
+            for ev in all_flags:
+                items += (f'<div class="sw-item">'
+                          f'<span class="sw-time">{escape(ev["time_str"])}</span>'
+                          f' <span class="sw-event">&#128308; {escape(ev["event_type"])}</span>'
+                          f' — orb reached the boss'
+                          f'</div>')
+            return (f'<div class="salhadaar-wipe-warn">'
+                    f'<div class="sw-header">'
+                    f'<span class="sw-title">&#128308; Wipe Condition Detected</span>'
+                    f'</div>'
+                    f'<div class="sw-body">{items}</div></div>')
+
+        def _build_salhadaar_interrupt_table(fights_list: list) -> str:
+            """Shadow Fracture interrupt wave table for Fallen-King Salhadaar.
+            Rows = players who interrupted, columns = waves, cells = spell + timestamp."""
+            waves = next((fd["salhadaar_fracture_waves"]
+                          for fd in fights_list if fd.get("salhadaar_fracture_waves")), [])
+            if not waves:
+                return ""
+
+            all_pids: set = set()
+            for wave in waves:
+                all_pids.update(int(k) if isinstance(k, str) else k for k in wave["players"])
+            if not all_pids:
+                return ""
+
+            sorted_int_pids = sorted(all_pids, key=pid_sort)
+
+            def _ts2(s):
+                m2, s2 = divmod(int(s), 60)
+                return f"{m2}:{s2:02d}"
+
+            t  = '<div class="alndust-panel">'
+            t += ('<div class="ag-header open" onclick="this.classList.toggle(\'open\');'
+                  'this.nextElementSibling.classList.toggle(\'open\')">'
+                  '<span class="ag-title">&#128683; Shadow Fracture — Interrupt Log</span>'
+                  '<span class="ag-chevron">&#9660;</span></div>')
+            t += '<div class="ag-body open"><div style="overflow-x:auto">'
+            t += '<table class="boss-table" style="width:100%;border-collapse:collapse"><thead><tr>'
+            t += '<th style="text-align:left;padding:5px 10px;color:#aaa;white-space:nowrap">Player</th>'
+            for wave in waves:
+                ws_str = _ts2(wave["wave_start_s"])
+                we_str = _ts2(wave["wave_end_s"])
+                t += (f'<th style="text-align:center;padding:5px 8px;color:#aaa;'
+                      f'border-left:1px solid #2a2a4a;white-space:nowrap">'
+                      f'Wave {wave["wave_num"]}'
+                      f'<br><span style="color:#556;font-size:11px;font-weight:400">'
+                      f'{ws_str}–{we_str}</span></th>')
+            t += '</tr></thead><tbody>'
+
+            for pid in sorted_int_pids:
+                actor = actor_lookup.get(pid, {})
+                name  = escape(actor.get("name", f"#{pid}"))
+                color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                t += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                      f'<span style="color:{color};font-weight:600">{name}</span></td>')
+                for wave in waves:
+                    pdata = wave["players"].get(pid, wave["players"].get(str(pid), []))
+                    if pdata:
+                        parts = " ".join(
+                            f'<span style="white-space:nowrap">'
+                            f'<span style="color:#a0c4ff">{escape(c["spell"])}</span>'
+                            f' <span class="ag-time">({escape(c["time_str"])})</span>'
+                            f'</span>'
+                            for c in pdata
+                        )
+                        t += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                              f'padding:4px 8px">{parts}</td>')
+                    else:
+                        t += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+                t += '</tr>'
+
+            t += '</tbody></table></div></div></div>'
+            return t
+
         # ── Pull selector + panes ──
         boss_wipes = wipe_data.get(boss_name, [])  # oldest → newest
 
@@ -2976,12 +3240,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_banners = _build_banners(fights)
         kill_table   = _render_table(fights, table_id)
         kill_chart   = _build_chart(fights[0] if fights else {}, f"{table_id}-kill")
-        kill_alndust       = _build_alndust_panel(fights)        if "Chimaerus" in boss_name else ""
-        kill_horror_waves  = _build_horror_waves_table(fights)   if "Chimaerus" in boss_name else ""
-        kill_gloom         = _build_gloom_panel(fights)          if "Vaelgor"   in boss_name else ""
-        kill_void_marked   = _build_void_marked_panel(fights)    if "Averzian"  in boss_name else ""
-        kill_add_damage    = _build_add_damage_panel(fights)     if "Averzian"  in boss_name else ""
-        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom + kill_void_marked + kill_add_damage
+        kill_alndust         = _build_alndust_panel(fights)              if "Chimaerus"  in boss_name else ""
+        kill_horror_waves    = _build_horror_waves_table(fights)         if "Chimaerus"  in boss_name else ""
+        kill_gloom           = _build_gloom_panel(fights)                if "Vaelgor"    in boss_name else ""
+        kill_void_marked     = _build_void_marked_panel(fights)          if "Averzian"   in boss_name else ""
+        kill_add_damage      = _build_add_damage_panel(fights)           if "Averzian"   in boss_name else ""
+        kill_vorasius_swap   = _build_vorasius_tank_swap_banner(fights)  if "Vorasius"   in boss_name else ""
+        kill_sal_wipe        = _build_salhadaar_wipe_banner(fights)      if "Salhadaar"  in boss_name else ""
+        kill_sal_interrupts  = _build_salhadaar_interrupt_table(fights)  if "Salhadaar"  in boss_name else ""
+        kill_content = (kill_sal_wipe + kill_vorasius_swap + kill_banners + kill_table + kill_chart
+                        + kill_horror_waves + kill_alndust + kill_gloom
+                        + kill_void_marked + kill_add_damage + kill_sal_interrupts)
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -3415,6 +3684,22 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .av-label {{ color: #f4a742; font-weight: 600; margin-right: 4px; }}
 .av-player {{ color: #e0e0e0; }}
 .av-count {{ color: #e06c6c; font-weight: 700; margin-right: 8px; }}
+/* ── Tank swap warning (Vorasius) ── */
+.tank-swap-warn {{ margin-bottom: 12px; background: rgba(244,167,66,0.08); border: 1px solid rgba(244,167,66,0.4); border-radius: 8px; overflow: hidden; }}
+.ts-header {{ display: flex; align-items: center; padding: 8px 14px; }}
+.ts-title {{ color: #f4a742; font-weight: 700; font-size: 13px; }}
+.ts-body {{ padding: 4px 0 8px; }}
+.ts-item {{ padding: 3px 14px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.04); }}
+.ts-player {{ color: #f4a742; font-weight: 700; }}
+.ts-time {{ color: #a0b4ff; font-weight: 600; }}
+/* ── Salhadaar wipe condition banner ── */
+.salhadaar-wipe-warn {{ margin-bottom: 12px; background: rgba(229,115,115,0.1); border: 1px solid rgba(229,115,115,0.5); border-radius: 8px; overflow: hidden; }}
+.sw-header {{ display: flex; align-items: center; padding: 8px 14px; }}
+.sw-title {{ color: #e57373; font-weight: 700; font-size: 13px; }}
+.sw-body {{ padding: 4px 0 8px; }}
+.sw-item {{ padding: 3px 14px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.04); }}
+.sw-time {{ color: #a0b4ff; font-weight: 600; margin-right: 6px; }}
+.sw-event {{ color: #e57373; font-weight: 700; }}
 /* ── Alndust Upheaval grouping panel ── */
 .hw-title {{ font-size: 13px; font-weight: 600; color: #aaa; padding: 10px 0 6px; letter-spacing: .04em; }}
 .hw-tbl {{ margin-bottom: 8px; }}
@@ -6009,6 +6294,22 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                         horror_actor_ids, actor_lookup, fight_start,
                         fight_start + fight_dur_ms,
                     )
+            # Vorasius: tank swap failures
+            vorasius_tank_swaps = (analyze_vorasius_tank_swaps(
+                damage_events, actor_lookup, fight_start, fight_spec_roles.get(fid, {}))
+                if "Vorasius" in fname else [])
+            # All bosses: per-mechanic hit timestamps (for table tooltips)
+            mechanic_timestamps = analyze_mechanic_timestamps(
+                damage_events, actor_lookup, fight_start, mech_defs)
+            # Salhadaar: Shadow Fracture interrupt wave table + Void Infusion wipe flags
+            salhadaar_fracture_waves = []
+            salhadaar_wipe_events    = []
+            if "Salhadaar" in fname:
+                salhadaar_fracture_waves = analyze_salhadaar_fracture_waves(
+                    interrupt_events, actor_lookup, fight_start,
+                    ability_names=ability_names, spell_names_map=SPELL_NAMES)
+                salhadaar_wipe_events = detect_salhadaar_wipe_events(
+                    cast_events, fight_start, ability_names=ability_names)
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
                 "deaths": deaths, "all_player_ids": all_pids,
@@ -6025,6 +6326,10 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "add_damage":      add_damage,
                 "horror_damage":   horror_damage,
                 "horror_waves":    horror_waves,
+                "vorasius_tank_swaps":     vorasius_tank_swaps,
+                "mechanic_timestamps":     mechanic_timestamps,
+                "salhadaar_fracture_waves": salhadaar_fracture_waves,
+                "salhadaar_wipe_events":    salhadaar_wipe_events,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
         except Exception as e:
@@ -6107,6 +6412,22 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                             cast_events=crown_casts)
                     except Exception as ce:
                         print(f"  [WARN] Crown mechanics fetch failed for fight {fid}: {ce}")
+                # Vorasius: tank swap failures
+                w_vorasius_tank_swaps = (analyze_vorasius_tank_swaps(
+                    damage_events, actor_lookup, fight_start, wipe_spec_roles)
+                    if "Vorasius" in fname else [])
+                # All bosses: per-mechanic hit timestamps
+                w_mechanic_timestamps = analyze_mechanic_timestamps(
+                    damage_events, actor_lookup, fight_start, mech_defs)
+                # Salhadaar: fracture wave table + wipe flags
+                w_sal_fracture_waves = []
+                w_sal_wipe_events    = []
+                if "Salhadaar" in fname:
+                    w_sal_fracture_waves = analyze_salhadaar_fracture_waves(
+                        interrupt_events, actor_lookup, fight_start,
+                        ability_names=ability_names, spell_names_map=SPELL_NAMES)
+                    w_sal_wipe_events = detect_salhadaar_wipe_events(
+                        cast_events, fight_start, ability_names=ability_names)
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
                     "wipe_num": wipe_num, "boss_pct": boss_pct,
@@ -6120,6 +6441,10 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                     "defensive_casts": wipe_defensive_casts,
                     "external_casts":  wipe_external_casts,
                     "crown_mechanics": crown_mechanics,
+                    "vorasius_tank_swaps":      w_vorasius_tank_swaps,
+                    "mechanic_timestamps":      w_mechanic_timestamps,
+                    "salhadaar_fracture_waves": w_sal_fracture_waves,
+                    "salhadaar_wipe_events":    w_sal_wipe_events,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
