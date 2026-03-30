@@ -1,5 +1,11 @@
 {
   "permissions": {
+    "allow": [
+      "WebFetch(domain:www.wowhead.com)",
+      "WebFetch(domain:www.mythictrap.com)",
+      "WebFetch(domain:www.method.gg)",
+      "WebFetch(domain:www.icy-veins.com)"
+    ],
     "defaultMode": "bypassPermissions"
   }
 }
