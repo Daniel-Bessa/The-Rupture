@@ -24,7 +24,8 @@
       "Bash(python -m py_compile wcl_craft_audit.py)",
       "Bash(python -c \":*)",
       "WebFetch(domain:nether.wowhead.com)",
-      "WebFetch(domain:www.icy-veins.com)"
+      "WebFetch(domain:www.icy-veins.com)",
+      "Bash(python -c \"import json; d=json.load\\(open\\(''data/raid_93t7Y4LNbzBZCGDM.json''\\)\\); print\\(list\\(d.keys\\(\\)\\)\\)\")"
     ]
   }
 }

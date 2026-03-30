@@ -564,6 +564,39 @@ def fetch_uptime_table(token: str, report_code: str, fight_id: int) -> dict:
             for e in entries if "id" in e}
 
 
+def fetch_add_instance_damage(token: str, report_code: str, fight_id: int,
+                              actor_id: int, fight_dur_ms: int) -> list:
+    """Fetch per-player damage + active time for each instance of an add (actor_id).
+    Loops through instances 10001, 10002, ... until no data is returned.
+    Returns list of {instance, players: {pid: {dmg, active_ms}}}, ordered by instance.
+    """
+    query = """
+    query ($code: String!, $fightID: Int!, $filter: String!) {
+        reportData { report(code: $code) {
+            table(dataType: DamageDone, fightIDs: [$fightID], filterExpression: $filter)
+        }}
+    }
+    """
+    results = []
+    for inst in range(1, 30):  # up to 29 instances
+        filter_expr = f"target.id = {actor_id}.{10000 + inst}"
+        resp    = query_wcl(token, query, {"code": report_code, "fightID": fight_id, "filter": filter_expr})
+        table   = resp["reportData"]["report"]["table"]
+        entries = table.get("data", {}).get("entries", []) if isinstance(table, dict) else []
+        if not entries:
+            break
+        players = {}
+        for e in entries:
+            if "id" not in e:
+                continue
+            players[e["id"]] = {
+                "dmg":       e.get("total", 0),
+                "active_ms": e.get("activeTime", 0),
+            }
+        results.append({"instance": inst, "players": players})
+    return results
+
+
 def fetch_healing_table(token: str, report_code: str, fight_id: int) -> dict:
     """Fetch healing done per player from WCL table endpoint.
     Returns {sourceID: total_healing_int}.
@@ -709,6 +742,7 @@ def aggregate_damage_taken(damage_events: list, actor_lookup: dict) -> dict:
 _ALNDUST_SOAK_IDS   = {1262305, 1246827}   # Alndust Upheaval — players hit = "went down"
 _GLOOM_SPELL_ID          = 1245391  # Gloom — Vaelgor & Ezzorak purple ball soak
 _GLOOMTOUCHED_DEBUFF_ID  = 1245554  # Gloomtouched — debuff applied when a player soaks Gloom
+_VOID_MARKED_DEBUFF_ID   = 1280023  # Void Marked — Imperator Averzian dispel assignment (confirmed from Mythic logs)
 _CROWN_CIRCLE_ID    = 1233887              # P3 Void Circle debuff
 _CROWN_SILVERSTRIKE_HIT_IDS  = {1233649, 1237729}  # Silverstrike damage events
 _CROWN_VOID_STACK_ID         = 1233602             # Void Stacks debuff
@@ -1271,6 +1305,71 @@ def analyze_gloom_soaks(debuff_events: list, player_pids: set,
                 seen.add(pid)
         t_s = wave[0][0] // 1000
         result.append({"wave": wi + 1, "t_s": t_s, "hit_pids": hit_pids})
+    return result
+
+
+def fetch_void_marked_events(token: str, report_code: str, fight_id: int) -> list:
+    """Fetch Void Marked (1280023) applydebuff + removedebuff events for an Averzian fight."""
+    query = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Debuffs,
+                fightIDs: [$fightID],
+                hostilityType: Friendlies,
+                filterExpression: "ability.id = 1280023",
+                limit: 500
+            ) { data }
+        }}
+    }
+    """
+    resp = query_wcl(token, query, {"code": report_code, "fightID": fight_id})
+    return resp["reportData"]["report"]["events"].get("data", [])
+
+
+def analyze_void_marked(debuff_events: list, player_pids: set,
+                         fight_start_ms: int = 0) -> list:
+    """Pair each Void Marked application with its removal/dispel.
+    Returns list of dicts: target_pid, t_s, dispeller_pid (None=expired), dispel_t_s.
+    """
+    apps    = []  # (t_ms, target_pid)
+    removes = []  # (t_ms, target_pid, source_pid)
+    for e in debuff_events:
+        if e.get("abilityGameID") != _VOID_MARKED_DEBUFF_ID:
+            continue
+        t_ms   = e.get("timestamp", 0) - fight_start_ms
+        etype  = e.get("type", "")
+        target = e.get("targetID")
+        source = e.get("sourceID")
+        if etype == "applydebuff" and target in player_pids:
+            apps.append((t_ms, target))
+        elif etype == "removedebuff" and target in player_pids:
+            removes.append((t_ms, target, source))
+
+    apps.sort()
+    removes.sort()
+
+    result = []
+    used_removes = set()
+    for app_t, target_pid in apps:
+        # Find the earliest matching removedebuff for this target after the application
+        dispel_t_ms    = None
+        dispeller_pid  = None
+        for ri, (rem_t, rem_target, rem_source) in enumerate(removes):
+            if ri in used_removes:
+                continue
+            if rem_target == target_pid and rem_t >= app_t:
+                dispel_t_ms   = rem_t
+                # source != target and source in players = external dispel
+                dispeller_pid = rem_source if (rem_source != target_pid and rem_source in player_pids) else None
+                used_removes.add(ri)
+                break
+        result.append({
+            "t_s":          app_t // 1000,
+            "target_pid":   target_pid,
+            "dispel_t_s":   dispel_t_ms // 1000 if dispel_t_ms is not None else None,
+            "dispeller_pid": dispeller_pid,
+        })
     return result
 
 
@@ -2143,8 +2242,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         table_id       = f"boss-tbl-{id_prefix}-{boss_idx}"
         boss_name_base = boss_name.rsplit(" (", 1)[0]
         mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
-        has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
-        total_cols     = 8 + len(mech_defs) + (1 if has_interrupts else 0)
+        has_interrupts  = boss_name_base in BOSS_HAS_INTERRUPTS
+        has_void_marked = "Averzian" in boss_name_base
+        total_cols      = 8 + len(mech_defs) + (1 if has_interrupts else 0) + (1 if has_void_marked else 0)
 
         all_pids_set = set()
         for fight in fights:
@@ -2274,7 +2374,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                       f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
                       f' onclick="sortBossTable(\'{tbl_id}\',{mci},this)">'
                       f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
-            t += '<th>Notes</th>'
+            if has_void_marked:
+                t += '<th class="detail-h" style="min-width:140px"><span>Void Marked</span></th>'
+            else:
+                t += '<th>Notes</th>'
             t += '</tr></thead><tbody>'
 
             for fi, fight in enumerate(fights_list, 1):
@@ -2392,7 +2495,27 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                             t += f'<td class="center" style="background:{bg}">{cnt}</td>'
                         else:
                             t += '<td class="center">—</td>'
-                    t += '<td></td>'
+                    if has_void_marked:
+                        vm_list = [mv for mv in fight.get("void_marked", []) if mv["target_pid"] == pid]
+                        if vm_list:
+                            parts = []
+                            for mv in vm_list:
+                                tm2, ts2 = divmod(mv["t_s"], 60)
+                                t_str2   = f"{tm2}:{ts2:02d}"
+                                if mv["dispeller_pid"] is not None:
+                                    d_name = escape(actor_lookup.get(mv["dispeller_pid"], {}).get("name", f"#{mv['dispeller_pid']}"))
+                                    parts.append(f'<span style="color:#e57373">{t_str2}</span>'
+                                                 f' <span class="vm-arrow">&#8594;</span>'
+                                                 f' <span style="color:#81c784">{d_name}</span>')
+                                else:
+                                    parts.append(f'<span style="color:#e57373">{t_str2}</span>'
+                                                 f' <span class="vm-arrow">&#8594;</span>'
+                                                 f' <span class="vm-expired">expired</span>')
+                            t += f'<td class="detail-cell">{"<br>".join(parts)}</td>'
+                        else:
+                            t += '<td class="center">—</td>'
+                    else:
+                        t += '<td></td>'
                     t += '</tr>'
 
             t += '</tbody></table></div>'
@@ -2485,6 +2608,158 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 f'<span class="ag-title">&#127761; Gloomfield — Who Got Hit</span>'
                 f'<span class="ag-chevron">&#9660;</span></div>'
                 f'<div class="ag-body open">{rows}</div></div>'
+            )
+
+        def _group_void_marked_waves(marks: list) -> list:
+            """Group Void Marked events into waves (gap > 5s = new wave). Returns list of waves."""
+            if not marks:
+                return []
+            sorted_marks = sorted(marks, key=lambda x: x["t_s"])
+            waves = [[sorted_marks[0]]]
+            for m in sorted_marks[1:]:
+                if m["t_s"] - waves[-1][-1]["t_s"] <= 5:
+                    waves[-1].append(m)
+                else:
+                    waves.append([m])
+            return waves
+
+        def _build_void_marked_panel(fights_list: list) -> str:
+            """Render Void Marked waves — grouped by simultaneous application (~5s window)."""
+            marks = []
+            for fd in fights_list:
+                if fd.get("void_marked"):
+                    marks = fd["void_marked"]
+                    break
+
+            def _colored_name(pid):
+                a     = actor_lookup.get(pid, {})
+                name  = escape(a.get("name", f"#{pid}"))
+                color = CLASS_COLORS.get(a.get("subType", ""), "#ccc")
+                return f'<span style="color:{color};font-weight:600">{name}</span>'
+
+            def _ts(s):
+                m, sec = divmod(s, 60)
+                return f"{m}:{sec:02d}"
+
+            if not marks:
+                body = '<div style="color:#555;font-size:12px;padding:8px 4px;">No Void Marked events recorded.</div>'
+            else:
+                waves = _group_void_marked_waves(marks)
+
+                body = ""
+                for wi, wave in enumerate(waves, 1):
+                    chips = ""
+                    for m in sorted(wave, key=lambda x: x["t_s"]):
+                        apply_str = _ts(m["t_s"])
+                        if m["dispel_t_s"] is not None:
+                            remove_str = _ts(m["dispel_t_s"])
+                            right = f'<span class="ag-time">{remove_str}</span> <span style="color:#81c784;font-size:11px">Removed</span>'
+                        else:
+                            right = '<span style="color:#555;font-size:11px">—</span>'
+                        chips += (f'<span style="display:inline-flex;align-items:center;gap:5px;'
+                                  f'background:rgba(255,255,255,0.04);border:1px solid #2a2a4a;'
+                                  f'border-radius:6px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12px">'
+                                  f'{_colored_name(m["target_pid"])} <span class="ag-time">({apply_str})</span>'
+                                  f' <span class="vm-arrow">&#8594;</span> {right}</span>')
+                    wm2, ws2 = divmod(wave[0]["t_s"], 60)
+                    body += (
+                        f'<div class="ag-wave">'
+                        f'<div class="ag-wave-label">Wave {wi} <span class="ag-time">({wm2}:{ws2:02d})</span></div>'
+                        f'<div style="display:flex;flex-wrap:wrap;padding:2px 0">{chips}</div>'
+                        f'</div>'
+                    )
+
+            return (
+                f'<div class="alndust-panel">'
+                f'<div class="ag-header open" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                f'<span class="ag-title">&#128165; Void Marked — Dispel Log</span>'
+                f'<span class="ag-chevron">&#9660;</span></div>'
+                f'<div class="ag-body open">{body}</div></div>'
+            )
+
+        def _build_add_damage_panel(fights_list: list) -> str:
+            """Render per-player, per-add damage + active-time table (one column per add instance)."""
+            instances: list = []
+            fight_dur_ms    = 0
+            vm_marks: list  = []
+            for fd in fights_list:
+                if fd.get("add_damage"):
+                    instances    = fd["add_damage"]
+                    fight_dur_ms = fd.get("fight_dur_ms", 0)
+                    vm_marks     = fd.get("void_marked", [])
+                    break
+
+            # Handle old dict/list-of-tuples cache formats gracefully
+            if not instances or not isinstance(instances, list) or not isinstance(instances[0], dict):
+                body = '<div style="color:#555;font-size:12px;padding:8px 4px;">No add damage recorded.</div>'
+            else:
+                vm_waves    = _group_void_marked_waves(vm_marks)
+                wave_labels = [f"{w[0]['t_s']//60}:{w[0]['t_s']%60:02d}" for w in vm_waves]
+                # Label each add instance with the corresponding wave time if available
+                def _add_label(i):
+                    lbl = f"Add {i}"
+                    if i - 1 < len(wave_labels):
+                        lbl += f' <span class="ag-time">({wave_labels[i - 1]})</span>'
+                    return lbl
+
+                def fmt(v):
+                    if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+                    if v >= 1_000:     return f"{v/1_000:.0f}k"
+                    return str(int(v)) if v else "—"
+
+                # Collect all player IDs across all instances, sorted by total damage
+                all_pids_set: set = set()
+                for inst in instances:
+                    all_pids_set.update(inst["players"].keys())
+                sorted_pids = sorted(all_pids_set,
+                                     key=lambda p: sum(inst["players"].get(p, {}).get("dmg", 0) for inst in instances),
+                                     reverse=True)
+
+                thead = '<tr><th rowspan="2">Player</th>'
+                for inst in instances:
+                    thead += f'<th colspan="2" style="text-align:center;border-left:1px solid #2a2a4a">{_add_label(inst["instance"])}</th>'
+                thead += '<th rowspan="2" style="border-left:1px solid #2a2a4a">Total</th></tr>'
+                thead += '<tr>'
+                for _ in instances:
+                    thead += '<th style="border-left:1px solid #2a2a4a">Dmg</th><th>Uptime</th>'
+                thead += '</tr>'
+
+                rows = ""
+                for pid in sorted_pids:
+                    name      = actor_lookup.get(pid, {}).get("name", f"#{pid}")
+                    total_dmg = sum(inst["players"].get(pid, {}).get("dmg", 0) for inst in instances)
+                    rows += f'<tr><td>{escape(name)}</td>'
+                    for inst in instances:
+                        pdata = inst["players"].get(pid)
+                        if pdata and pdata["dmg"]:
+                            active_ms = pdata.get("active_ms", 0)
+                            uptime_p  = min(active_ms / fight_dur_ms * 100, 100) if fight_dur_ms > 0 else 0
+                            rows += (f'<td class="add-dmg-val" style="border-left:1px solid #2a2a4a">{fmt(pdata["dmg"])}</td>'
+                                     f'<td class="add-dmg-val">{uptime_p:.0f}%</td>')
+                        else:
+                            rows += '<td class="add-dmg-val" style="border-left:1px solid #2a2a4a;color:#444">—</td><td class="add-dmg-val" style="color:#444">—</td>'
+                    rows += f'<td class="add-dmg-val" style="border-left:1px solid #2a2a4a;font-weight:600">{fmt(total_dmg)}</td></tr>'
+
+                body = f'<table class="add-dmg-table"><thead>{thead}</thead><tbody>{rows}</tbody></table>'
+
+            return (
+                f'<div class="alndust-panel">'
+                f'<div class="ag-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                f'<span class="ag-title">&#128165; Abyssal Voidshaper — Add Damage</span>'
+                f'<span class="ag-chevron">&#9660;</span></div>'
+                f'<div class="ag-body open">{body}</div></div>'
+            )
+
+        def _build_add_debuff_panel(_fights_list: list) -> str:
+            """Placeholder — tracks who dispels the stacking debuff off Abyssal Voidshapers."""
+            return (
+                f'<div class="alndust-panel">'
+                f'<div class="ag-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                f'<span class="ag-title">&#128165; Abyssal Voidshaper — Debuff Soaks</span>'
+                f'<span class="ag-chevron">&#9660;</span></div>'
+                f'<div class="ag-body open">'
+                f'<div style="color:#555;font-size:12px;padding:8px 4px;">No data — debuff tracking available on Mythic difficulty.</div>'
+                f'</div></div>'
             )
 
         def _build_horror_waves_table(fights_list: list) -> str:
@@ -2656,7 +2931,10 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_alndust       = _build_alndust_panel(fights)        if "Chimaerus" in boss_name else ""
         kill_horror_waves  = _build_horror_waves_table(fights)   if "Chimaerus" in boss_name else ""
         kill_gloom         = _build_gloom_panel(fights)          if "Vaelgor"   in boss_name else ""
-        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom
+        kill_void_marked   = _build_void_marked_panel(fights)    if "Averzian"  in boss_name else ""
+        kill_add_damage    = _build_add_damage_panel(fights)     if "Averzian"  in boss_name else ""
+        kill_add_debuff    = _build_add_debuff_panel(fights)     if "Averzian"  in boss_name else ""
+        kill_content = kill_banners + kill_table + kill_chart + kill_horror_waves + kill_alndust + kill_gloom + kill_void_marked + kill_add_damage + kill_add_debuff
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -3112,6 +3390,14 @@ tr.section-sep td {{ color: #555; font-size: 11px; padding: 4px 10px; background
 .ag-chip.ag-double-up {{ background: rgba(255,183,77,0.1); border: 1px solid rgba(255,183,77,0.4); color: #ffb74d; font-weight: 600; padding: 2px 8px; border-radius: 12px; }}
 .ag-miss-count {{ color: #e57373; font-size: 11px; font-weight: 700; margin-left: 8px; }}
 .ag-double-up-count {{ color: #ffb74d; font-size: 11px; font-weight: 700; margin-left: 8px; }}
+.ag-chip.ag-chip-heal {{ background: rgba(129,199,132,0.12); border: 1px solid rgba(129,199,132,0.35); color: #81c784; padding: 2px 8px; border-radius: 12px; }}
+.vm-arrow {{ color: #555; font-size: 13px; }}
+.vm-expired {{ color: #555; font-size: 12px; font-style: italic; }}
+.add-dmg-table {{ width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }}
+.add-dmg-table th {{ color: #888; font-weight: 600; text-align: left; padding: 4px 8px; border-bottom: 1px solid #2a2a4a; }}
+.add-dmg-table td {{ padding: 3px 8px; border-bottom: 1px solid #1a1a2e; color: #ccc; }}
+.add-dmg-table tr:last-child td {{ border-bottom: none; }}
+.add-dmg-val {{ text-align: right; color: #aaa; font-variant-numeric: tabular-nums; }}
 /* ── Sort arrows ── */
 .sort-arrow {{ opacity: 0.6; font-size: 11px; margin-left: 4px; }}
 th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
@@ -3499,6 +3785,173 @@ function sortPerfTable(col, th) {{
     print(f"[OK] Player pages saved: {len(profiles)} player(s).")
 
 
+_VOIDSPIRE_BOSS_ORDER = [
+    "Chimaerus, the Undreamt God",
+    "Imperator Averzian",
+    "Vorasius",
+    "Fallen-King Salhadaar",
+    "Vaelgor & Ezzorak",
+    "Lightblinded Vanguard",
+    "Crown of the Cosmos",
+]
+_BOSS_DEDICATED_PAGES = {
+    "Chimaerus, the Undreamt God": "boss_chimaerus_heroic.html",
+    "Crown of the Cosmos":         "boss_crown_heroic.html",
+}
+
+
+def write_bosses_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write a per-boss hub page (bosses.html) aggregating kills/wipes across all reports."""
+    from html import escape
+    diff_order = {"Mythic": 0, "Heroic": 1, "Normal": 2}
+
+    # Aggregate per boss_base per difficulty
+    # Structure: {boss_base: {diff: {"kills": int, "wipes": list[dict], "page": str}}}
+    boss_agg: dict = {}
+
+    for day in days_data:
+        bd       = day.get("boss_data", {})
+        wd       = day.get("wipe_data", {})
+        day_diff = day.get("difficulty", "Normal")
+
+        def _page(d):
+            fn = _raid_filename(d)
+            return fn
+
+        for key, fights in bd.items():
+            parts = key.rsplit(" (", 1)
+            base  = parts[0]
+            diff  = parts[1].rstrip(")") if len(parts) > 1 else day_diff
+            entry = boss_agg.setdefault(base, {}).setdefault(diff, {"kills": 0, "wipes": [], "page": ""})
+            entry["kills"] += len(fights)
+            if not entry["page"]:
+                entry["page"] = _page(day)
+
+        for key, wipes in wd.items():
+            parts = key.rsplit(" (", 1)
+            base  = parts[0]
+            diff  = parts[1].rstrip(")") if len(parts) > 1 else day_diff
+            entry = boss_agg.setdefault(base, {}).setdefault(diff, {"kills": 0, "wipes": [], "page": ""})
+            entry["wipes"].extend(wipes)
+            if not entry["page"]:
+                entry["page"] = _page(day)
+
+    def _boss_card(boss_base: str) -> str:
+        diffs = boss_agg.get(boss_base, {})
+        if not diffs:
+            # Not attempted
+            return (
+                f'<div class="boss-card boss-card-unstarted">'
+                f'<div class="bc-name">{escape(boss_base)}</div>'
+                f'<div class="bc-status bc-unstarted">Not attempted</div>'
+                f'</div>'
+            )
+
+        # Pick best difficulty
+        best_diff = min(diffs.keys(), key=lambda d: diff_order.get(d, 9))
+        info      = diffs[best_diff]
+        kills     = info["kills"]
+        wipes     = info["wipes"]
+        page      = _BOSS_DEDICATED_PAGES.get(boss_base, info["page"])
+        diff_cls  = {"Mythic": "badge-mythic", "Heroic": "badge-heroic", "Normal": "badge-normal"}.get(best_diff, "badge-normal")
+
+        if kills > 0:
+            best_kill_ms = None
+            for day in days_data:
+                for key, fights in day.get("boss_data", {}).items():
+                    if key.startswith(boss_base):
+                        for f in fights:
+                            ms = f.get("fight_dur_ms", 0)
+                            if ms and (best_kill_ms is None or ms < best_kill_ms):
+                                best_kill_ms = ms
+            kill_time = ""
+            if best_kill_ms:
+                m, s   = divmod(best_kill_ms // 1000, 60)
+                kill_time = f' &middot; Best: {m}:{s:02d}'
+            status_html = (
+                f'<div class="bc-status bc-killed">&#10003; Killed'
+                f'<span class="bc-detail"> &middot; {kills} kill{"s" if kills != 1 else ""}{kill_time}</span>'
+                f'</div>'
+            )
+        elif wipes:
+            best_pct  = min(w.get("boss_pct", 100) for w in wipes)
+            status_html = (
+                f'<div class="bc-status bc-prog">Progressing</div>'
+                f'<div class="bc-detail">{len(wipes)} wipe{"s" if len(wipes) != 1 else ""} &middot; Best: {best_pct:.1f}%</div>'
+            )
+        else:
+            status_html = '<div class="bc-status bc-unstarted">No data</div>'
+
+        link_open  = f'<a class="boss-card boss-card-{best_diff.lower()}" href="{escape(page)}">' if page else f'<div class="boss-card boss-card-{best_diff.lower()}">'
+        link_close = '</a>' if page else '</div>'
+
+        return (
+            f'{link_open}'
+            f'<div class="bc-top"><span class="badge-diff {diff_cls}">{escape(best_diff)}</span></div>'
+            f'<div class="bc-name">{escape(boss_base)}</div>'
+            f'{status_html}'
+            f'<div class="bc-link">{"View Analysis &rarr;" if page else ""}</div>'
+            f'{link_close}'
+        )
+
+    ordered   = _VOIDSPIRE_BOSS_ORDER
+    extras    = [b for b in boss_agg if b not in ordered]
+    all_bosses = ordered + extras
+    cards_html = "\n".join(_boss_card(b) for b in all_bosses)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Boss Progression — {escape(guild_name)}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
+.page-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }}
+h1 {{ color: #e0e0e0; font-size: 24px; }}
+.back {{ color: #7289DA; font-size: 13px; text-decoration: none; display: inline-block; margin-bottom: 20px; }}
+.back:hover {{ text-decoration: underline; }}
+.subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
+.boss-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }}
+.boss-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 18px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
+.boss-card:hover {{ transform: translateY(-2px); }}
+.boss-card-mythic  {{ border-color: #3a1a5a; }}
+.boss-card-mythic:hover  {{ border-color: #c77dff; }}
+.boss-card-heroic  {{ border-color: #1a2a4a; }}
+.boss-card-heroic:hover  {{ border-color: #64b5f6; }}
+.boss-card-normal  {{ border-color: #1a2a2a; }}
+.boss-card-unstarted {{ border-color: #222; opacity: 0.5; }}
+.bc-top {{ margin-bottom: 10px; }}
+.badge-diff {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }}
+.badge-normal  {{ background: #1a3a1a; color: #4caf50; }}
+.badge-heroic  {{ background: #1a2a4a; color: #64b5f6; }}
+.badge-mythic  {{ background: #2a1a3a; color: #c77dff; }}
+.bc-name {{ font-size: 15px; font-weight: 700; color: #e0e0e0; margin-bottom: 10px; line-height: 1.3; }}
+.bc-status {{ font-size: 13px; font-weight: 600; margin-bottom: 4px; }}
+.bc-killed {{ color: #81c784; }}
+.bc-prog   {{ color: #ffb74d; }}
+.bc-unstarted {{ color: #555; }}
+.bc-detail {{ font-size: 12px; color: #888; margin-bottom: 8px; }}
+.bc-link {{ color: #7289DA; font-size: 12px; font-weight: 600; margin-top: 10px; }}
+.boss-card:hover .bc-link {{ text-decoration: underline; }}
+</style>
+</head>
+<body>
+<a class="back" href="index.html">&#8592; Back to Raids</a>
+<div class="page-header"><h1>&#9760; Boss Progression — {escape(guild_name)}</h1></div>
+<div class="subtitle">{len(all_bosses)} bosses tracked</div>
+<div class="boss-grid">
+{cards_html}
+</div>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Bosses page saved: {output_path}")
+
+
 def write_index_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write the overview index.html.
     Normal splits are expanded into individual cards (numbered Run 1, Run 2, …).
@@ -3564,9 +4017,46 @@ def write_index_html(days_data: list, output_path: str, guild_name: str = "") ->
             f'</a>'
         )
 
-    cards_html  = "\n".join(_card(c, i == 0) for i, c in enumerate(all_cards))
-    total_cards = len(all_cards)
-    gear_link   = '<a href="gear_normal.html" class="gear-link" title="Crafted Gear — All Normal Runs">⚙</a>' if nm_cards else ""
+    mythic_cards = [c for c in all_cards if c["diff"] == "Mythic"]
+    legacy_cards = [c for c in all_cards if c["diff"] != "Mythic"]
+    total_cards  = len(all_cards)
+    gear_link    = '<a href="gear_normal.html" class="gear-link" title="Crafted Gear — All Normal Runs">⚙</a>' if nm_cards else ""
+
+    # Build Mythic section (prominent, always open)
+    if mythic_cards:
+        mythic_html = (
+            '<div class="section-header section-mythic">&#9876; Mythic Progression</div>'
+            '<div class="raid-grid mythic-grid">'
+            + "\n".join(_card(c, i == 0) for i, c in enumerate(mythic_cards))
+            + '</div>'
+        )
+    else:
+        mythic_html = ""
+
+    # Build Normal/Heroic archive section (collapsed by default if Mythic exists)
+    if legacy_cards:
+        legacy_inner = (
+            '<div class="raid-grid">'
+            + "\n".join(_card(c, i == 0 and not mythic_cards) for i, c in enumerate(legacy_cards))
+            + '</div>'
+        )
+        if mythic_cards:
+            legacy_html = (
+                f'<details class="legacy-section">'
+                f'<summary class="section-header section-legacy">Normal &amp; Heroic Archive'
+                f'<span class="legacy-count">{len(legacy_cards)} run{"s" if len(legacy_cards) != 1 else ""}</span>'
+                f'</summary>'
+                f'{legacy_inner}'
+                f'</details>'
+            )
+        else:
+            # No Mythic yet — show all normally with a neutral header
+            legacy_html = (
+                '<div class="section-header section-legacy">Normal &amp; Heroic</div>'
+                + legacy_inner
+            )
+    else:
+        legacy_html = ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -3585,7 +4075,17 @@ h1 {{ color: #7289DA; font-size: 24px; }}
 .boss-link {{ color: #d29922; font-size: 18px; text-decoration: none; line-height: 1; font-weight: 700; }}
 .boss-link:hover {{ color: #e5cc80; }}
 .subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
-.raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }}
+.section-header {{ font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #2a2a4a; }}
+.section-mythic {{ color: #c77dff; border-color: #4a1a6a; margin-bottom: 14px; }}
+.section-legacy {{ color: #666; border-color: #2a2a4a; cursor: pointer; display: flex; align-items: center; gap: 10px; list-style: none; margin-bottom: 14px; }}
+.section-legacy::before {{ content: "▶"; font-size: 10px; color: #555; transition: transform 0.15s; }}
+details[open] > .section-legacy::before {{ content: "▼"; }}
+.section-legacy::-webkit-details-marker {{ display: none; }}
+.legacy-count {{ color: #555; font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; }}
+.legacy-section {{ margin-top: 36px; }}
+.raid-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; margin-bottom: 36px; }}
+.mythic-grid .raid-card {{ border-color: #3a1a5a; }}
+.mythic-grid .raid-card:hover {{ border-color: #c77dff; }}
 .raid-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
 .raid-card:hover {{ border-color: #7289DA; transform: translateY(-2px); }}
 .card-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }}
@@ -3603,11 +4103,10 @@ h1 {{ color: #7289DA; font-size: 24px; }}
 </style>
 </head>
 <body>
-<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}<a href="roster.html" class="roster-link" title="Guild Roster">👥</a><a href="boss_chimaerus_heroic.html" class="boss-link" title="Boss Progression — Chimaerus (Heroic)">🐲</a><a href="boss_crown_heroic.html" class="boss-link" title="Boss Progression — Crown of the Cosmos (Heroic)">👁</a></div>
+<div class="page-header"><h1>Raid Audit — {escape(guild_name)}</h1>{gear_link}<a href="roster.html" class="roster-link" title="Guild Roster">&#128101;</a><a href="bosses.html" class="boss-link" title="Boss Progression">&#9760;</a></div>
 <div class="subtitle">{total_cards} entr{"ies" if total_cards != 1 else "y"} tracked</div>
-<div class="raid-grid">
-{cards_html}
-</div>
+{mythic_html}
+{legacy_html}
 </body>
 </html>"""
 
@@ -5274,6 +5773,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
     # Colossal Horror actor IDs for this report (Chimaerus add)
     _COLOSSAL_HORROR_GAME_IDS = {245556, 249341, 257691}
     horror_actor_ids = {a["id"] for a in npc_actors if a.get("gameID") in _COLOSSAL_HORROR_GAME_IDS}
+    # Abyssal Voidshaper + Obscurion Endwalker (Heroic/Mythic transform) actor IDs for Averzian
+    _AVERZIAN_ADD_GAME_IDS = {252918, 256942}  # Abyssal Voidshaper + Obscurion Endwalker
+    averzian_add_actor_ids = {a["id"] for a in npc_actors if a.get("gameID") in _AVERZIAN_ADD_GAME_IDS}
 
     # Gear
     all_combatant_events = []
@@ -5412,6 +5914,19 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 gloom_soaks   = analyze_gloom_soaks(gloom_debuffs, all_pids, fight_start)
             else:
                 gloom_soaks = []
+            if "Averzian" in fname:
+                void_marked_events = fetch_void_marked_events(token, report_code, fid)
+                void_marked_data   = analyze_void_marked(void_marked_events, all_pids, fight_start)
+                # add_damage: list of per-instance dicts from WCL table endpoint
+                add_damage: list = []
+                voidshaper_actor = next((a["id"] for a in npc_actors
+                                         if a.get("gameID") == 252918), None)
+                if voidshaper_actor:
+                    add_damage = fetch_add_instance_damage(
+                        token, report_code, fid, voidshaper_actor, fight_dur_ms)
+            else:
+                void_marked_data = []
+                add_damage       = {}
             # Per-player damage to Colossal Horror + per-wave analysis (Chimaerus only)
             horror_damage: dict = {}
             horror_waves: list  = []
@@ -5443,6 +5958,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "external_casts":  external_casts,
                 "alndust_groups":  alndust_groups,
                 "gloom_soaks":     gloom_soaks,
+                "void_marked":     void_marked_data,
+                "add_damage":      add_damage,
                 "horror_damage":   horror_damage,
                 "horror_waves":    horror_waves,
             })
@@ -5659,6 +6176,7 @@ def main():
 
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
+    write_bosses_html(days_data, "bosses.html", guild_name=guild_name)
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
     write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
