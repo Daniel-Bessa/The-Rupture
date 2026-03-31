@@ -2893,7 +2893,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     if has_interrupts:
                         t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
                     pid_mechs = fight_mechs.get(pid, {})
-                    pid_mts   = fight.get("mechanic_timestamps", {}).get(pid, {})
+                    _mts_map  = fight.get("mechanic_timestamps", {})
+                    pid_mts   = _mts_map.get(pid) or _mts_map.get(str(pid), {})
                     for m in mech_defs:
                         cnt   = pid_mechs.get(m["label"], 0)
                         hits  = pid_mts.get(m["label"], [])
