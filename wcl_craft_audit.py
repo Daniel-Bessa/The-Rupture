@@ -4369,6 +4369,7 @@ _VOIDSPIRE_BOSS_ORDER = [
 _BOSS_DEDICATED_PAGES = {
     "Chimaerus, the Undreamt God": "boss_chimaerus_heroic.html",
     "Crown of the Cosmos":         "boss_crown_heroic.html",
+    "Fallen-King Salhadaar":       "boss_salhadaar_heroic.html",
 }
 
 
@@ -5151,6 +5152,323 @@ table.prog-tbl td:last-child{{border-right:none}}
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[OK] Boss progression page saved: {output_path}")
+
+
+def write_salhadaar_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write Fallen-King Salhadaar Heroic boss progression page.
+
+    Shows per-player interrupt/CC aggregate across all pulls and per-pull wave tables.
+    Collects from both boss_data (kills) and wipe_data (wipes) for the boss.
+    """
+    from html import escape as _esc
+
+    TARGET_BOSS = "Fallen-King Salhadaar"
+    TARGET_DIFF = "Heroic"
+    WCL_BASE    = "https://www.warcraftlogs.com/reports"
+
+    # ── Step 1: collect all pulls (kills + wipes) sorted by report startTime ──
+    pulls = []
+    for day_data in sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0)):
+        report_code  = day_data["report_code"]
+        actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
+
+        def _pid_to_name(pid, al=actor_lookup):
+            char = al.get(int(pid), {}).get("name", f"#{pid}")
+            player, _ = lookup_roster(char)
+            return player
+
+        def _pid_color(pid, al=actor_lookup):
+            subtype = al.get(int(pid), {}).get("subType", "")
+            return CLASS_COLORS.get(subtype, "#ccc")
+
+        def _pid_charname(pid, al=actor_lookup):
+            return al.get(int(pid), {}).get("name", f"#{pid}")
+
+        # kills from boss_data
+        for key, fights in day_data.get("boss_data", {}).items():
+            if TARGET_BOSS not in key or TARGET_DIFF not in key:
+                continue
+            for fight in fights:
+                dur_s = (fight.get("fight_dur_ms") or 0) // 1000
+                pulls.append({
+                    "report_code":  report_code,
+                    "fight_id":     fight["fight_id"],
+                    "dur_s":        dur_s,
+                    "is_kill":      True,
+                    "boss_pct":     0,
+                    "waves":        fight.get("salhadaar_fracture_waves", []),
+                    "actor_lookup": actor_lookup,
+                    "_pid_name":    _pid_to_name,
+                    "_pid_color":   _pid_color,
+                    "_pid_char":    _pid_charname,
+                })
+
+        # wipes from wipe_data
+        for key, wipes in day_data.get("wipe_data", {}).items():
+            if TARGET_BOSS not in key or TARGET_DIFF not in key:
+                continue
+            for w in wipes:
+                dur_s = (w.get("fight_dur_ms") or 0) // 1000
+                pulls.append({
+                    "report_code":  report_code,
+                    "fight_id":     w["fight_id"],
+                    "dur_s":        dur_s,
+                    "is_kill":      False,
+                    "boss_pct":     w.get("boss_pct", 0),
+                    "waves":        w.get("salhadaar_fracture_waves", []),
+                    "actor_lookup": actor_lookup,
+                    "_pid_name":    _pid_to_name,
+                    "_pid_color":   _pid_color,
+                    "_pid_char":    _pid_charname,
+                })
+
+    if not pulls:
+        return
+
+    # Sort pulls oldest-first for display
+    pulls.sort(key=lambda p: (p["report_code"], p["fight_id"]))
+    # Number pulls 1..N
+    for i, p in enumerate(pulls):
+        p["pull_num"] = i + 1
+
+    # ── Step 2: aggregate per-player interrupt counts ──
+    # all_players: { player_name: { "char": str, "color": str,
+    #                               "total": int,
+    #                               "per_pull": [count_per_pull] } }
+    all_players: dict = {}
+    for pi, p in enumerate(pulls):
+        seen_in_pull: dict = {}   # player_name → wave count in this pull
+        fn = p["_pid_name"]
+        fc = p["_pid_color"]
+        fchar = p["_pid_char"]
+        for wave in p["waves"]:
+            for raw_pid in wave.get("players", {}):
+                pid = int(raw_pid) if isinstance(raw_pid, str) else raw_pid
+                pname = fn(pid)
+                if pname not in all_players:
+                    all_players[pname] = {
+                        "char":     fchar(pid),
+                        "color":    fc(pid),
+                        "total":    0,
+                        "per_pull": [0] * len(pulls),
+                    }
+                if pname not in seen_in_pull:
+                    seen_in_pull[pname] = 0
+                seen_in_pull[pname] += len(wave["players"].get(raw_pid,
+                                            wave["players"].get(str(pid), [])))
+
+        for pname, cnt in seen_in_pull.items():
+            all_players[pname]["total"] += cnt
+            all_players[pname]["per_pull"][pi] = cnt
+
+    # Sort players by total desc, then name
+    sorted_players = sorted(all_players.items(), key=lambda x: (-x[1]["total"], x[0]))
+
+    # ── Step 3: build HTML ──
+    def _fmt_dur(s):
+        return f"{s//60}:{s%60:02d}"
+
+    def _pull_label(p):
+        if p["is_kill"]:
+            return f"Kill · {_fmt_dur(p['dur_s'])}"
+        return f"Wipe {p['boss_pct']:.0f}% · {_fmt_dur(p['dur_s'])}"
+
+    def _wcl_link(p):
+        return f"{WCL_BASE}/{p['report_code']}#fight={p['fight_id']}"
+
+    # Pull timeline bar
+    timeline_items = ""
+    for p in pulls:
+        lbl   = _pull_label(p)
+        href  = _wcl_link(p)
+        color = "#2ea043" if p["is_kill"] else "#e05252"
+        border= "#3fb950" if p["is_kill"] else "#e05252"
+        timeline_items += (
+            f'<a href="{_esc(href)}" target="_blank" class="pull-chip" '
+            f'style="border-color:{border}">'
+            f'<span class="pull-chip-num">#{p["pull_num"]}</span> '
+            f'<span class="pull-chip-lbl" style="color:{color}">{_esc(lbl)}</span>'
+            f'</a>'
+        )
+
+    # Aggregate summary table
+    agg_table  = '<table class="boss-table sal-agg-table" style="border-collapse:collapse;width:100%">'
+    agg_table += '<thead><tr>'
+    agg_table += '<th style="text-align:left;padding:5px 10px;color:#aaa;min-width:120px">Player</th>'
+    agg_table += '<th style="text-align:center;padding:5px 8px;color:#fff;border-left:1px solid #2a2a4a;min-width:60px" title="Total interrupt/CC casts across all pulls">Total</th>'
+    for p in pulls:
+        lbl = f"#{p['pull_num']}"
+        tip = _pull_label(p)
+        agg_table += (f'<th style="text-align:center;padding:5px 8px;color:#aaa;'
+                      f'border-left:1px solid #2a2a4a;min-width:52px" title="{_esc(tip)}">'
+                      f'{_esc(lbl)}</th>')
+    agg_table += '</tr></thead><tbody>'
+
+    for pname, pdata in sorted_players:
+        agg_table += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                      f'<span style="color:{pdata["color"]};font-weight:600">'
+                      f'{_esc(pdata["char"])}</span>'
+                      f'<span style="color:#556;font-size:11px;margin-left:5px">({_esc(pname)})</span>'
+                      f'</td>')
+        total_val = pdata["total"]
+        total_color = "#3fb950" if total_val >= 3 else ("#e3a02e" if total_val >= 1 else "#e05252")
+        agg_table += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                      f'padding:4px 8px;font-weight:700;color:{total_color}">{total_val}</td>')
+        for cnt in pdata["per_pull"]:
+            if cnt > 0:
+                cell_color = "#3fb950" if cnt >= 2 else "#9be09b"
+                agg_table += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                              f'padding:4px 8px;color:{cell_color};font-weight:600">{cnt}</td>')
+            else:
+                agg_table += ('<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                              'padding:4px 8px;color:#333">—</td>')
+        agg_table += '</tr>'
+    agg_table += '</tbody></table>'
+
+    # Per-pull wave tables
+    def _build_pull_wave_table(p):
+        waves = p["waves"]
+        if not waves:
+            return '<p style="color:#556;padding:8px 12px">No wave data for this pull.</p>'
+
+        fn    = p["_pid_name"]
+        fc    = p["_pid_color"]
+        fchar = p["_pid_char"]
+
+        # Collect all pids across waves, sort by name
+        all_pids: set = set()
+        for wave in waves:
+            for raw_pid in wave.get("players", {}):
+                all_pids.add(int(raw_pid) if isinstance(raw_pid, str) else raw_pid)
+
+        al = p["actor_lookup"]
+        sorted_pids = sorted(all_pids,
+                             key=lambda pid: al.get(pid, {}).get("name", f"#{pid}").lower())
+
+        def _ts2(s):
+            m2, s2 = divmod(int(s), 60)
+            return f"{m2}:{s2:02d}"
+
+        t  = '<div style="overflow-x:auto"><table class="boss-table" '
+        t += 'style="width:100%;border-collapse:collapse"><thead><tr>'
+        t += '<th style="text-align:left;padding:5px 10px;color:#aaa;white-space:nowrap">Player</th>'
+        for wave in waves:
+            ws_str = _ts2(wave["wave_start_s"])
+            we_str = _ts2(wave["wave_end_s"])
+            n_players = len(wave.get("players", {}))
+            hdr_color = "#3a3a1a" if n_players == 0 else "#0d1117"
+            t += (f'<th style="text-align:center;padding:5px 8px;color:#aaa;'
+                  f'border-left:1px solid #2a2a4a;white-space:nowrap;background:{hdr_color}">'
+                  f'Wave {wave["wave_num"]}'
+                  f'<br><span style="color:#556;font-size:11px;font-weight:400">'
+                  f'{ws_str}–{we_str}</span></th>')
+        t += '</tr></thead><tbody>'
+
+        for pid in sorted_pids:
+            char_name = fchar(pid)
+            color     = fc(pid)
+            t += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                  f'<span style="color:{color};font-weight:600">{_esc(char_name)}</span></td>')
+            for wave in waves:
+                raw_pid = str(pid)
+                pdata = wave["players"].get(pid, wave["players"].get(raw_pid, []))
+                if pdata:
+                    parts = " ".join(
+                        f'<span style="white-space:nowrap">'
+                        f'<span style="color:#a0c4ff">{_esc(c["spell"])}</span>'
+                        f' <span style="color:#556;font-size:11px">({_esc(c["time_str"])})</span>'
+                        f'</span>'
+                        for c in pdata
+                    )
+                    t += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                          f'padding:4px 8px">{parts}</td>')
+                else:
+                    t += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+            t += '</tr>'
+
+        t += '</tbody></table></div>'
+        return t
+
+    pull_sections = ""
+    for p in pulls:
+        lbl       = _pull_label(p)
+        href      = _wcl_link(p)
+        hdr_color = "#2ea043" if p["is_kill"] else "#e05252"
+        n_waves   = len(p["waves"])
+        pull_sections += (
+            f'<div class="sal-pull-block">'
+            f'<div class="sal-pull-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">'
+            f'<span style="color:{hdr_color};font-weight:700">Pull #{p["pull_num"]}</span> '
+            f'<span style="color:#aaa"> · {_esc(lbl)}</span>'
+            f'<span style="color:#556;font-size:12px;margin-left:8px">({n_waves} waves)</span>'
+            f' <a href="{_esc(href)}" target="_blank" style="color:#6e9fcc;font-size:12px;margin-left:8px" '
+            f'onclick="event.stopPropagation()">WCL ↗</a>'
+            f'</div>'
+            f'<div class="sal-pull-body">'
+            f'{_build_pull_wave_table(p)}'
+            f'</div></div>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Salhadaar Progression — {_esc(guild_name)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:14px;padding:20px}}
+a{{color:#6e9fcc;text-decoration:none}}
+a:hover{{text-decoration:underline}}
+.page-header{{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}}
+.page-header h1{{font-size:22px;color:#e6edf3}}
+.page-header .subtitle{{color:#556;font-size:14px}}
+.back-link{{color:#6e9fcc;font-size:13px;margin-left:auto}}
+
+.section-header{{font-size:15px;color:#e6edf3;font-weight:600;margin:24px 0 10px;
+  border-bottom:1px solid #21262d;padding-bottom:6px}}
+
+.pull-timeline{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}}
+.pull-chip{{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+  border-radius:6px;border:1px solid #30363d;background:#161b22;font-size:12px}}
+.pull-chip:hover{{border-color:#6e9fcc;text-decoration:none}}
+.pull-chip-num{{color:#556;font-weight:600}}
+
+.boss-table{{border-collapse:collapse;font-size:13px}}
+.boss-table th,.boss-table td{{padding:4px 8px;border-bottom:1px solid #21262d}}
+.boss-table tbody tr:hover{{background:#161b22}}
+
+.sal-agg-wrap{{overflow-x:auto;margin-bottom:28px}}
+
+.sal-pull-block{{margin-bottom:12px;border:1px solid #21262d;border-radius:6px;overflow:hidden}}
+.sal-pull-header{{padding:8px 14px;cursor:pointer;background:#161b22;
+  display:flex;align-items:center;gap:0;user-select:none}}
+.sal-pull-header:hover{{background:#1c2128}}
+.sal-pull-body{{padding:12px;background:#0d1117}}
+.sal-pull-body.hidden{{display:none}}
+</style>
+</head>
+<body>
+<div class="page-header">
+  <h1>&#9760; Fallen-King Salhadaar — Heroic</h1>
+  <span class="subtitle">{len(pulls)} pull{'s' if len(pulls) != 1 else ''} tracked</span>
+  <a class="back-link" href="bosses.html">&#8592; Boss Overview</a>
+</div>
+
+<div class="section-header">Pull Timeline</div>
+<div class="pull-timeline">{timeline_items}</div>
+
+<div class="section-header">Interrupt &amp; CC Summary — all pulls</div>
+<div class="sal-agg-wrap">{agg_table}</div>
+
+<div class="section-header">Per-Pull Wave Details</div>
+{pull_sections}
+
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Salhadaar progression page saved: {output_path}")
 
 
 def write_crown_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
@@ -6797,6 +7115,7 @@ def main():
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
     write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
     write_crown_progression_html(days_data, "boss_crown_heroic.html", guild_name=guild_name)
+    write_salhadaar_progression_html(days_data, "boss_salhadaar_heroic.html", guild_name=guild_name)
     write_player_pages(days_data)
 
     # XLSX: most recent day only
