@@ -4369,7 +4369,7 @@ _VOIDSPIRE_BOSS_ORDER = [
 _BOSS_DEDICATED_PAGES = {
     "Chimaerus, the Undreamt God": "boss_chimaerus_heroic.html",
     "Crown of the Cosmos":         "boss_crown_heroic.html",
-    "Fallen-King Salhadaar":       "boss_salhadaar_heroic.html",
+    "Fallen-King Salhadaar":       "boss_salhadaar_mythic.html",
 }
 
 
@@ -5152,6 +5152,412 @@ table.prog-tbl td:last-child{{border-right:none}}
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[OK] Boss progression page saved: {output_path}")
+
+
+def write_salhadaar_mythic_html(days_data: list, output_path: str, guild_name: str = "") -> None:
+    """Write Fallen-King Salhadaar Mythic boss progression page.
+
+    Tab-based: first tab = Totals aggregate, each subsequent tab = one wipe.
+    Shows deaths, mechanic hits/damage, and interrupt/CC wave coverage per pull.
+    """
+    from html import escape as _esc
+
+    TARGET_BOSS  = "Fallen-King Salhadaar"
+    TARGET_DIFF  = "Mythic"
+    WCL_BASE     = "https://www.warcraftlogs.com/reports"
+    MECH_LABELS  = ["Tort.Extract", "Umbral Beams", "Void Exposure", "Twilight Spk."]
+
+    def _fdmg(v):
+        if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
+        if v >= 1_000:     return f"{v/1_000:.1f}k"
+        return str(v) if v else "—"
+
+    # ── Step 1: collect all pulls ──────────────────────────────────────────────
+    pulls = []
+    for day_data in sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0)):
+        rc = day_data["report_code"]
+        al = {a["id"]: a for a in day_data.get("actors", [])}
+
+        def _char(pid,  _al=al): return _al.get(int(pid), {}).get("name",    f"#{pid}")
+        def _player(pid,_al=al):
+            char = _al.get(int(pid), {}).get("name", f"#{pid}")
+            p, _ = lookup_roster(char)
+            return p
+        def _color(pid, _al=al):
+            st = _al.get(int(pid), {}).get("subType", "")
+            return CLASS_COLORS.get(st, "#ccc")
+
+        # wipes
+        for key, wipes in day_data.get("wipe_data", {}).items():
+            if TARGET_BOSS not in key or TARGET_DIFF not in key:
+                continue
+            for w in wipes:
+                dur_s = (w.get("fight_dur_ms") or 0) // 1000
+                pulls.append({
+                    "rc": rc, "fid": w["fight_id"],
+                    "is_kill": False,
+                    "boss_pct": w.get("boss_pct", 0),
+                    "dur_s": dur_s,
+                    "deaths": w.get("deaths", {}),
+                    "mts": w.get("mechanic_timestamps", {}),
+                    "waves": w.get("salhadaar_fracture_waves", []),
+                    "_char": _char, "_player": _player, "_color": _color,
+                })
+
+        # kills
+        for key, fights in day_data.get("boss_data", {}).items():
+            if TARGET_BOSS not in key or TARGET_DIFF not in key:
+                continue
+            for fight in fights:
+                dur_s = (fight.get("fight_dur_ms") or 0) // 1000
+                pulls.append({
+                    "rc": rc, "fid": fight["fight_id"],
+                    "is_kill": True,
+                    "boss_pct": 0,
+                    "dur_s": dur_s,
+                    "deaths": fight.get("deaths", {}),
+                    "mts": fight.get("mechanic_timestamps", {}),
+                    "waves": fight.get("salhadaar_fracture_waves", []),
+                    "_char": _char, "_player": _player, "_color": _color,
+                })
+
+    if not pulls:
+        return
+
+    # Sort oldest-first, number 1..N
+    pulls.sort(key=lambda p: (p["rc"], p["fid"]))
+    for i, p in enumerate(pulls):
+        p["pull_num"] = i + 1
+
+    # ── Step 2: aggregate ─────────────────────────────────────────────────────
+    # all_players: {player_name: {char, color, deaths, interrupts,
+    #                              mech: {label: {hits, dmg}} }}
+    def _empty_player(char, color):
+        return {"char": char, "color": color, "deaths": 0, "interrupts": 0,
+                "mech": {ml: {"hits": 0, "dmg": 0} for ml in MECH_LABELS}}
+
+    all_players: dict = {}
+
+    for p in pulls:
+        fn, fc, fchar = p["_player"], p["_color"], p["_char"]
+
+        # deaths
+        for raw_pid, death_list in p["deaths"].items():
+            pname = fn(raw_pid)
+            if pname not in all_players:
+                all_players[pname] = _empty_player(fchar(raw_pid), fc(raw_pid))
+            all_players[pname]["deaths"] += len(death_list)
+
+        # interrupts from fracture waves
+        for wave in p["waves"]:
+            for raw_pid, actions in wave.get("players", {}).items():
+                pname = fn(raw_pid)
+                if pname not in all_players:
+                    all_players[pname] = _empty_player(fchar(raw_pid), fc(raw_pid))
+                all_players[pname]["interrupts"] += len(actions)
+
+        # mechanic timestamps
+        for raw_pid, labels in p["mts"].items():
+            pname = fn(raw_pid)
+            if pname not in all_players:
+                all_players[pname] = _empty_player(fchar(raw_pid), fc(raw_pid))
+            for label, hits in labels.items():
+                if label in all_players[pname]["mech"]:
+                    all_players[pname]["mech"][label]["hits"] += len(hits)
+                    all_players[pname]["mech"][label]["dmg"]  += sum(
+                        h.get("dmg", 0) for h in hits if isinstance(h, dict))
+
+    # Sort by deaths desc, then name
+    sorted_players = sorted(all_players.items(), key=lambda x: (-x[1]["deaths"], x[0]))
+
+    # ── Step 3: HTML helpers ─────────────────────────────────────────────────
+    def _dur(s):   return f"{s//60}:{s%60:02d}"
+    def _wcl(p):   return f"{WCL_BASE}/{p['rc']}#fight={p['fid']}"
+
+    def _pull_label(p):
+        if p["is_kill"]:
+            return f"Kill · {_dur(p['dur_s'])}"
+        return f"{p['boss_pct']:.0f}% · {_dur(p['dur_s'])}"
+
+    # ── Step 4: Totals tab content ───────────────────────────────────────────
+    def _build_totals():
+        t  = '<div style="overflow-x:auto">'
+        t += '<table class="sal-table" id="sal-totals-tbl" style="width:100%;border-collapse:collapse">'
+        t += '<thead><tr>'
+        hdrs = [("Player", "left", "min-width:140px"),
+                ("Deaths",     "center", "min-width:70px"),
+                ("Interrupts", "center", "min-width:80px")]
+        for ml in MECH_LABELS:
+            hdrs.append((ml, "center", "min-width:100px"))
+        for i, (h, align, w) in enumerate(hdrs):
+            t += (f'<th onclick="salSort({i})" style="cursor:pointer;text-align:{align};'
+                  f'padding:5px 10px;color:#aaa;white-space:nowrap;{w};'
+                  f'border-bottom:1px solid #2a2a4a">{_esc(h)} <span id="sal-sort-{i}"></span></th>')
+        t += '</tr></thead><tbody>'
+
+        for pname, pd in sorted_players:
+            d_col  = "#e05252" if pd["deaths"]     > 0 else "#3fb950"
+            i_col  = "#3fb950" if pd["interrupts"] > 0 else "#556"
+            t += (f'<tr><td style="padding:5px 10px;white-space:nowrap">'
+                  f'<span style="color:{pd["color"]};font-weight:600">{_esc(pd["char"])}</span>'
+                  f'<span style="color:#444;font-size:11px;margin-left:5px">({_esc(pname)})</span>'
+                  f'</td>')
+            t += (f'<td style="text-align:center;padding:5px 8px;font-weight:700;color:{d_col}">'
+                  f'{pd["deaths"]}</td>')
+            t += (f'<td style="text-align:center;padding:5px 8px;color:{i_col}">'
+                  f'{pd["interrupts"] if pd["interrupts"] else "—"}</td>')
+            for ml in MECH_LABELS:
+                mh = pd["mech"][ml]
+                if mh["hits"] > 0:
+                    tip = _esc(f'{mh["hits"]} hit(s) · {_fdmg(mh["dmg"])}')
+                    h_col = "#e05252" if ml != "Tort.Extract" else "#e3a02e"
+                    t += (f'<td style="text-align:center;padding:5px 8px;cursor:default" title="{tip}">'
+                          f'<span style="color:{h_col};font-weight:600">{mh["hits"]}</span>'
+                          f'<span style="color:#556;font-size:11px"> ({_fdmg(mh["dmg"])})</span>'
+                          f'</td>')
+                else:
+                    t += '<td style="text-align:center;padding:5px 8px;color:#333">—</td>'
+            t += '</tr>'
+
+        # Totals row
+        t_deaths = sum(pd["deaths"] for _, pd in sorted_players)
+        t_ints   = sum(pd["interrupts"] for _, pd in sorted_players)
+        t += (f'<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
+              f'<td style="padding:5px 10px;color:#aaa">Total</td>'
+              f'<td style="text-align:center;padding:5px 8px;color:#e05252">{t_deaths}</td>'
+              f'<td style="text-align:center;padding:5px 8px;color:#3fb950">{t_ints}</td>')
+        for ml in MECH_LABELS:
+            total_hits = sum(pd["mech"][ml]["hits"] for _, pd in sorted_players)
+            total_dmg  = sum(pd["mech"][ml]["dmg"]  for _, pd in sorted_players)
+            if total_hits:
+                t += (f'<td style="text-align:center;padding:5px 8px">'
+                      f'<span style="color:#e05252">{total_hits}</span>'
+                      f'<span style="color:#556;font-size:11px"> ({_fdmg(total_dmg)})</span>'
+                      f'</td>')
+            else:
+                t += '<td style="text-align:center;padding:5px 8px;color:#333">—</td>'
+        t += '</tr>'
+        t += '</tbody></table></div>'
+        return t
+
+    # ── Step 5: per-wipe tab content ─────────────────────────────────────────
+    def _build_wipe_tab(p):
+        fn, fc, fchar = p["_player"], p["_color"], p["_char"]
+        out = ""
+
+        # Deaths
+        deaths = p["deaths"]
+        if deaths:
+            out += '<div style="margin-bottom:16px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">&#128128; Deaths</div>'
+            out += '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+            for raw_pid, death_list in deaths.items():
+                char   = fchar(raw_pid)
+                color  = fc(raw_pid)
+                for death in death_list:
+                    ability = death.get("ability", "?")
+                    time    = death.get("time", "?")
+                    out += (f'<div class="death-chip">'
+                            f'<span style="color:{color};font-weight:600">{_esc(char)}</span>'
+                            f' <span style="color:#aaa;font-size:12px">→</span>'
+                            f' <span style="color:#e05252;font-size:12px">{_esc(ability)}</span>'
+                            f' <span style="color:#556;font-size:11px">@ {_esc(time)}</span>'
+                            f'</div>')
+            out += '</div></div>'
+
+        # Mechanic hits table
+        mts = p["mts"]
+        if mts:
+            # Collect all pids that have any hits
+            all_pids = sorted(set(int(k) if isinstance(k, str) else k for k in mts),
+                              key=lambda pid: fchar(pid).lower())
+            out += '<div style="margin-bottom:16px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">&#9888; Mechanic Hits</div>'
+            out += '<div style="overflow-x:auto"><table class="sal-table" style="border-collapse:collapse">'
+            out += '<thead><tr>'
+            out += '<th style="text-align:left;padding:4px 10px;color:#aaa;white-space:nowrap">Player</th>'
+            for ml in MECH_LABELS:
+                out += (f'<th style="text-align:center;padding:4px 8px;color:#aaa;'
+                        f'border-left:1px solid #2a2a4a;white-space:nowrap">{_esc(ml)}</th>')
+            out += '</tr></thead><tbody>'
+            for pid in all_pids:
+                raw_pid = str(pid)
+                labels  = mts.get(pid, mts.get(raw_pid, {}))
+                if not labels:
+                    continue
+                char  = fchar(pid)
+                color = fc(pid)
+                out += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                        f'<span style="color:{color};font-weight:600">{_esc(char)}</span></td>')
+                for ml in MECH_LABELS:
+                    hits = labels.get(ml, [])
+                    if hits:
+                        total_dmg = sum(h.get("dmg", 0) for h in hits if isinstance(h, dict))
+                        tip_lines = "&#10;".join(f'{h["t"]} {_fdmg(h.get("dmg",0))}' for h in hits if isinstance(h, dict))
+                        h_col = "#e05252" if ml != "Tort.Extract" else "#e3a02e"
+                        out += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                                f'padding:4px 8px;cursor:default" title="{_esc(tip_lines)}">'
+                                f'<span style="color:{h_col};font-weight:600">{len(hits)}</span>'
+                                f'<span style="color:#556;font-size:11px"> ({_fdmg(total_dmg)})</span>'
+                                f'</td>')
+                    else:
+                        out += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+                out += '</tr>'
+            out += '</tbody></table></div></div>'
+
+        # Interrupt wave table
+        waves = p["waves"]
+        if waves:
+            all_wave_pids: set = set()
+            for wave in waves:
+                for rp in wave.get("players", {}):
+                    all_wave_pids.add(int(rp) if isinstance(rp, str) else rp)
+            sorted_pids = sorted(all_wave_pids, key=lambda pid: fchar(pid).lower())
+
+            def _ts(s):
+                m2, s2 = divmod(int(s), 60)
+                return f"{m2}:{s2:02d}"
+
+            out += '<div><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">&#128683; Shadow Fracture — Interrupt Log</div>'
+            out += '<div style="overflow-x:auto"><table class="sal-table" style="border-collapse:collapse">'
+            out += '<thead><tr>'
+            out += '<th style="text-align:left;padding:4px 10px;color:#aaa;white-space:nowrap">Player</th>'
+            for wave in waves:
+                ws = _ts(wave["wave_start_s"])
+                we = _ts(wave["wave_end_s"])
+                n  = len(wave.get("players", {}))
+                hdr_bg = ";background:#1a0d0d" if n == 0 else ""
+                out += (f'<th style="text-align:center;padding:4px 8px;color:#aaa;'
+                        f'border-left:1px solid #2a2a4a;white-space:nowrap{hdr_bg}">'
+                        f'Wave {wave["wave_num"]}'
+                        f'<br><span style="color:#556;font-size:11px;font-weight:400">{ws}–{we}</span>'
+                        f'</th>')
+            out += '</tr></thead><tbody>'
+            for pid in sorted_pids:
+                char  = fchar(pid)
+                color = fc(pid)
+                out += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                        f'<span style="color:{color};font-weight:600">{_esc(char)}</span></td>')
+                for wave in waves:
+                    rp    = str(pid)
+                    pdata = wave["players"].get(pid, wave["players"].get(rp, []))
+                    if pdata:
+                        parts = " ".join(
+                            f'<span style="white-space:nowrap">'
+                            f'<span style="color:#a0c4ff">{_esc(c["spell"])}</span>'
+                            f' <span style="color:#556;font-size:11px">({_esc(c["time_str"])})</span>'
+                            f'</span>'
+                            for c in pdata)
+                        out += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;padding:4px 8px">'
+                                f'{parts}</td>')
+                    else:
+                        out += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+                out += '</tr>'
+            out += '</tbody></table></div></div>'
+
+        if not deaths and not mts and not waves:
+            out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
+        return out
+
+    # ── Step 6: assemble full HTML ────────────────────────────────────────────
+    tab_btns    = ''
+    tab_panels  = ''
+
+    # Totals tab
+    tab_btns   += '<button class="tab-btn active" onclick="salTab(0,this)">Totals</button>'
+    tab_panels += f'<div class="tab-panel active" id="sal-tab-0">{_build_totals()}</div>'
+
+    # Per-pull tabs
+    for i, p in enumerate(pulls):
+        lbl       = _pull_label(p)
+        btn_color = "#3fb950" if p["is_kill"] else "#e05252"
+        tab_btns  += (f'<button class="tab-btn" onclick="salTab({i+1},this)" '
+                      f'style="--tc:{btn_color}">#{p["pull_num"]} {_esc(lbl)}</button>')
+        wipe_hdr  = (f'<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;'
+                     f'flex-wrap:wrap">'
+                     f'<span style="color:{btn_color};font-size:16px;font-weight:700">'
+                     f'Pull #{p["pull_num"]}</span>'
+                     f'<span style="color:#aaa">{_esc(lbl)}</span>'
+                     f'<a href="{_esc(_wcl(p))}" target="_blank" style="color:#6e9fcc;font-size:13px">WCL ↗</a>'
+                     f'</div>')
+        tab_panels += (f'<div class="tab-panel" id="sal-tab-{i+1}">'
+                       f'{wipe_hdr}{_build_wipe_tab(p)}</div>')
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Salhadaar Mythic — {_esc(guild_name)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:14px;padding:20px}}
+a{{color:#6e9fcc;text-decoration:none}} a:hover{{text-decoration:underline}}
+.page-header{{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}}
+.page-header h1{{font-size:22px;color:#e6edf3}}
+.back-link{{color:#6e9fcc;font-size:13px;margin-left:auto}}
+
+/* Tabs */
+.tab-bar{{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:16px;border-bottom:2px solid #21262d;padding-bottom:8px}}
+.tab-btn{{background:#161b22;border:1px solid #30363d;border-radius:6px 6px 0 0;
+  color:#aaa;padding:6px 12px;cursor:pointer;font-size:12px;white-space:nowrap;
+  transition:background 0.15s}}
+.tab-btn:hover{{background:#1c2128;color:#c9d1d9}}
+.tab-btn.active{{background:#21262d;border-color:#30363d;color:var(--tc,#c9d1d9);font-weight:700}}
+.tab-panel{{display:none;padding-top:8px}}
+.tab-panel.active{{display:block}}
+
+/* Tables */
+.sal-table{{font-size:13px;border-collapse:collapse}}
+.sal-table th,.sal-table td{{border-bottom:1px solid #21262d;padding:4px 8px}}
+.sal-table tbody tr:hover{{background:#161b22}}
+
+.death-chip{{background:#1a0a0a;border:1px solid #5a2020;border-radius:5px;
+  padding:4px 10px;font-size:13px;display:inline-flex;align-items:center;gap:5px}}
+</style>
+</head>
+<body>
+<div class="page-header">
+  <h1>&#9760; Fallen-King Salhadaar — Mythic</h1>
+  <span style="color:#556;font-size:14px">{len(pulls)} pull{'s' if len(pulls)!=1 else ''} tracked</span>
+  <a class="back-link" href="bosses.html">&#8592; Boss Overview</a>
+</div>
+
+<div class="tab-bar">{tab_btns}</div>
+{tab_panels}
+
+<script>
+function salTab(idx,btn){{
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('sal-tab-'+idx).classList.add('active');
+  btn.classList.add('active');
+}}
+var _salSortDir = {{}};
+function salSort(col){{
+  var tbl = document.getElementById('sal-totals-tbl');
+  if(!tbl) return;
+  var rows = Array.from(tbl.querySelectorAll('tbody tr:not(:last-child)'));
+  var asc  = !_salSortDir[col];
+  _salSortDir[col] = asc;
+  rows.sort(function(a,b){{
+    var av = a.cells[col].textContent.trim().replace(/[^0-9.]/g,'') || '0';
+    var bv = b.cells[col].textContent.trim().replace(/[^0-9.]/g,'') || '0';
+    if(col===0) return asc ? a.cells[0].textContent.localeCompare(b.cells[0].textContent)
+                           : b.cells[0].textContent.localeCompare(a.cells[0].textContent);
+    return asc ? parseFloat(av)-parseFloat(bv) : parseFloat(bv)-parseFloat(av);
+  }});
+  var tbody = tbl.querySelector('tbody');
+  var lastRow = tbody.lastElementChild;
+  rows.forEach(r=>tbody.insertBefore(r,lastRow));
+  document.querySelectorAll('[id^="sal-sort-"]').forEach(el=>el.textContent='');
+  var arrow = document.getElementById('sal-sort-'+col);
+  if(arrow) arrow.textContent = asc ? ' ▲' : ' ▼';
+}}
+</script>
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"[OK] Salhadaar Mythic page saved: {output_path}")
 
 
 def write_salhadaar_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
@@ -7116,6 +7522,7 @@ def main():
     write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
     write_crown_progression_html(days_data, "boss_crown_heroic.html", guild_name=guild_name)
     write_salhadaar_progression_html(days_data, "boss_salhadaar_heroic.html", guild_name=guild_name)
+    write_salhadaar_mythic_html(days_data, "boss_salhadaar_mythic.html", guild_name=guild_name)
     write_player_pages(days_data)
 
     # XLSX: most recent day only
