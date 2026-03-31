@@ -7418,9 +7418,13 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
 
 def split_report_by_difficulty(day_data: dict) -> list:
     """If a report has multiple difficulties, return one day_data per difficulty."""
+    all_keys = list(day_data.get("boss_data", {}).keys()) + list(day_data.get("wipe_data", {}).keys())
     diffs_present = [d for d in ("Normal", "Heroic", "Mythic")
-                     if any(f"({d})" in k for k in day_data.get("boss_data", {}))]
+                     if any(f"({d})" in k for k in all_keys)]
     if len(diffs_present) <= 1:
+        # Still tag the difficulty so index/filename logic works correctly
+        if len(diffs_present) == 1 and not day_data.get("difficulty"):
+            return [{**day_data, "difficulty": diffs_present[0]}]
         return [day_data]
     results = []
     for diff in diffs_present:
