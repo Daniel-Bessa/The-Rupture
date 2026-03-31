@@ -464,12 +464,12 @@ def analyze_vorasius_tank_swaps(damage_events: list, actor_lookup: dict,
 
 def analyze_mechanic_timestamps(damage_events: list, actor_lookup: dict,
                                  fight_start_ms: int, mechanics: list) -> dict:
-    """Track per-hit timestamps for dmg_hits mechanics (used for table cell tooltips).
-    Returns {pid: {label: ["0:23", "1:05", ...]}}
+    """Track per-hit timestamps + damage for dmg_hits mechanics (used for table cell tooltips).
+    Returns {pid: {label: [{"t": "0:23", "dmg": 45000}, ...]}}
     """
     spell_to_label = {}
     for m in mechanics:
-        if m.get("type") == "dmg_hits":
+        if m.get("type") in ("dmg_hits", "avoid", "soak"):
             for sid in m["spell_ids"]:
                 spell_to_label[sid] = m["label"]
     if not spell_to_label:
@@ -486,7 +486,9 @@ def analyze_mechanic_timestamps(damage_events: list, actor_lookup: dict,
             continue
         elapsed = (ev["timestamp"] - fight_start_ms) / 1000
         m2, s2  = divmod(int(elapsed), 60)
-        result.setdefault(pid, {}).setdefault(label, []).append(f"{m2}:{s2:02d}")
+        dmg     = ev.get("amount", 0) + ev.get("absorbed", 0)
+        result.setdefault(pid, {}).setdefault(label, []).append(
+            {"t": f"{m2}:{s2:02d}", "dmg": dmg})
     return result
 
 
@@ -2877,11 +2879,20 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     pid_mts   = fight.get("mechanic_timestamps", {}).get(pid, {})
                     for m in mech_defs:
                         cnt   = pid_mechs.get(m["label"], 0)
-                        times = pid_mts.get(m["label"], [])
+                        hits  = pid_mts.get(m["label"], [])
                         if cnt:
                             bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                            if times:
-                                tip_html = "<br>".join(escape(t2) for t2 in times)
+                            if hits:
+                                def _fmt_dmg(v):
+                                    if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+                                    if v >= 1_000:     return f"{v/1_000:.0f}k"
+                                    return str(v)
+                                tip_html = "<br>".join(
+                                    f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
+                                    f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
+                                    if isinstance(h, dict) else escape(h)
+                                    for h in hits
+                                )
                                 tip_attr = tip_html.replace("'", "&#39;")
                                 t += (f'<td class="center" style="background:{bg};cursor:help"'
                                       f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
