@@ -2680,6 +2680,23 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                      f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
                      f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>')
+            # Per-mechanic totals (hits + damage)
+            mts_all = fight.get("mechanic_timestamps", {})
+            for m in mech_defs:
+                lbl = m["label"]
+                total_hits = 0
+                total_dmg  = 0
+                for pid_hits in mts_all.values():
+                    for h in pid_hits.get(lbl, []):
+                        if isinstance(h, dict):
+                            total_hits += 1
+                            total_dmg  += h.get("dmg", 0)
+                if total_hits:
+                    color = "#81c784" if m["type"] == "soak" else "#e57373"
+                    inner += (f'<span class="sov-item" style="border-left:1px solid #2a2a4a;padding-left:12px">'
+                              f'<span class="sov-lbl">{escape(lbl)}</span>'
+                              f'<b style="color:{color}">{total_hits}×</b>'
+                              f' <span style="color:#aaa">{_hfmt(total_dmg)}</span></span>')
             return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
 
         # ── Per-pull banner builder (frontal + avoid for any list of fights) ──
@@ -2882,21 +2899,23 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                         hits  = pid_mts.get(m["label"], [])
                         if cnt:
                             bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                            def _fmt_dmg(v):
+                                if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+                                if v >= 1_000:     return f"{v/1_000:.0f}k"
+                                return str(v)
                             if hits:
-                                def _fmt_dmg(v):
-                                    if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
-                                    if v >= 1_000:     return f"{v/1_000:.0f}k"
-                                    return str(v)
-                                tip_html = "<br>".join(
+                                total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
+                                tip_html  = "<br>".join(
                                     f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
                                     f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
                                     if isinstance(h, dict) else escape(h)
                                     for h in hits
                                 )
-                                tip_attr = tip_html.replace("'", "&#39;")
+                                tip_attr  = tip_html.replace("'", "&#39;")
+                                cell_txt  = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
                                 t += (f'<td class="center" style="background:{bg};cursor:help"'
                                       f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
-                                      f' onmouseleave="hideHTip()">{cnt}</td>')
+                                      f' onmouseleave="hideHTip()">{cell_txt}</td>')
                             else:
                                 t += f'<td class="center" style="background:{bg}">{cnt}</td>'
                         else:
