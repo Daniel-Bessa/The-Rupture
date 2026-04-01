@@ -5367,17 +5367,22 @@ def write_salhadaar_mythic_html(days_data: list, output_path: str, guild_name: s
 
         # Mechanic hits table
         mts = p["mts"]
+        tbl_id = f'sal-wipe-tbl-{p["pull_num"]}'
         if mts:
             # Collect all pids that have any hits
             all_pids = sorted(set(int(k) if isinstance(k, str) else k for k in mts),
                               key=lambda pid: fchar(pid).lower())
+            n_cols = 1 + len(MECH_LABELS)  # Player + mechanic cols
             out += '<div style="margin-bottom:16px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">&#9888; Mechanic Hits</div>'
-            out += '<div style="overflow-x:auto"><table class="sal-table" style="border-collapse:collapse">'
+            out += f'<div style="overflow-x:auto"><table class="sal-table" id="{tbl_id}" style="border-collapse:collapse">'
             out += '<thead><tr>'
-            out += '<th style="text-align:left;padding:4px 10px;color:#aaa;white-space:nowrap">Player</th>'
-            for ml in MECH_LABELS:
-                out += (f'<th style="text-align:center;padding:4px 8px;color:#aaa;'
-                        f'border-left:1px solid #2a2a4a;white-space:nowrap">{_esc(ml)}</th>')
+            out += (f'<th onclick="wipeSort(\'{tbl_id}\',0)" style="cursor:pointer;text-align:left;'
+                    f'padding:4px 10px;color:#aaa;white-space:nowrap">'
+                    f'Player <span id="{tbl_id}-s0"></span></th>')
+            for ci, ml in enumerate(MECH_LABELS, start=1):
+                out += (f'<th onclick="wipeSort(\'{tbl_id}\',{ci})" style="cursor:pointer;text-align:center;'
+                        f'padding:4px 8px;color:#aaa;border-left:1px solid #2a2a4a;white-space:nowrap">'
+                        f'{_esc(ml)} <span id="{tbl_id}-s{ci}"></span></th>')
             out += '</tr></thead><tbody>'
             for pid in all_pids:
                 raw_pid = str(pid)
@@ -5386,7 +5391,7 @@ def write_salhadaar_mythic_html(days_data: list, output_path: str, guild_name: s
                     continue
                 char  = fchar(pid)
                 color = fc(pid)
-                out += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                out += (f'<tr><td data-val="{_esc(char)}" style="padding:4px 10px;white-space:nowrap">'
                         f'<span style="color:{color};font-weight:600">{_esc(char)}</span></td>')
                 for ml in MECH_LABELS:
                     hits = labels.get(ml, [])
@@ -5394,13 +5399,13 @@ def write_salhadaar_mythic_html(days_data: list, output_path: str, guild_name: s
                         total_dmg = sum(h.get("dmg", 0) for h in hits if isinstance(h, dict))
                         tip_lines = "&#10;".join(f'{h["t"]} {_fdmg(h.get("dmg",0))}' for h in hits if isinstance(h, dict))
                         h_col = "#e05252" if ml != "Tort.Extract" else "#e3a02e"
-                        out += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                        out += (f'<td data-val="{len(hits)}" style="text-align:center;border-left:1px solid #2a2a4a;'
                                 f'padding:4px 8px;cursor:default" title="{_esc(tip_lines)}">'
                                 f'<span style="color:{h_col};font-weight:600">{len(hits)}</span>'
                                 f'<span style="color:#556;font-size:11px"> ({_fdmg(total_dmg)})</span>'
                                 f'</td>')
                     else:
-                        out += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+                        out += '<td data-val="0" style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
                 out += '</tr>'
             out += '</tbody></table></div></div>'
 
@@ -5530,6 +5535,26 @@ function salTab(idx,btn){{
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('sal-tab-'+idx).classList.add('active');
   btn.classList.add('active');
+}}
+var _wipeSortDir = {{}};
+function wipeSort(tblId, col){{
+  var tbl = document.getElementById(tblId);
+  if(!tbl) return;
+  var key = tblId + '-' + col;
+  var asc = !_wipeSortDir[key];
+  _wipeSortDir[key] = asc;
+  var rows = Array.from(tbl.querySelectorAll('tbody tr'));
+  rows.sort(function(a,b){{
+    var av = a.cells[col].getAttribute('data-val') || '';
+    var bv = b.cells[col].getAttribute('data-val') || '';
+    if(col===0) return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return asc ? (parseFloat(av)||0)-(parseFloat(bv)||0) : (parseFloat(bv)||0)-(parseFloat(av)||0);
+  }});
+  var tbody = tbl.querySelector('tbody');
+  rows.forEach(r=>tbody.appendChild(r));
+  tbl.querySelectorAll('[id^="'+tblId+'-s"]').forEach(el=>el.textContent='');
+  var arrow = document.getElementById(tblId+'-s'+col);
+  if(arrow) arrow.textContent = asc ? ' ▲' : ' ▼';
 }}
 var _salSortDir = {{}};
 function salSort(col){{
