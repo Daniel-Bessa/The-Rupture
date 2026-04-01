@@ -5433,14 +5433,16 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         if horror_agg:
             sorted_horror = sorted(horror_agg.keys(),
                 key=lambda n: -(sum(e["dmg"] for e in horror_agg[n]) / max(len(horror_agg[n]), 1)))
+            horror_tbl_id = "horror-agg-tbl"
             out += ('<div style="margin-top:24px"><div style="color:#e6edf3;font-weight:600;'
-                    'font-size:15px;margin-bottom:8px">Colossal Horror — Wave Contribution</div>'
-                    '<div style="overflow-x:auto"><table class="sal-table" style="border-collapse:collapse;width:100%">'
+                    f'font-size:15px;margin-bottom:8px">Colossal Horror — Wave Contribution</div>'
+                    f'<div style="overflow-x:auto"><table class="sal-table" id="{horror_tbl_id}" style="border-collapse:collapse;width:100%">'
                     '<thead><tr>')
-            for h in ["Player", "Avg DMG", "Avg DPS", "Avg Active %", "Low Contrib"]:
-                align = "left" if h == "Player" else "center"
-                out += (f'<th style="text-align:{align};padding:5px 10px;color:#aaa;'
-                        f'white-space:nowrap;border-bottom:1px solid #2a2a4a">{h}</th>')
+            for ci, (h, align) in enumerate([("Player","left"),("Avg DMG","center"),
+                                              ("Avg DPS","center"),("Avg Active %","center"),("Low Contrib","center")]):
+                out += (f'<th onclick="wipeSort(\'{horror_tbl_id}\',{ci})" style="cursor:pointer;text-align:{align};'
+                        f'padding:5px 10px;color:#aaa;white-space:nowrap;border-bottom:1px solid #2a2a4a">'
+                        f'{h} <span id="{horror_tbl_id}-s{ci}"></span></th>')
             out += '</tr></thead><tbody>'
             for name in sorted_horror:
                 entries    = horror_agg[name]
@@ -5450,12 +5452,13 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 low_pulls  = [(e["pull_num"], e["wave"]) for e in entries
                               if e["dmg"] < 200_000 and e["active_pct"] < 5]
                 color      = entries[0]["color"] if entries else "#ccc"
-                _low_td = _tip_cell(low_pulls) if low_pulls else '<td style="text-align:center;padding:5px 8px;color:#333">—</td>'
-                out += (f'<tr><td style="padding:5px 10px;white-space:nowrap">'
+                _low_td = _tip_cell(low_pulls) if low_pulls else '<td data-val="0" style="text-align:center;padding:5px 8px;color:#333">—</td>'
+                out += (f'<tr>'
+                        f'<td data-val="{_esc(name)}" style="padding:5px 10px;white-space:nowrap">'
                         f'<span style="color:{color};font-weight:600">{_esc(name)}</span></td>'
-                        f'<td style="text-align:center;padding:5px 8px">{_fdmg(avg_dmg)}</td>'
-                        f'<td style="text-align:center;padding:5px 8px">{_fdmg(avg_dps)}</td>'
-                        f'<td style="text-align:center;padding:5px 8px">{avg_active:.1f}%</td>'
+                        f'<td data-val="{avg_dmg}" style="text-align:center;padding:5px 8px">{_fdmg(avg_dmg)}</td>'
+                        f'<td data-val="{avg_dps}" style="text-align:center;padding:5px 8px">{_fdmg(avg_dps)}</td>'
+                        f'<td data-val="{avg_active}" style="text-align:center;padding:5px 8px">{avg_active:.1f}%</td>'
                         f'{_low_td}'
                         f'</tr>')
             out += '</tbody></table></div></div>'
