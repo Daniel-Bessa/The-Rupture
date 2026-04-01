@@ -5298,25 +5298,26 @@ def write_salhadaar_mythic_html(days_data: list, output_path: str, guild_name: s
         for pname, pd in sorted_players:
             d_col  = "#e05252" if pd["deaths"]     > 0 else "#3fb950"
             i_col  = "#3fb950" if pd["interrupts"] > 0 else "#556"
-            t += (f'<tr><td style="padding:5px 10px;white-space:nowrap">'
+            t += (f'<tr data-name="{_esc(pname)}">'
+                  f'<td data-val="{_esc(pname)}" style="padding:5px 10px;white-space:nowrap">'
                   f'<span style="color:{pd["color"]};font-weight:600">{_esc(pd["char"])}</span>'
                   f'<span style="color:#444;font-size:11px;margin-left:5px">({_esc(pname)})</span>'
                   f'</td>')
-            t += (f'<td style="text-align:center;padding:5px 8px;font-weight:700;color:{d_col}">'
+            t += (f'<td data-val="{pd["deaths"]}" style="text-align:center;padding:5px 8px;font-weight:700;color:{d_col}">'
                   f'{pd["deaths"]}</td>')
-            t += (f'<td style="text-align:center;padding:5px 8px;color:{i_col}">'
+            t += (f'<td data-val="{pd["interrupts"]}" style="text-align:center;padding:5px 8px;color:{i_col}">'
                   f'{pd["interrupts"] if pd["interrupts"] else "—"}</td>')
             for ml in MECH_LABELS:
                 mh = pd["mech"][ml]
                 if mh["hits"] > 0:
                     tip = _esc(f'{mh["hits"]} hit(s) · {_fdmg(mh["dmg"])}')
                     h_col = "#e05252" if ml != "Tort.Extract" else "#e3a02e"
-                    t += (f'<td style="text-align:center;padding:5px 8px;cursor:default" title="{tip}">'
+                    t += (f'<td data-val="{mh["hits"]}" style="text-align:center;padding:5px 8px;cursor:default" title="{tip}">'
                           f'<span style="color:{h_col};font-weight:600">{mh["hits"]}</span>'
                           f'<span style="color:#556;font-size:11px"> ({_fdmg(mh["dmg"])})</span>'
                           f'</td>')
                 else:
-                    t += '<td style="text-align:center;padding:5px 8px;color:#333">—</td>'
+                    t += '<td data-val="0" style="text-align:center;padding:5px 8px;color:#333">—</td>'
             t += '</tr>'
 
         # Totals row
@@ -5538,11 +5539,12 @@ function salSort(col){{
   var asc  = !_salSortDir[col];
   _salSortDir[col] = asc;
   rows.sort(function(a,b){{
-    var av = a.cells[col].textContent.trim().replace(/[^0-9.]/g,'') || '0';
-    var bv = b.cells[col].textContent.trim().replace(/[^0-9.]/g,'') || '0';
-    if(col===0) return asc ? a.cells[0].textContent.localeCompare(b.cells[0].textContent)
-                           : b.cells[0].textContent.localeCompare(a.cells[0].textContent);
-    return asc ? parseFloat(av)-parseFloat(bv) : parseFloat(bv)-parseFloat(av);
+    var av = a.cells[col].getAttribute('data-val') || '';
+    var bv = b.cells[col].getAttribute('data-val') || '';
+    if(col===0) return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    var an = parseFloat(av) || 0;
+    var bn = parseFloat(bv) || 0;
+    return asc ? an - bn : bn - an;
   }});
   var tbody = tbl.querySelector('tbody');
   var lastRow = tbody.lastElementChild;
