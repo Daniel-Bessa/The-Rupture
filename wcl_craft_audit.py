@@ -4375,6 +4375,54 @@ _BOSS_DEDICATED_PAGES = {
     "Crown of the Cosmos":         "boss_crown_heroic.html",
 }
 
+# Short subtitle shown under each mechanic column header on boss Mythic pages.
+# Displayed as a small second line, e.g. "Tort.Extract\n(pools)".
+_MECH_SUBTITLE = {
+    # Fallen-King Salhadaar
+    "Tort.Extract":   "pools",
+    "Umbral Beams":   "beams",
+    "Void Exposure":  "orbs",
+    "Twilight Spk.":  "spikes",
+    # Chimaerus
+    "Alndust Ess.":   "pools",
+    "Alndust Uph.":   "soak",
+    "Disc.Roar":      "raid dmg",
+    "Rift Emerg.":    "raid dmg",
+    # Imperator Averzian
+    "Shad.Advance":   "proximity",
+    "Void Fall":      "zones",
+    "Obliv.Wrath":    "lances",
+    "Umbral Col.":    "soak",
+    "Gnash.Void":     "tank",
+    "Shad.Phalanx":   "march",
+    # Vorasius
+    "Blisterburst":   "explosion",
+    "Claw Slam":      "soak",
+    "Parasite Exp.":  "dodge",
+    "Void Breath":    "frontal",
+    # Vaelgor & Ezzorak
+    "Impale":         "rear cone",
+    "Dread Breath":   "frontal",
+    "Gloomfield":     "zone",
+    "Tail Lash":      "rear cone",
+    "Nullbeam":       "soak",
+    # Lightblinded Vanguard
+    "Final Verdict":  "tank",
+    "Divine Toll":    "dodge",
+    "Exec.Sentence":  "soak",
+    "Trampled":       "charge",
+    "Div.Hammer":     "hammers",
+    # Crown of the Cosmos
+    "Silverstrike":   "arrow",
+    "Void Stacks":    "debuff",
+    "P3 Circle":      "circles",
+    "Brstng Empty.":  "obelisk",
+    "Void Remnants":  "impact",
+    "Singularity":    "eruption",
+    "Dev.Cosmos":     "zone",
+    "Grav.Collapse":  "knockup",
+}
+
 
 def write_bosses_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write a per-boss hub page (bosses.html) aggregating kills/wipes across all reports."""
@@ -5253,6 +5301,10 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 label_counts[lbl] = label_counts.get(lbl, 0) + 1
     mech_labels = sorted(label_counts, key=lambda l: -label_counts[l])
 
+    # Build label → full description from boss_mechanics (for header tooltips)
+    _boss_name_base = boss_name.rsplit(" (", 1)[0]
+    _label_to_name = {m["label"]: m["name"] for m in BOSS_MECHANICS.get(_boss_name_base, [])}
+
     # ── Step 3: aggregate totals ──────────────────────────────────────────────
     def _empty_player(char, color):
         return {"char": char, "color": color, "deaths": 0, "interrupts": 0,
@@ -5334,19 +5386,24 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
     # ── Step 5: Totals tab ────────────────────────────────────────────────────
     def _build_totals():
-        hdrs = [("Player", "left", "min-width:140px"),
-                ("Deaths",  "center", "min-width:70px")]
+        hdrs = [("Player", "left", "min-width:140px", "", ""),
+                ("Deaths",  "center", "min-width:70px", "", "")]
         if IS_SALHADAAR:
-            hdrs.append(("Interrupts", "center", "min-width:80px"))
+            hdrs.append(("Interrupts", "center", "min-width:80px", "", ""))
         for ml in mech_labels:
-            hdrs.append((ml, "center", "min-width:100px"))
+            full_name = _label_to_name.get(ml, "")
+            subtitle  = _MECH_SUBTITLE.get(ml, "")
+            hdrs.append((ml, "center", "min-width:100px", full_name, subtitle))
 
         t  = '<div style="overflow-x:auto">'
         t += '<table class="sal-table" id="sal-totals-tbl" style="width:100%;border-collapse:collapse"><thead><tr>'
-        for i, (h, align, w) in enumerate(hdrs):
-            t += (f'<th onclick="salSort({i})" style="cursor:pointer;text-align:{align};'
+        for i, (h, align, w, tip, sub) in enumerate(hdrs):
+            title_attr = f' title="{_esc(tip)}"' if tip else ""
+            sub_html   = (f'<br><span style="color:#556;font-size:11px;font-weight:400">({_esc(sub)})</span>'
+                          if sub else "")
+            t += (f'<th onclick="salSort({i})"{title_attr} style="cursor:pointer;text-align:{align};'
                   f'padding:5px 10px;color:#aaa;white-space:nowrap;{w};border-bottom:1px solid #2a2a4a">'
-                  f'{_esc(h)} <span id="sal-sort-{i}"></span></th>')
+                  f'{_esc(h)}{sub_html} <span id="sal-sort-{i}"></span></th>')
         t += '</tr></thead><tbody>'
 
         for pname, pd in sorted_players:
@@ -5497,9 +5554,14 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             out += (f'<th onclick="wipeSort(\'{tbl_id}\',0)" style="cursor:pointer;text-align:left;'
                     f'padding:4px 10px;color:#aaa;white-space:nowrap">Player <span id="{tbl_id}-s0"></span></th>')
             for ci, ml in enumerate(mech_labels, 1):
-                out += (f'<th onclick="wipeSort(\'{tbl_id}\',{ci})" style="cursor:pointer;text-align:center;'
+                _tip  = _label_to_name.get(ml, "")
+                _sub  = _MECH_SUBTITLE.get(ml, "")
+                _tattrib = f' title="{_esc(_tip)}"' if _tip else ""
+                _subhtml = (f'<br><span style="color:#556;font-size:11px;font-weight:400">({_esc(_sub)})</span>'
+                            if _sub else "")
+                out += (f'<th onclick="wipeSort(\'{tbl_id}\',{ci})"{_tattrib} style="cursor:pointer;text-align:center;'
                         f'padding:4px 8px;color:#aaa;border-left:1px solid #2a2a4a;white-space:nowrap">'
-                        f'{_esc(ml)} <span id="{tbl_id}-s{ci}"></span></th>')
+                        f'{_esc(ml)}{_subhtml} <span id="{tbl_id}-s{ci}"></span></th>')
             out += '</tr></thead><tbody>'
             for pid in all_pids:
                 raw_pid = str(pid)
