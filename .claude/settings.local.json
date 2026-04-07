@@ -9,7 +9,11 @@
       "Bash(while kill:*)",
       "Bash(do sleep:*)",
       "Bash(done)",
-      "Bash(python wcl_craft_audit.py)"
+      "Bash(python wcl_craft_audit.py)",
+      "Bash(sort -t# -k2 -n)",
+      "Bash(sort -t- -k3 -n)",
+      "Bash(sort -t'\\(' -k2 -n)",
+      "Bash(sort -t' ' -k2 -n)"
     ],
     "defaultMode": "bypassPermissions"
   }
