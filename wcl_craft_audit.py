@@ -2244,6 +2244,24 @@ CLASS_COLORS = {
     "Warrior": "#C69B6D",
 }
 
+WOW_RACE_NAMES: dict = {
+    1:  "Human",              2:  "Orc",
+    3:  "Dwarf",              4:  "Night Elf",
+    5:  "Undead",             6:  "Tauren",
+    7:  "Gnome",              8:  "Troll",
+    9:  "Goblin",             10: "Blood Elf",
+    11: "Draenei",            22: "Worgen",
+    24: "Pandaren",           25: "Pandaren",
+    26: "Pandaren",           27: "Nightborne",
+    28: "Highmountain Tauren",29: "Void Elf",
+    30: "Lightforged Draenei",31: "Zandalari Troll",
+    32: "Kul Tiran",          34: "Dark Iron Dwarf",
+    35: "Vulpera",            36: "Mag'har Orc",
+    37: "Mechagnome",         52: "Dracthyr",
+    70: "Dracthyr",
+}
+DWARF_RACES = {"Dwarf", "Dark Iron Dwarf"}
+
 # WoW spec IDs → role  (used to detect per-fight spec swaps for accurate table grouping)
 SPEC_ROLES: dict = {
     # Death Knight
@@ -4754,6 +4772,12 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             if name and cls != "Unknown":
                 char_classes[name.lower()] = cls
 
+    # Build per-character race lookup from all reports that have char_races
+    char_races_all: dict = {}  # char_name_lower -> race_name
+    for day_data in days_data:
+        for cname, race in day_data.get("char_races", {}).items():
+            char_races_all[cname.lower()] = race
+
     # Build full player list: merge roster.txt with seen-in-reports data
     # PLAYER_ROLES has all players from roster.txt
     all_players = {}
@@ -4777,6 +4801,9 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         extra_chars = prof.get("chars", set()) - {c for c in prof.get("chars", set())
                                                    if c.lower() in {k for k, (n,_) in ROSTER.items() if n == pname}}
 
+        main_char = next((c for c, t in roster_chars.items() if t == "Main"), None)
+        main_race = char_races_all.get(main_char.lower(), "") if main_char else ""
+
         all_players[pname] = {
             "role": role,
             "class": cls,
@@ -4784,6 +4811,8 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             "roster_chars": roster_chars,
             "extra_chars": extra_chars,
             "has_profile": pname in profiles,
+            "main_char": main_char,
+            "main_race": main_race,
         }
 
     # Group by role
@@ -4843,6 +4872,74 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
             )
         cards_html += '</div></div>'
 
+    # ── Race table ────────────────────────────────────────────────────────────
+    role_order = {"Tank": 0, "Healer": 1, "DPS": 2}
+    sorted_all = sorted(all_players.items(), key=lambda x: (role_order.get(x[1]["role"], 3), x[0].lower()))
+
+    race_rows = ""
+    for pname, data in sorted_all:
+        mc   = data["main_char"] or "—"
+        race = data["main_race"] or "—"
+        cls  = data["class"]
+        cc   = CLASS_COLORS.get(cls, "#888")
+        rc   = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}.get(data["role"], "#aaa")
+        is_dwarf = race in DWARF_RACES
+        row_style = "background:#1a2a1a;" if is_dwarf else ""
+        race_color = "#f0c040" if is_dwarf else "#c9d1d9"
+        race_rows += (f'<tr style="{row_style}">'
+                      f'<td style="padding:5px 10px;white-space:nowrap;color:{_esc(rc)};font-weight:600">{_esc(pname)}</td>'
+                      f'<td style="padding:5px 10px;white-space:nowrap;color:{_esc(cc)};font-weight:600">{_esc(mc)}</td>'
+                      f'<td style="padding:5px 10px;color:#aaa">{_esc(cls)}</td>'
+                      f'<td style="padding:5px 10px;color:{_esc(race_color)};font-weight:{"700" if is_dwarf else "400"}">{_esc(race)}</td>'
+                      f'</tr>')
+
+    race_table_html = (
+        '<div style="margin-top:36px">'
+        '<div style="color:#e6edf3;font-weight:700;font-size:16px;margin-bottom:12px">Main Character Races</div>'
+        '<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;max-width:700px">'
+        '<thead><tr>'
+        '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Player</th>'
+        '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Main</th>'
+        '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Class</th>'
+        '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Race</th>'
+        '</tr></thead><tbody>'
+        f'{race_rows}'
+        '</tbody></table></div></div>'
+    )
+
+    # ── Dwarf table ───────────────────────────────────────────────────────────
+    dwarf_rows = ""
+    for pname, data in sorted_all:
+        if data["main_race"] not in DWARF_RACES:
+            continue
+        mc  = data["main_char"] or "—"
+        cls = data["class"]
+        cc  = CLASS_COLORS.get(cls, "#888")
+        rc  = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}.get(data["role"], "#aaa")
+        dwarf_rows += (f'<tr>'
+                       f'<td style="padding:5px 10px;white-space:nowrap;color:{_esc(rc)};font-weight:600">{_esc(pname)}</td>'
+                       f'<td style="padding:5px 10px;white-space:nowrap;color:{_esc(cc)};font-weight:600">{_esc(mc)}</td>'
+                       f'<td style="padding:5px 10px;color:#aaa">{_esc(cls)}</td>'
+                       f'<td style="padding:5px 10px;color:#f0c040;font-weight:700">{_esc(data["main_race"])}</td>'
+                       f'</tr>')
+
+    if dwarf_rows:
+        dwarf_table_html = (
+            '<div style="margin-top:28px">'
+            '<div style="color:#f0c040;font-weight:700;font-size:16px;margin-bottom:12px">Dwarfs &amp; Dark Iron Dwarfs</div>'
+            '<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;max-width:700px">'
+            '<thead><tr>'
+            '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Player</th>'
+            '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Main</th>'
+            '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Class</th>'
+            '<th style="text-align:left;padding:5px 10px;color:#aaa;border-bottom:1px solid #2a2a4a">Race</th>'
+            '</tr></thead><tbody>'
+            f'{dwarf_rows}'
+            '</tbody></table></div></div>'
+        )
+    else:
+        dwarf_table_html = '<div style="margin-top:28px;color:#556">No Dwarfs or Dark Iron Dwarfs found in roster.</div>'
+
     title = f"Roster — {guild_name}" if guild_name else "Roster"
     total_players = len(all_players)
 
@@ -4880,6 +4977,8 @@ h1{{color:#7289DA;font-size:22px;font-weight:700}}
 <div class="page-header"><h1>👥 {_esc(title)}</h1></div>
 <div class="subtitle">{total_players} players</div>
 {cards_html}
+{race_table_html}
+{dwarf_table_html}
 </body>
 </html>"""
 
@@ -7339,6 +7438,17 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
     print("\n[...] Analyzing crafted gear...")
     records = analyze_players(actors, all_combatant_events)
     crafted_count = sum(1 for r in records if r["item_id"] != 0)
+
+    # Extract race per character from combatant events
+    actor_id_to_name = {a["id"]: a.get("name", "") for a in actors}
+    char_races: dict = {}  # char_name -> race_name
+    for ce in all_combatant_events:
+        pid     = ce.get("sourceID")
+        race_id = ce.get("raceID")
+        if pid and race_id and pid in actor_id_to_name:
+            cname = actor_id_to_name[pid]
+            if cname:
+                char_races[cname] = WOW_RACE_NAMES.get(race_id, f"Race#{race_id}")
     player_count  = len(set(r["player"] for r in records))
     no_craft_count= sum(1 for r in records if r["item_id"] == 0)
     print(f"[OK] Found {crafted_count} crafted items across {player_count} players.")
@@ -7647,7 +7757,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
         "report_code": report_code, "report_info": report_info,
         "records": records, "split_data": split_data,
         "boss_data": boss_data, "wipe_data": wipe_data, "actors": actors,
-        "max_splits": max_splits,
+        "max_splits": max_splits, "char_races": char_races,
     }
     cache = _cache_path(report_code)
     with open(cache, "w", encoding="utf-8") as f:

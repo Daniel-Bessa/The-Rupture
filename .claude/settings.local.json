@@ -13,7 +13,8 @@
       "Bash(sort -t# -k2 -n)",
       "Bash(sort -t- -k3 -n)",
       "Bash(sort -t'\\(' -k2 -n)",
-      "Bash(sort -t' ' -k2 -n)"
+      "Bash(sort -t' ' -k2 -n)",
+      "Bash(python3 -c ':*)"
     ],
     "defaultMode": "bypassPermissions"
   }
