@@ -4585,6 +4585,7 @@ _BOSS_DEDICATED_PAGES = {
     "Vorasius":                    "boss_vorasius_mythic.html",
     "Fallen-King Salhadaar":       "boss_salhadaar_mythic.html",
     "Vaelgor & Ezzorak":           "boss_vaelgor_mythic.html",
+    "Lightblinded Vanguard":       "boss_vanguard_mythic.html",
     "Crown of the Cosmos":         "boss_crown_heroic.html",
 }
 
