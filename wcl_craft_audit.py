@@ -4782,9 +4782,8 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
     all_players = {}
     for pname, role in PLAYER_ROLES.items():
         prof = profiles.get(pname, {})
-        cls = prof.get("class", "Unknown")
-        if cls == "Unknown":
-            cls = PLAYER_CLASS_HINTS.get(pname, "Unknown")
+        # Hint always wins — it means the player switched mains/classes
+        cls = PLAYER_CLASS_HINTS.get(pname) or prof.get("class", "Unknown")
         cls_color = CLASS_COLORS.get(cls, "#888")
 
         # Chars from roster.txt for this player
@@ -4827,8 +4826,9 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         chars_html = ""
         for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
             char_cls   = char_classes.get(cname.lower(), "Unknown")
-            if char_cls == "Unknown" and mtype == "Main":
-                char_cls = PLAYER_CLASS_HINTS.get(pname, "Unknown")
+            # Hint always wins for the main character
+            if mtype == "Main" and PLAYER_CLASS_HINTS.get(pname):
+                char_cls = PLAYER_CLASS_HINTS[pname]
             char_color = CLASS_COLORS.get(char_cls, "#888") if not faded else "#444"
             tag_bg     = "#1e3a1e" if mtype == "Main" else "#1a2233"
             tag_color  = "#81c784" if mtype == "Main" else "#7289DA"
