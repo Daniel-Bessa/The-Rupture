@@ -1,34 +1,34 @@
 # roster.txt
 # ─────────────────────────────────────────────────────────────────────────────
-# Format: PlayerName | Role | CharName:Main/Alt, CharName:Main/Alt, ...
+# Format: PlayerName | Role | CharName:Main/Alt, CharName:Main/Alt, ... [| ClassName]
 # Roles: Tank, Healer, DPS, Inactive
-# Add new players or alts here — no code changes needed.
+# Optional 4th field sets class color when the main hasn't appeared in logs yet.
 # ─────────────────────────────────────────────────────────────────────────────
 
 Nope        | Tank   | Ñøpe:Main, Nøpæ:Alt, Nopebrew:Alt
-Phyxius     | Tank   | Phyxius:Main, Phyxy:Alt, Phyxdemon:Alt
+Phyxius     | Tank   | Phyxius:Main, Phyxy:Alt, Phyxdemon:Alt             | Paladin
 Toshiko     | Healer | Toshiko:Main, Holynooblal:Alt, Evokenooblal:Alt
 Minxy       | Healer | Minxymender:Main, Minxycat:Alt, Drunkminxy:Alt
 Hipe        | Healer | Wype:Main, Nype:Alt, Cype:Alt
-Zush        | Healer | Züsh:Main, Zush:Alt, Ryuhko:Alt
+Zush        | Healer | Züsh:Main, Zush:Alt, Ryuhko:Alt                    | Shaman
 Jimy        | DPS    | Madhmag:Main, Notyunyun:Alt, Käz:Alt
-Ice         | DPS    | Icecöld:Main, Icecoldleap:Alt, Icecold:Alt, Chocoice:Alt
-Zodiacos    | DPS    | Zodiacos:Main
+Icecold     | DPS    | Icecöld:Main, Icecoldleap:Alt, Icecold:Alt, Chocoice:Alt | Druid
+Zodiacos    | DPS    | Zodiacos:Main                                       | Warrior
 Kutcher     | DPS    | Kutcherdh:Main, Kutcherdhtwo:Alt, Kutchersplit:Alt
 Hypno       | DPS    | Hypno:Main, Hypnodh:Alt, Hypnø:Alt
 Brunaine    | DPS    | Brunaineevo:Main, Brunainehunt:Alt, Brunainevoke:Alt
 Beldryk     | DPS    | beldrýk:Main, Beldrýk:Main, beldryc:Alt, Beldrick:Alt
 Potrenu     | DPS    | Potrenu:Main, Potrenuu:Alt, Potrenup:Alt
 Shamishan   | DPS    | Shamishan:Main, Samdracson:Alt
-Madonis     | DPS    | Madonismagus:Main, Madonis:Alt, Madonisvoker:Alt
-Upyeah      | DPS    | Upyëah:Main, upyeäh:Alt, upyeah:Alt
+Madonis     | DPS    | Madonismagus:Main, Madonis:Alt, Madonisvoker:Alt   | Mage
+Upyeah      | DPS    | Upyëah:Main, upyeäh:Alt, upyeah:Alt               | Hunter
 Uncleyoinky | DPS    | uncleyoinky:Main, allblues:Alt, Allblues:Alt
 Nizze       | DPS    | Nizze:Main, Nizzedk:Alt
 Mostbanned  | DPS    | Mostlock:Main, Mosta:Alt, Mostbanned:Alt
 Malheiro    | DPS    | Malheiro:Main, Rödinhas:Alt, Malhas:Alt
 Bolters     | DPS    | Devert:Main, Schmosba:Alt, Ipala:Alt
 Tinet       | DPS    | Tinet:Main, Pingveryhigh:Alt, Guldanrämsay:Alt
-Doomkry     | DPS    | Pumppaladin:Main, Doomkry:Alt, Lockry:Alt
+Doomkry     | DPS    | Pumppaladin:Main, Doomkry:Alt, Lockry:Alt          | Warrior
 
 # ── Inactive / Alumni ────────────────────────────────────────────────────────
 

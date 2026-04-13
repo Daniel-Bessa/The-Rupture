@@ -4783,6 +4783,8 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
     for pname, role in PLAYER_ROLES.items():
         prof = profiles.get(pname, {})
         cls = prof.get("class", "Unknown")
+        if cls == "Unknown":
+            cls = PLAYER_CLASS_HINTS.get(pname, "Unknown")
         cls_color = CLASS_COLORS.get(cls, "#888")
 
         # Chars from roster.txt for this player
@@ -4825,6 +4827,8 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         chars_html = ""
         for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
             char_cls   = char_classes.get(cname.lower(), "Unknown")
+            if char_cls == "Unknown" and mtype == "Main":
+                char_cls = PLAYER_CLASS_HINTS.get(pname, "Unknown")
             char_color = CLASS_COLORS.get(char_cls, "#888") if not faded else "#444"
             tag_bg     = "#1e3a1e" if mtype == "Main" else "#1a2233"
             tag_color  = "#81c784" if mtype == "Main" else "#7289DA"
@@ -6522,14 +6526,19 @@ function filterGear(input) {{
 
 # Maps character name (lowercase) -> (Player name, "Main" or "Alt")
 ROSTER = {}
-PLAYER_ROLES = {}  # player_name -> "Tank"/"Healer"/"DPS"
+PLAYER_ROLES = {}        # player_name -> "Tank"/"Healer"/"DPS"/"Inactive"
+PLAYER_CLASS_HINTS = {}  # player_name -> WoW class (e.g. "Druid") — overrides log detection
 
 
 def load_roster(path="roster.txt"):
-    """Load player roster from roster.txt. Format: PlayerName | Role | CharName:Main/Alt, ..."""
-    global ROSTER, PLAYER_ROLES
+    """Load player roster from roster.txt.
+    Format: PlayerName | Role | CharName:Main/Alt, ... [| ClassName]
+    Optional 4th field sets a class color hint (e.g. 'Druid') used when the
+    character hasn't appeared in logs yet."""
+    global ROSTER, PLAYER_ROLES, PLAYER_CLASS_HINTS
     ROSTER = {}
     PLAYER_ROLES = {}
+    PLAYER_CLASS_HINTS = {}
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -6541,6 +6550,8 @@ def load_roster(path="roster.txt"):
                     continue
                 player_name, role, chars_raw = parts[0], parts[1], parts[2]
                 PLAYER_ROLES[player_name] = role
+                if len(parts) >= 4 and parts[3]:
+                    PLAYER_CLASS_HINTS[player_name] = parts[3]
                 for char_entry in chars_raw.split(","):
                     char_entry = char_entry.strip()
                     if not char_entry:
