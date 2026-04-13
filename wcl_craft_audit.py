@@ -3036,6 +3036,76 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         t += '</tbody></table></div>'
         return t
 
+    def _build_mechanics_overview_pane(boss_wipes_list: list, ov_pids: list) -> str:
+        """Aggregate mechanic hit counts per player across all wipes.
+        Total + (avg/pull) per mechanic column, sorted by role.
+        """
+        if not mech_defs or not boss_wipes_list:
+            return ""
+        pid_mech_totals   = {}
+        pid_wipes_present = {}
+        for w in boss_wipes_list:
+            mechs = w.get("mechanics_data", {})
+            pids_in_wipe = {p for p in
+                            (set(w.get("all_player_ids", set())) | set(w.get("deaths", {}).keys()))
+                            if p in actor_lookup}
+            for p in pids_in_wipe:
+                pid_wipes_present[p] = pid_wipes_present.get(p, 0) + 1
+                for m in mech_defs:
+                    lbl = m["label"]
+                    cnt = mechs.get(p, {}).get(lbl, 0)
+                    pid_mech_totals.setdefault(p, {})
+                    pid_mech_totals[p][lbl] = pid_mech_totals[p].get(lbl, 0) + cnt
+        if not any(pid_mech_totals.values()):
+            return ""
+        col_span = 1 + len(mech_defs) + 1
+        t  = (f'<p style="color:#556;font-size:11px;margin:0 0 8px">'
+              f'Totals across all {len(boss_wipes_list)} wipe(s). '
+              f'<span style="color:#666">Parentheses = avg per pull.</span></p>')
+        t += '<div class="table-wrap"><table class="detail-col-hidden"><thead><tr>'
+        t += '<th class="player-header">Player</th>'
+        for m in mech_defs:
+            css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
+            tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
+            t += (f'<th class="{css}" style="cursor:help"'
+                  f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                  f'{escape(m["label"])}</th>')
+        t += '<th style="color:#556;font-size:11px;font-weight:normal;text-align:center">Pulls</th>'
+        t += '</tr></thead><tbody>'
+        current_role = None
+        for pid in ov_pids:
+            if pid not in pid_mech_totals and pid not in pid_wipes_present:
+                continue
+            actor     = actor_lookup.get(pid, {})
+            char_name = actor.get("name", f"ID-{pid}")
+            cls       = actor.get("subType", "Unknown")
+            cls_color = CLASS_COLORS.get(cls, "#ccc")
+            pname, _  = lookup_roster(char_name)
+            role_str  = PLAYER_ROLES.get(pname, "DPS")
+            if role_str != current_role:
+                current_role = role_str
+                t += (f'<tr class="role-sep"><td colspan="{col_span}">'
+                      f'── {current_role}s ──</td></tr>')
+            n_wipes = pid_wipes_present.get(pid, 0)
+            t += '<tr>'
+            slug = pname.lower()
+            t += (f'<td class="player-cell"><a href="players/player_{slug}.html"'
+                  f' class="pname" style="color:{cls_color}">{escape(pname)}</a></td>')
+            for m in mech_defs:
+                lbl   = m["label"]
+                total = pid_mech_totals.get(pid, {}).get(lbl, 0)
+                if total > 0:
+                    bg  = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                    avg = total / n_wipes if n_wipes > 0 else 0
+                    t += (f'<td class="center" style="background:{bg}">{total}'
+                          f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
+                else:
+                    t += '<td class="center">—</td>'
+            t += f'<td class="center" style="color:#666;font-size:11px">{n_wipes}</td>'
+            t += '</tr>'
+        t += '</tbody></table></div>'
+        return t
+
     def _build_vorasius_tank_swap_banner(fights_list: list) -> str:
         """Orange warning for Shadowclaw Slam tank swap failures."""
         all_swaps = [ev for fd in fights_list for ev in fd.get("vorasius_tank_swaps", [])]
@@ -3595,7 +3665,21 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             km, ks     = divmod(kill_dur_s, 60)
             pull_btns  = f'<button class="pull-btn active" onclick="switchPull(this,\'{table_id}\')">⚔ Kill · {km}:{ks:02d}</button>'
 
-            wipe_panes = ""
+            # All-wipes overview button + pane
+            all_ov_pids_kw = sorted(
+                {p for w in boss_wipes for p in
+                 (set(w.get("all_player_ids", set())) | set(w.get("deaths", {}).keys()))
+                 if p in actor_lookup},
+                key=pid_sort
+            )
+            ov_kw_id  = f"ov-{table_id}"
+            ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw)
+            if ov_kw_html:
+                pull_btns += (f'<button class="pull-btn" onclick="switchPull(this,\'{ov_kw_id}\')">'
+                              f'All Wipes</button>')
+            ov_kw_pane = f'<div class="pull-pane" id="pane-{ov_kw_id}">{ov_kw_html}</div>' if ov_kw_html else ""
+
+            wipe_panes = ov_kw_pane
             for wi, w in enumerate(reversed(boss_wipes)):  # newest first in selector
                 actual_wipe_num = total_wipes - wi          # 1-based, newest = total_wipes
                 bpct    = w.get("boss_pct", 0)
@@ -3641,7 +3725,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             wm, ws = divmod(dur_s, 60)
             w["_row_label"] = f"💀 Wipe {wi + 1} — {bpct}% boss HP · {wm}:{ws:02d}"
 
-        pull_btns  = ""
+        # Build all-wipes overview pane (shown by default)
+        all_ov_pids = sorted(
+            {p for w in boss_wipes for p in
+             (set(w.get("all_player_ids", set())) | set(w.get("deaths", {}).keys()))
+             if p in actor_lookup},
+            key=pid_sort
+        )
+        ov_tbl_id = f"ov-{table_id}"
+        ov_html   = _build_mechanics_overview_pane(boss_wipes, all_ov_pids)
+        pull_btns  = (f'<button class="pull-btn active" onclick="switchPull(this,\'{ov_tbl_id}\')">'
+                      f'All Wipes</button>')
         wipe_panes = ""
         for wi, w in enumerate(reversed(boss_wipes)):
             actual_wipe_num = total - wi
@@ -3649,9 +3743,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             dur_s   = w.get("fight_dur_ms", 0) // 1000
             wm, ws  = divmod(dur_s, 60)
             wtbl_id = f"wipe-{table_id}-{wi}"
-            active  = "active" if wi == 0 else ""
-            btn_cls = "pull-btn wipe active" if wi == 0 else "pull-btn wipe"
-            pull_btns += f'<button class="{btn_cls}" onclick="switchPull(this,\'{wtbl_id}\')">Wipe {actual_wipe_num} · {bpct}% · {wm}:{ws:02d}</button>'
+            pull_btns += f'<button class="pull-btn wipe" onclick="switchPull(this,\'{wtbl_id}\')">Wipe {actual_wipe_num} · {bpct}% · {wm}:{ws:02d}</button>'
             wipe_pids = sorted(
                 {p for p in (set(w.get("all_player_ids", [])) | set(w.get("deaths", {}).keys())) if p in actor_lookup},
                 key=pid_sort
@@ -3663,12 +3755,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             wo_sal_wipe         = _build_salhadaar_wipe_banner([w])            if "Salhadaar" in boss_name_base else ""
             wo_vorasius_swap    = _build_vorasius_tank_swap_banner([w])        if "Vorasius"  in boss_name_base else ""
             wo_sal_interrupts   = _build_salhadaar_interrupt_table([w])        if "Salhadaar" in boss_name_base else ""
-            wipe_panes  += (f'<div class="pull-pane {active}" id="pane-{wtbl_id}">'
-                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
-                            f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}</div>')
+            wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
+                           f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
+                           f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}</div>')
 
+        ov_pane       = f'<div class="pull-pane active" id="pane-{ov_tbl_id}">{ov_html}</div>'
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
-        results[boss_name] = pull_selector + wipe_panes
+        results[boss_name] = pull_selector + ov_pane + wipe_panes
 
     return results
 
