@@ -283,17 +283,27 @@ def fetch_interrupt_events(token: str, report_code: str, fight_id: int) -> list:
     return all_events
 
 
-def analyze_interrupts(interrupt_events: list, actor_lookup: dict) -> dict:
-    """Count interrupts performed by each player.
-    Returns {pid: int}
+def analyze_interrupts(interrupt_events: list, actor_lookup: dict,
+                       ability_names: dict = None, fight_start_ms: int = 0) -> dict:
+    """Count interrupts performed by each player and record interrupted spell names.
+    Returns {pid: {"count": int, "details": [{"interrupted": name, "t": "M:SS"}]}}
     """
-    totals = {}
+    ability_names = ability_names or {}
+    result = {}
     for event in interrupt_events:
         pid = event.get("sourceID")
         if pid is None or pid not in actor_lookup:
             continue
-        totals[pid] = totals.get(pid, 0) + 1
-    return totals
+        extra_id   = event.get("extraAbilityGameID", 0)
+        spell_name = ability_names.get(extra_id, f"#{extra_id}" if extra_id else "Unknown")
+        elapsed    = (event.get("timestamp", fight_start_ms) - fight_start_ms) / 1000
+        m2, s2     = divmod(int(elapsed), 60)
+        t_str      = f"{m2}:{s2:02d}"
+        if pid not in result:
+            result[pid] = {"count": 0, "details": []}
+        result[pid]["count"] += 1
+        result[pid]["details"].append({"interrupted": spell_name, "t": t_str})
+    return result
 
 
 def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: list) -> dict:
@@ -2780,6 +2790,32 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             row_lbl = fight.get("_row_label") or f"Split {fi}"
             t += _overview_row(row_lbl, fight)
             current_role = None
+            # Pre-compute soak expected counts + event timelines for this fight
+            _fight_mts_all   = fight.get("mechanic_timestamps", {})
+            _fight_mechs_all = fight.get("mechanics_data", {})
+            _soak_expected   = {}
+            _soak_evt_times  = {}
+            for _sm in mech_defs:
+                if _sm["type"] == "soak":
+                    _sm_counts  = [_fight_mechs_all.get(p, {}).get(_sm["label"], 0) for p in pids]
+                    _sm_nonzero = [c for c in _sm_counts if c > 0]
+                    _soak_expected[_sm["label"]] = max(_sm_nonzero) if _sm_nonzero else 0
+                    _sm_all_t = []
+                    for _sp in pids:
+                        _sp_mts = _fight_mts_all.get(_sp) or _fight_mts_all.get(str(_sp), {})
+                        for _h in _sp_mts.get(_sm["label"], []):
+                            if isinstance(_h, dict) and "t" in _h:
+                                try:
+                                    _mins, _secs = _h["t"].split(":")
+                                    _sm_all_t.append(int(_mins)*60 + int(_secs))
+                                except Exception:
+                                    pass
+                    _sm_all_t.sort()
+                    _sm_uniq = []
+                    for _st in _sm_all_t:
+                        if not _sm_uniq or _st - _sm_uniq[-1] > 5:
+                            _sm_uniq.append(_st)
+                    _soak_evt_times[_sm["label"]] = _sm_uniq
             for pid in pids:
                 deaths_map = fight.get("deaths", {})
                 if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
@@ -2841,10 +2877,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 else:
                     def_cell = '<td class="center def-h">—</td>'
 
-                int_count  = interrupts.get(pid, 0)
-                int_str    = str(int_count) if int_count > 0 else "—"
-                int_style  = (' style="background:#1A3A1A"' if int_count > 0
-                              else (' style="background:#5D1A1A"' if has_interrupts else ""))
+                _int_data   = interrupts.get(pid, {})
+                int_count   = _int_data.get("count", 0) if isinstance(_int_data, dict) else 0
+                int_details = _int_data.get("details", []) if isinstance(_int_data, dict) else []
+                int_str     = str(int_count) if int_count > 0 else "—"
+                int_bg      = ("background:#1A3A1A" if int_count > 0
+                               else ("background:#5D1A1A" if has_interrupts else ""))
 
                 death_count  = len(death_list)
                 killed_str   = ("<br>".join(
@@ -2882,36 +2920,96 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 t += f'<td class="center dmg-h">{dmg_str}</td>'
                 t += f'<td class="center uptime-h">{uptime_str}</td>'
                 if has_interrupts:
-                    t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
-                pid_mechs = fight_mechs.get(pid, {})
-                _mts_map  = fight.get("mechanic_timestamps", {})
-                pid_mts   = _mts_map.get(pid) or _mts_map.get(str(pid), {})
-                for m in mech_defs:
-                    cnt   = pid_mechs.get(m["label"], 0)
-                    hits  = pid_mts.get(m["label"], [])
-                    if cnt:
-                        bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                        def _fmt_dmg(v):
-                            if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
-                            if v >= 1_000:     return f"{v/1_000:.0f}k"
-                            return str(v)
-                        if hits:
-                            total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
-                            tip_html  = "<br>".join(
-                                f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
-                                f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
-                                if isinstance(h, dict) else escape(h)
-                                for h in hits
-                            )
-                            tip_attr  = tip_html.replace("'", "&#39;")
-                            cell_txt  = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
-                            t += (f'<td class="center" style="background:{bg};cursor:help"'
-                                  f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
-                                  f' onmouseleave="hideHTip()">{cell_txt}</td>')
-                        else:
-                            t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                    if int_details:
+                        _int_tip = "<br>".join(
+                            f'<span style="color:#a0b4ff">{escape(d["t"])}</span>'
+                            f' <span style="color:#c8e6c9">{escape(d["interrupted"])}</span>'
+                            for d in int_details
+                        )
+                        _int_tip_attr = _int_tip.replace("'", "&#39;")
+                        _int_sty = (int_bg + ";cursor:help") if int_bg else "cursor:help"
+                        t += (f'<td class="center interrupt-h" style="{_int_sty}"'
+                              f' data-htip=\'{_int_tip_attr}\' onmouseenter="showHTip(this)"'
+                              f' onmouseleave="hideHTip()">{int_str}</td>')
                     else:
-                        t += '<td class="center">—</td>'
+                        _int_sty_attr = f' style="{int_bg}"' if int_bg else ""
+                        t += f'<td class="center interrupt-h"{_int_sty_attr}>{int_str}</td>'
+                pid_mechs = fight_mechs.get(pid, {})
+                pid_mts   = _fight_mts_all.get(pid) or _fight_mts_all.get(str(pid), {})
+                def _fmt_dmg(v):
+                    if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+                    if v >= 1_000:     return f"{v/1_000:.0f}k"
+                    return str(v)
+                for m in mech_defs:
+                    cnt  = pid_mechs.get(m["label"], 0)
+                    hits = pid_mts.get(m["label"], [])
+                    if m["type"] == "soak":
+                        expected = _soak_expected.get(m["label"], 0)
+                        died_pid = pid in deaths_map
+                        soaks_before_death = len(_soak_evt_times.get(m["label"], []))
+                        if died_pid and deaths_map.get(pid):
+                            try:
+                                _dm, _ds = deaths_map[pid][0]["time"].split(":")
+                                _death_s = int(_dm)*60 + int(_ds)
+                                soaks_before_death = sum(
+                                    1 for _st in _soak_evt_times.get(m["label"], [])
+                                    if _st <= _death_s)
+                            except Exception:
+                                pass
+                        missed_while_alive = max(0, soaks_before_death - cnt)
+                        if expected == 0 or cnt >= expected:
+                            bg = "#1A3D1A"
+                        elif died_pid and missed_while_alive == 0:
+                            bg = "#4A4A4A"
+                        else:
+                            bg = "#5D1A1A"
+                        if cnt:
+                            if hits:
+                                total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
+                                tip_parts = [
+                                    (f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
+                                     f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
+                                     if isinstance(h, dict) else escape(h))
+                                    for h in hits
+                                ]
+                                if died_pid and missed_while_alive > 0:
+                                    tip_parts.append(
+                                        f'<span style="color:#e57373">&#9888; missed {missed_while_alive} while alive</span>')
+                                elif died_pid:
+                                    tip_parts.append(
+                                        f'<span style="color:#888">Died &#8212; no soaks missed while alive</span>')
+                                tip_attr = "<br>".join(tip_parts).replace("'", "&#39;")
+                                cell_txt = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
+                                t += (f'<td class="center" style="background:{bg};cursor:help"'
+                                      f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
+                                      f' onmouseleave="hideHTip()">{cell_txt}</td>')
+                            else:
+                                t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                        else:
+                            if expected > 0:
+                                t += f'<td class="center" style="background:{bg}">—</td>'
+                            else:
+                                t += '<td class="center">—</td>'
+                    else:
+                        if cnt:
+                            bg = "#5D1A1A"
+                            if hits:
+                                total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
+                                tip_html  = "<br>".join(
+                                    f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
+                                    f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
+                                    if isinstance(h, dict) else escape(h)
+                                    for h in hits
+                                )
+                                tip_attr  = tip_html.replace("'", "&#39;")
+                                cell_txt  = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
+                                t += (f'<td class="center" style="background:{bg};cursor:help"'
+                                      f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
+                                      f' onmouseleave="hideHTip()">{cell_txt}</td>')
+                            else:
+                                t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                        else:
+                            t += '<td class="center">—</td>'
                 if has_void_marked:
                     vm_list = [mv for mv in fight.get("void_marked", []) if mv["target_pid"] == pid]
                     if vm_list:
@@ -7457,7 +7555,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
             uptime_map       = fetch_uptime_table(token, report_code, fid)
             healing_map      = fetch_healing_table(token, report_code, fid)
             rankings_map     = fetch_rankings(token, report_code, fid)
-            interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
+            interrupts       = analyze_interrupts(interrupt_events, actor_lookup,
+                                                 ability_names=ability_names, fight_start_ms=fight_start)
             mech_defs        = BOSS_MECHANICS.get(fname, [])
             mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
             frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs, fight_start,
@@ -7568,7 +7667,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 "salhadaar_fracture_waves": salhadaar_fracture_waves,
                 "salhadaar_wipe_events":    salhadaar_wipe_events,
             })
-            print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(interrupts.values())} interrupts.")
+            print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(v['count'] for v in interrupts.values())} interrupts.")
         except Exception as e:
             print(f"  [WARN] Could not fetch events for fight {fid}: {e}")
 
@@ -7600,7 +7699,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
                 dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
                 uptime_map       = fetch_uptime_table(token, report_code, fid)
                 healing_map      = fetch_healing_table(token, report_code, fid)
-                interrupts       = analyze_interrupts(interrupt_events, actor_lookup)
+                interrupts       = analyze_interrupts(interrupt_events, actor_lookup,
+                                                     ability_names=ability_names, fight_start_ms=fight_start)
                 mech_defs        = BOSS_MECHANICS.get(fname, [])
                 mechanics_data   = analyze_boss_mechanics(damage_events, actor_lookup, mech_defs)
                 frontal_failures = analyze_frontal_failures(damage_events, actor_lookup, mech_defs,
