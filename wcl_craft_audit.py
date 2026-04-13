@@ -1927,7 +1927,8 @@ WIPE_DEATH_THRESHOLD = 4
 
 
 def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None,
-                   fight_end_ms: int = 0, damage_events: list = None) -> dict:
+                   fight_end_ms: int = 0, damage_events: list = None,
+                   death_threshold: int = None) -> dict:
     """Analyze death events, ignoring deaths after the Nth death (wipe cascade).
     Returns {targetID: [{"time", "ability", "fight_pct", "timeline"}, ...]}
     timeline = last 5s of damage hits before death: [{"ability", "amount_k", "sec_before"}, ...]
@@ -1935,6 +1936,7 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
     results = {}
     total_deaths = 0
     ability_names = ability_names or {}
+    threshold = death_threshold if death_threshold is not None else WIPE_DEATH_THRESHOLD
 
     # Build per-player damage index for fast 5s window lookup
     dmg_by_player = {}
@@ -1947,7 +1949,7 @@ def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict 
         dmg_by_player.setdefault(pid, []).append(ev)
 
     for event in sorted(death_events, key=lambda e: e.get("timestamp", 0)):
-        if total_deaths >= WIPE_DEATH_THRESHOLD:
+        if total_deaths >= threshold:
             break
         target_id = event.get("targetID")
         if target_id is None:
