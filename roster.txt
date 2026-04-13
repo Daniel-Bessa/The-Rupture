@@ -1,18 +1,18 @@
 # roster.txt
 # ─────────────────────────────────────────────────────────────────────────────
 # Format: PlayerName | Role | CharName:Main/Alt, CharName:Main/Alt, ...
-# Roles: Tank, Healer, DPS
+# Roles: Tank, Healer, DPS, Inactive
 # Add new players or alts here — no code changes needed.
 # ─────────────────────────────────────────────────────────────────────────────
 
-Nope        | Tank   | Nopebrew:Main, Nope:Alt, Nøpæ:Alt, Ñøpe:Alt
+Nope        | Tank   | Ñøpe:Main, Nøpæ:Alt, Nopebrew:Alt
 Phyxius     | Tank   | Phyxius:Main, Phyxy:Alt, Phyxdemon:Alt
-Toshiko     | Healer | Holynooblal:Main, Toshiko:Alt, Evokenooblal:Alt
+Toshiko     | Healer | Toshiko:Main, Holynooblal:Alt, Evokenooblal:Alt
 Minxy       | Healer | Minxymender:Main, Minxycat:Alt, Drunkminxy:Alt
 Hipe        | Healer | Wype:Main, Nype:Alt, Cype:Alt
-Zush        | Healer | Zush:Main, Züsh:Main, Ryukho:Alt, Ryuhko:Alt
+Zush        | Healer | Züsh:Main, Zush:Alt, Ryuhko:Alt
 Jimy        | DPS    | Madhmag:Main, Notyunyun:Alt, Käz:Alt
-Ice         | DPS    | Icecoldleap:Main, Icecold:Alt, Chocoice:Alt
+Ice         | DPS    | Icecöld:Main, Icecoldleap:Alt, Icecold:Alt, Chocoice:Alt
 Zodiacos    | DPS    | Zodiacos:Main
 Kutcher     | DPS    | Kutcherdh:Main, Kutcherdhtwo:Alt, Kutchersplit:Alt
 Hypno       | DPS    | Hypno:Main, Hypnodh:Alt, Hypnø:Alt
@@ -21,13 +21,16 @@ Beldryk     | DPS    | beldrýk:Main, Beldrýk:Main, beldryc:Alt, Beldrick:Alt
 Potrenu     | DPS    | Potrenu:Main, Potrenuu:Alt, Potrenup:Alt
 Shamishan   | DPS    | Shamishan:Main, Samdracson:Alt
 Madonis     | DPS    | Madonismagus:Main, Madonis:Alt, Madonisvoker:Alt
-Kaze        | DPS    | Kazeofscales:Main, Kazehakase:Alt, Kazeoflight:Alt
-Upyeah      | DPS    | upyeäh:Main, upyeah:Alt
-Mindhacker  | DPS    | Mindhacker:Main, Shaggyzard:Alt, Mindrage:Alt
+Upyeah      | DPS    | Upyëah:Main, upyeäh:Alt, upyeah:Alt
 Uncleyoinky | DPS    | uncleyoinky:Main, allblues:Alt, Allblues:Alt
 Nizze       | DPS    | Nizze:Main, Nizzedk:Alt
 Mostbanned  | DPS    | Mostlock:Main, Mosta:Alt, Mostbanned:Alt
 Malheiro    | DPS    | Malheiro:Main, Rödinhas:Alt, Malhas:Alt
-Bolters     | DPS    | Schmosba:Main, Ipala:Alt, Devert:Alt
+Bolters     | DPS    | Devert:Main, Schmosba:Alt, Ipala:Alt
 Tinet       | DPS    | Tinet:Main, Pingveryhigh:Alt, Guldanrämsay:Alt
-Doomkry     | DPS    | Doomkry:Main, Pumppaladin:Alt, Lockry:Alt
+Doomkry     | DPS    | Pumppaladin:Main, Doomkry:Alt, Lockry:Alt
+
+# ── Inactive / Alumni ────────────────────────────────────────────────────────
+
+Kaze        | Inactive | Kazeofscales:Main, Kazehakase:Alt, Kazeoflight:Alt
+Mindhacker  | Inactive | Mindhacker:Main, Shaggyzard:Alt, Mindrage:Alt

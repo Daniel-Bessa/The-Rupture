@@ -4810,13 +4810,50 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         }
 
     # Group by role
-    role_order = {"Tank": 0, "Healer": 1, "DPS": 2}
-    grouped = {"Tank": [], "Healer": [], "DPS": []}
-    for pname, data in sorted(all_players.items(), key=lambda x: (role_order.get(x[1]["role"], 3), x[0].lower())):
-        grouped.get(data["role"], grouped["DPS"]).append((pname, data))
+    role_order = {"Tank": 0, "Healer": 1, "DPS": 2, "Inactive": 3}
+    grouped = {"Tank": [], "Healer": [], "DPS": [], "Inactive": []}
+    for pname, data in sorted(all_players.items(), key=lambda x: (role_order.get(x[1]["role"], 2), x[0].lower())):
+        grouped.setdefault(data["role"], grouped["DPS"]).append((pname, data))
 
-    role_colors = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373"}
-    role_icons  = {"Tank": "🛡", "Healer": "💚", "DPS": "⚔"}
+    role_colors = {"Tank": "#64b5f6", "Healer": "#81c784", "DPS": "#e57373", "Inactive": "#555"}
+    role_icons  = {"Tank": "🛡", "Healer": "💚", "DPS": "⚔", "Inactive": "💤"}
+
+    def _build_player_card(pname, data, faded=False):
+        slug = _player_slug(pname)
+        cc   = data["cls_color"] if not faded else "#555"
+        opacity = ' style="opacity:0.5"' if faded else ""
+        chars_html = ""
+        for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
+            char_cls   = char_classes.get(cname.lower(), "Unknown")
+            char_color = CLASS_COLORS.get(char_cls, "#888") if not faded else "#444"
+            tag_bg     = "#1e3a1e" if mtype == "Main" else "#1a2233"
+            tag_color  = "#81c784" if mtype == "Main" else "#7289DA"
+            tag_lbl    = "M" if mtype == "Main" else "A"
+            if faded:
+                tag_bg, tag_color = "#1a1a1a", "#444"
+            chars_html += (f'<span class="char-pill">'
+                           f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
+                           f'<span class="char-type" style="background:{tag_bg};color:{tag_color}">{tag_lbl}</span>'
+                           f'</span>')
+        for cname in sorted(data["extra_chars"]):
+            char_cls   = char_classes.get(cname.lower(), "Unknown")
+            char_color = CLASS_COLORS.get(char_cls, "#888") if not faded else "#444"
+            chars_html += (f'<span class="char-pill">'
+                           f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
+                           f'<span class="char-type" style="background:#2a1a1a;color:#aaa">?</span>'
+                           f'</span>')
+        seen_badge = ""
+        if not data["has_profile"]:
+            seen_badge = '<span class="unseen-badge">no logs</span>'
+        return (
+            f'<div class="player-card"{opacity}>'
+            f'<div class="card-top">'
+            f'<a href="players/player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
+            f'{seen_badge}'
+            f'</div>'
+            f'<div class="card-chars">{chars_html}</div>'
+            f'</div>'
+        )
 
     cards_html = ""
     for role in ("Tank", "Healer", "DPS"):
@@ -4828,42 +4865,16 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
         role_label = role if role == "DPS" else f"{role}s"
         cards_html += f'<div class="role-group"><div class="role-group-title" style="color:{rc}">{ri} {role_label}</div><div class="player-cards">'
         for pname, data in players:
-            slug = _player_slug(pname)
-            cc = data["cls_color"]
+            cards_html += _build_player_card(pname, data)
+        cards_html += '</div></div>'
 
-            # Build char pills — each char gets its own class color
-            chars_html = ""
-            for cname, mtype in sorted(data["roster_chars"].items(), key=lambda x: (0 if x[1]=="Main" else 1, x[0])):
-                char_cls   = char_classes.get(cname.lower(), "Unknown")
-                char_color = CLASS_COLORS.get(char_cls, "#888")
-                tag_bg     = "#1e3a1e" if mtype == "Main" else "#1a2233"
-                tag_color  = "#81c784" if mtype == "Main" else "#7289DA"
-                tag_lbl    = "M" if mtype == "Main" else "A"
-                chars_html += (f'<span class="char-pill">'
-                               f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
-                               f'<span class="char-type" style="background:{tag_bg};color:{tag_color}">{tag_lbl}</span>'
-                               f'</span>')
-            for cname in sorted(data["extra_chars"]):
-                char_cls   = char_classes.get(cname.lower(), "Unknown")
-                char_color = CLASS_COLORS.get(char_cls, "#888")
-                chars_html += (f'<span class="char-pill">'
-                               f'<span class="cname-text" style="color:{char_color}">{_esc(cname)}</span>'
-                               f'<span class="char-type" style="background:#2a1a1a;color:#aaa">?</span>'
-                               f'</span>')
-
-            seen_badge = ""
-            if not data["has_profile"]:
-                seen_badge = '<span class="unseen-badge">no logs</span>'
-
-            cards_html += (
-                f'<div class="player-card">'
-                f'<div class="card-top">'
-                f'<a href="players/player_{slug}.html" class="card-name" style="color:{cc}">{_esc(pname)}</a>'
-                f'{seen_badge}'
-                f'</div>'
-                f'<div class="card-chars">{chars_html}</div>'
-                f'</div>'
-            )
+    # Inactive / Alumni section
+    if grouped.get("Inactive"):
+        rc = role_colors["Inactive"]
+        ri = role_icons["Inactive"]
+        cards_html += f'<div class="role-group"><div class="role-group-title" style="color:{rc}">{ri} Alumni / Inactive</div><div class="player-cards">'
+        for pname, data in grouped["Inactive"]:
+            cards_html += _build_player_card(pname, data, faded=True)
         cards_html += '</div></div>'
 
     title = f"Roster — {guild_name}" if guild_name else "Roster"
