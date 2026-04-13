@@ -7300,6 +7300,7 @@ def _fix_int_keys(boss_data: dict) -> dict:
         "uptime_map", "dmg_taken", "healing_map", "interrupts",
         "avoidable_damage", "deaths", "mechanics_data",
         "defensive_casts", "external_casts", "horror_damage",
+        "spec_roles",
     )
     for fights in boss_data.values():
         for fight in fights:
