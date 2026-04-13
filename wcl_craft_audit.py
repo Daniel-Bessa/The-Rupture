@@ -3046,13 +3046,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             return ""
         pid_mech_totals   = {}
         pid_wipes_present = {}
+        pid_death_totals  = {}
         for w in boss_wipes_list:
-            mechs = w.get("mechanics_data", {})
+            mechs  = w.get("mechanics_data", {})
+            deaths = w.get("deaths", {})
             pids_in_wipe = {p for p in
-                            (set(w.get("all_player_ids", set())) | set(w.get("deaths", {}).keys()))
+                            (set(w.get("all_player_ids", set())) | set(deaths.keys()))
                             if p in actor_lookup}
             for p in pids_in_wipe:
                 pid_wipes_present[p] = pid_wipes_present.get(p, 0) + 1
+                pid_death_totals[p]  = pid_death_totals.get(p, 0) + len(deaths.get(p, []))
                 for m in mech_defs:
                     lbl = m["label"]
                     cnt = mechs.get(p, {}).get(lbl, 0)
@@ -3060,12 +3063,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     pid_mech_totals[p][lbl] = pid_mech_totals[p].get(lbl, 0) + cnt
         if not any(pid_mech_totals.values()):
             return ""
-        col_span = 1 + len(mech_defs) + 1
+        col_span = 1 + 1 + len(mech_defs) + 1  # player + deaths + mechs + pulls
         t  = (f'<p style="color:#556;font-size:11px;margin:0 0 8px">'
               f'Totals across all {len(boss_wipes_list)} wipe(s). '
               f'<span style="color:#666">Parentheses = avg per pull.</span></p>')
         t += '<div class="table-wrap"><table class="detail-col-hidden"><thead><tr>'
         t += '<th class="player-header">Player</th>'
+        t += '<th class="death-h" style="text-align:center">Deaths</th>'
         for m in mech_defs:
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
             tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
@@ -3088,11 +3092,19 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 current_role = role_str
                 t += (f'<tr class="role-sep"><td colspan="{col_span}">'
                       f'── {current_role}s ──</td></tr>')
-            n_wipes = pid_wipes_present.get(pid, 0)
+            n_wipes  = pid_wipes_present.get(pid, 0)
+            n_deaths = pid_death_totals.get(pid, 0)
             t += '<tr>'
             slug = pname.lower()
             t += (f'<td class="player-cell"><a href="players/player_{slug}.html"'
                   f' class="pname" style="color:{cls_color}">{escape(pname)}</a></td>')
+            # Deaths column
+            if n_deaths > 0:
+                d_avg = n_deaths / n_wipes if n_wipes > 0 else 0
+                t += (f'<td class="center death-h" style="background:#3a1a1a">{n_deaths}'
+                      f'<span style="color:#aaa;font-size:11px"> ({d_avg:.1f})</span></td>')
+            else:
+                t += '<td class="center death-h">—</td>'
             for m in mech_defs:
                 lbl   = m["label"]
                 total = pid_mech_totals.get(pid, {}).get(lbl, 0)
@@ -7465,7 +7477,16 @@ def load_config(path="wcl_config.txt"):
                 if not val:
                     continue
                 if key.startswith("REPORT_URL"):
-                    report_urls.append({"url": val, "split_start": split_start})
+                    death_thr = None
+                    if " #" in line.split("=", 1)[1]:
+                        for part in line.split("=", 1)[1].split(" #", 1)[1].split():
+                            if part.startswith("death_threshold="):
+                                try:
+                                    death_thr = int(part.split("=", 1)[1])
+                                except ValueError:
+                                    pass
+                    report_urls.append({"url": val, "split_start": split_start,
+                                        "death_threshold": death_thr})
                 else:
                     config[key] = val
     except FileNotFoundError:
@@ -7644,7 +7665,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
             fight_start      = fight.get("startTime", 0)
             fight_dur_ms     = fight.get("endTime", 0) - fight_start
             deaths           = analyze_deaths(death_events, fight_start, ability_names,
-                                              fight_end_ms=fight_dur_ms, damage_events=damage_events)
+                                              fight_end_ms=fight_dur_ms, damage_events=damage_events,
+                                              death_threshold=death_threshold)
             avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start,
                                                         ability_names, player_max_hp, player_roles_map)
             dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
@@ -7789,7 +7811,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 interrupt_events = fetch_interrupt_events(token, report_code, fid)
                 cast_events      = fetch_boss_cast_events(token, report_code, fid)
                 deaths           = analyze_deaths(death_events, fight_start, ability_names,
-                                                  fight_end_ms=fight_dur_ms, damage_events=damage_events)
+                                                  fight_end_ms=fight_dur_ms, damage_events=damage_events,
+                                                  death_threshold=death_threshold)
                 avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start,
                                                             ability_names, player_max_hp, player_roles_map)
                 dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
@@ -7974,11 +7997,13 @@ def main():
 
     days_data = []
     for rc in report_configs:
-        url         = rc["url"] if isinstance(rc, dict) else rc
-        split_start = rc.get("split_start", 1) if isinstance(rc, dict) else 1
-        code        = _extract_report_code(url)
+        url             = rc["url"] if isinstance(rc, dict) else rc
+        split_start     = rc.get("split_start", 1) if isinstance(rc, dict) else 1
+        death_threshold = rc.get("death_threshold") if isinstance(rc, dict) else None
+        code            = _extract_report_code(url)
         try:
-            result = process_report(token, code, fight_input=fight_mode)
+            result = process_report(token, code, fight_input=fight_mode,
+                                    death_threshold=death_threshold)
             for r in split_report_by_difficulty(result):
                 for dd in split_report_by_player_group(r):
                     if "player_split" in dd:
