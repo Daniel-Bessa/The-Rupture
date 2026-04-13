@@ -2628,6 +2628,417 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
     wipe_data  = wipe_data or {}
     results      = {}
 
+    # ── Shared helpers: defined before the kills loop so they're always bound
+    # ── even when boss_data is empty (wipe-only splits from mixed reports).
+    # ── The kills loop updates the cell variables in-place; all closures
+    # ── capture by reference and see the current value when called.
+    mech_defs       = []
+    has_interrupts  = False
+    has_void_marked = False
+    total_cols      = 8
+    sorted_pids     = []
+    all_pids_set    = set()
+
+    def _get_role(pid, fight=None):
+        """Return the role for a player in a specific fight, falling back to roster."""
+        char_name = actor_lookup.get(pid, {}).get("name", "")
+        pname, _  = lookup_roster(char_name)
+        if fight is not None:
+            spec_role = fight.get("spec_roles", {}).get(pid)
+            if spec_role:
+                return spec_role
+        return PLAYER_ROLES.get(pname, "DPS")
+
+    def pid_sort(pid):
+        # Stub used when boss_data is empty (wipe-only path).
+        # The kills loop redefines this below with spec-role lookup via `fights`.
+        char_name = actor_lookup.get(pid, {}).get("name", "")
+        pname, _  = lookup_roster(char_name)
+        role = PLAYER_ROLES.get(pname, "DPS")
+        return (ROLE_ORDER.get(role, 2), pname.lower())
+
+    def _hfmt(n):
+        return (f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000
+                else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k"))
+
+    def _overview_row(label, fight):
+        sp_dmg   = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
+        sp_heal  = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
+        sp_taken = sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
+        sp_dur_s = fight.get("fight_dur_ms", 0) / 1000 or 1
+        sp_dps   = sp_dmg / sp_dur_s
+        sp_m, sp_s = divmod(int(sp_dur_s), 60)
+        inner = (f'<span class="sov-title">{label}</span>'
+                 f'<span class="sov-dur">{sp_m}:{sp_s:02d}</span>'
+                 f'<span class="sov-item"><span class="sov-lbl">⚡ Raid DPS</span> <b>{_hfmt(sp_dps)}</b></span>'
+                 f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
+                 f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
+                 f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>')
+        mts_all = fight.get("mechanic_timestamps", {})
+        for m in mech_defs:
+            lbl = m["label"]
+            total_hits = 0
+            total_dmg  = 0
+            for pid_hits in mts_all.values():
+                for h in pid_hits.get(lbl, []):
+                    if isinstance(h, dict):
+                        total_hits += 1
+                        total_dmg  += h.get("dmg", 0)
+            if total_hits:
+                color = "#81c784" if m["type"] == "soak" else "#e57373"
+                inner += (f'<span class="sov-item" style="border-left:1px solid #2a2a4a;padding-left:12px">'
+                          f'<span class="sov-lbl">{escape(lbl)}</span>'
+                          f'<b style="color:{color}">{total_hits}×</b>'
+                          f' <span style="color:#aaa">{_hfmt(total_dmg)}</span></span>')
+        return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
+
+    # ── Per-pull banner builder (frontal + avoid for any list of fights) ──
+
+    def _build_banners(fights_list: list) -> str:
+        """Build Frontal Failures + Avoidable Hits HTML for a given list of fights."""
+        out = ""
+        all_frontal = [f for fight in fights_list for f in fight.get("frontal_failures", [])]
+        if all_frontal:
+            rows = ""
+            for f in all_frontal:
+                others_str = ", ".join(escape(p) for p in f["others"])
+                rows += (f'<div class="ff-item">'
+                         f'<span class="ff-time">{escape(f["time_str"])}</span> '
+                         f'<span class="ff-label">{escape(f["label"])}</span> → '
+                         f'<span class="ff-primary">{escape(f["primary_player"])}</span>'
+                         + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
+                         + '</div>')
+            out += (f'<div class="frontal-failures">'
+                    f'<div class="ff-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                    f'<span class="ff-title">⚠ Frontal Failures</span><span class="ff-chevron">▼</span></div>'
+                    f'<div class="ff-body open">{rows}</div></div>')
+        avoid_defs_local = [m for m in mech_defs if m.get("type") == "avoid"]
+        if avoid_defs_local:
+            avoid_labels = {m["label"] for m in avoid_defs_local}
+            label_hits: dict = {}
+            for fight in fights_list:
+                for pid, label_counts in fight.get("mechanics_data", {}).items():
+                    for lbl, cnt in label_counts.items():
+                        if lbl in avoid_labels:
+                            label_hits.setdefault(lbl, {})[pid] = label_hits.setdefault(lbl, {}).get(pid, 0) + cnt
+            if label_hits:
+                rows = ""
+                for m in avoid_defs_local:
+                    lbl = m["label"]
+                    if lbl not in label_hits:
+                        continue
+                    parts = " · ".join(
+                        f'<span class="av-player">{escape(actor_lookup.get(pid, {}).get("name", f"?{pid}"))}</span>'
+                        f'<span class="av-count"> ×{cnt}</span>'
+                        for pid, cnt in sorted(label_hits[lbl].items(), key=lambda x: -x[1])
+                    )
+                    rows += f'<div class="av-item"><span class="av-label">{escape(lbl)}</span> → {parts}</div>'
+                if rows:
+                    out += (f'<div class="avoid-failures">'
+                            f'<div class="av-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
+                            f'<span class="av-title">⚡ Avoidable Hits</span><span class="av-chevron">▼</span></div>'
+                            f'<div class="av-body open">{rows}</div></div>')
+        return out
+
+    def _build_chart(*_) -> str:
+        return ""  # parked — see ideas/timeline_chart.html
+
+    # ── Shared table renderer (kills + wipes) ──
+    def _render_table(fights_list, tbl_id, pids=None):
+        if pids is None:
+            pids = sorted_pids
+
+        def _sth(col_idx, lbl, css=""):
+            return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                    f' onclick="sortBossTable(\'{tbl_id}\',{col_idx},this)">'
+                    f'{lbl} <span class="sort-arrow">▼</span></th>')
+
+        t  = f'<div class="table-wrap"><table id="{tbl_id}" class="detail-col-hidden"><thead><tr>'
+        t += _sth(0, 'Player', 'player-header')
+        t += '<th class="death-h">Killed by (time)</th>'
+        t += _sth(2, 'Ext', 'ext-h')
+        t += _sth(3, 'Def', 'def-h')
+        t += _sth(4, 'Dmg Taken', 'dmg-h')
+        t += _sth(5, 'Uptime %', 'uptime-h')
+        if has_interrupts:
+            t += _sth(6, 'Interrupts', 'interrupt-h')
+        for mi, m in enumerate(mech_defs):
+            mci = (7 if has_interrupts else 6) + mi
+            css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
+            tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
+            t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
+                  f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
+                  f' onclick="sortBossTable(\'{tbl_id}\',{mci},this)">'
+                  f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
+        if has_void_marked:
+            t += '<th class="detail-h" style="min-width:140px"><span>Void Marked</span></th>'
+        else:
+            t += '<th>Notes</th>'
+        t += '</tr></thead><tbody>'
+
+        for fi, fight in enumerate(fights_list, 1):
+            row_lbl = fight.get("_row_label") or f"Split {fi}"
+            t += _overview_row(row_lbl, fight)
+            current_role = None
+            for pid in pids:
+                deaths_map = fight.get("deaths", {})
+                if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
+                    continue
+                actor     = actor_lookup.get(pid, {})
+                char_name = actor.get("name", f"ID-{pid}")
+                cls       = actor.get("subType", "Unknown")
+                cls_color = CLASS_COLORS.get(cls, "#ccc")
+                pname, _  = lookup_roster(char_name)
+                role      = _get_role(pid, fight)
+
+                if role != current_role:
+                    current_role = role
+                    t += f'<tr class="role-sep" data-role="{current_role}"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
+
+                dmg_taken_map = fight.get("dmg_taken", {})
+                uptime_map    = fight.get("uptime_map", {})
+                interrupts    = fight.get("interrupts", {})
+                fight_dur     = fight.get("fight_dur_ms", 0)
+                fight_mechs   = fight.get("mechanics_data", {})
+
+                death_list = deaths_map.get(pid, [])
+                d_raw      = dmg_taken_map.get(pid, 0)
+                dmg_str    = (f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000
+                              else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—"))
+                active     = (uptime_map.get(pid, {}).get("activeTime", 0)
+                              if isinstance(uptime_map.get(pid), dict) else 0)
+                uptime_str = (f"{min(active / fight_dur * 100, 100):.0f}%"
+                              if fight_dur > 0 and active > 0 else "—")
+                ext_list  = fight.get("external_casts", {}).get(pid, [])
+                ext_count = len(ext_list)
+                if ext_count > 0:
+                    ext_tip = "<br>".join(
+                        f'<span style="color:#c8e6c9">{escape(e["spell"])}</span>'
+                        f' <span style="color:#7289DA">{escape(e["time"])}</span>'
+                        for e in ext_list
+                    )
+                    ext_tip_attr = ext_tip.replace("'", "&#39;")
+                    ext_cell = (f'<td class="center ext-h" style="cursor:help"'
+                                f' data-htip=\'{ext_tip_attr}\''
+                                f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                                f'<span class="ext-num">{ext_count}</span></td>')
+                else:
+                    ext_cell = '<td class="center ext-h">—</td>'
+
+                def_list   = fight.get("defensive_casts", {}).get(pid, [])
+                def_count  = len(def_list)
+                if def_count > 0:
+                    def_tip = "<br>".join(
+                        f'<span style="color:#a0c4ff">{escape(d["spell"])}</span>'
+                        f' <span style="color:#7289DA">{escape(d["time"])}</span>'
+                        for d in def_list
+                    )
+                    def_tip_attr = def_tip.replace("'", "&#39;")
+                    def_cell = (f'<td class="center def-h" style="cursor:help"'
+                                f' data-htip=\'{def_tip_attr}\''
+                                f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                                f'<span class="def-num">{def_count}</span></td>')
+                else:
+                    def_cell = '<td class="center def-h">—</td>'
+
+                int_count  = interrupts.get(pid, 0)
+                int_str    = str(int_count) if int_count > 0 else "—"
+                int_style  = (' style="background:#1A3A1A"' if int_count > 0
+                              else (' style="background:#5D1A1A"' if has_interrupts else ""))
+
+                death_count  = len(death_list)
+                killed_str   = ("<br>".join(
+                    f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)'
+                    for d in death_list) or "—")
+
+                death_tip_html = ""
+                if death_list:
+                    parts = []
+                    for d in death_list:
+                        tl    = d.get("timeline", [])
+                        block = f"<b style='color:#e57373'>☠ {escape(d['ability'])}</b> @ {escape(d['time'])} ({d.get('fight_pct',0)}%)"
+                        if tl:
+                            trows = []
+                            for tt in tl:
+                                ik    = abs(tt["sec_before"]) < 0.05
+                                col   = "#ff6b6b" if ik else "#aaa"
+                                lbl   = " ← killing blow" if ik else f"-{tt['sec_before']:.1f}s"
+                                trows.append(f"<span style='color:{col}'>{escape(tt['ability'])}: {escape(tt['amount_k'])} &nbsp;<span style='color:#666;font-size:11px'>{lbl}</span></span>")
+                            block += "<br>" + "<br>".join(trows)
+                        parts.append(block)
+                    death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
+
+                row_cls = "boss-death-row" if death_count > 0 else ""
+                t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
+                slug = pname.lower()
+                t += f'<td class="player-cell"><a href="players/player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
+                if death_count > 0 and death_tip_html:
+                    tip_attr = death_tip_html.replace("'", "&#39;")
+                    t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
+                else:
+                    t += f'<td class="death-h">{killed_str}</td>'
+                t += ext_cell
+                t += def_cell
+                t += f'<td class="center dmg-h">{dmg_str}</td>'
+                t += f'<td class="center uptime-h">{uptime_str}</td>'
+                if has_interrupts:
+                    t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
+                pid_mechs = fight_mechs.get(pid, {})
+                _mts_map  = fight.get("mechanic_timestamps", {})
+                pid_mts   = _mts_map.get(pid) or _mts_map.get(str(pid), {})
+                for m in mech_defs:
+                    cnt   = pid_mechs.get(m["label"], 0)
+                    hits  = pid_mts.get(m["label"], [])
+                    if cnt:
+                        bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                        def _fmt_dmg(v):
+                            if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+                            if v >= 1_000:     return f"{v/1_000:.0f}k"
+                            return str(v)
+                        if hits:
+                            total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
+                            tip_html  = "<br>".join(
+                                f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
+                                f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
+                                if isinstance(h, dict) else escape(h)
+                                for h in hits
+                            )
+                            tip_attr  = tip_html.replace("'", "&#39;")
+                            cell_txt  = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
+                            t += (f'<td class="center" style="background:{bg};cursor:help"'
+                                  f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
+                                  f' onmouseleave="hideHTip()">{cell_txt}</td>')
+                        else:
+                            t += f'<td class="center" style="background:{bg}">{cnt}</td>'
+                    else:
+                        t += '<td class="center">—</td>'
+                if has_void_marked:
+                    vm_list = [mv for mv in fight.get("void_marked", []) if mv["target_pid"] == pid]
+                    if vm_list:
+                        parts = []
+                        for mv in vm_list:
+                            tm2, ts2 = divmod(mv["t_s"], 60)
+                            t_str2   = f"{tm2}:{ts2:02d}"
+                            if mv["dispeller_pid"] is not None:
+                                d_name = escape(actor_lookup.get(mv["dispeller_pid"], {}).get("name", f"#{mv['dispeller_pid']}"))
+                                parts.append(f'<span style="color:#e57373">{t_str2}</span>'
+                                             f' <span class="vm-arrow">&#8594;</span>'
+                                             f' <span style="color:#81c784">{d_name}</span>')
+                            else:
+                                parts.append(f'<span style="color:#e57373">{t_str2}</span>'
+                                             f' <span class="vm-arrow">&#8594;</span>'
+                                             f' <span class="vm-expired">expired</span>')
+                        t += f'<td class="detail-cell">{"<br>".join(parts)}</td>'
+                    else:
+                        t += '<td class="center">—</td>'
+                else:
+                    t += '<td></td>'
+                t += '</tr>'
+
+        t += '</tbody></table></div>'
+        return t
+
+    def _build_vorasius_tank_swap_banner(fights_list: list) -> str:
+        """Orange warning for Shadowclaw Slam tank swap failures."""
+        all_swaps = [ev for fd in fights_list for ev in fd.get("vorasius_tank_swaps", [])]
+        if not all_swaps:
+            return ""
+        items = ""
+        for ev in all_swaps:
+            items += (f'<div class="ts-item">'
+                      f'<span class="ts-player">{escape(ev["player"])}</span>'
+                      f' <span class="ts-time">({escape(ev["time_str"])})</span>'
+                      f" didn't swap — Slam #{ev['slam_num']}"
+                      f'</div>')
+        return (f'<div class="tank-swap-warn">'
+                f'<div class="ts-header">'
+                f'<span class="ts-title">&#9888;&#65039; Tank Swap Missed — Shadowclaw Slam</span>'
+                f'</div>'
+                f'<div class="ts-body">{items}</div></div>')
+
+    def _build_salhadaar_wipe_banner(fights_list: list) -> str:
+        """Red banner if Void Infusion (orb reached boss) was detected."""
+        all_flags = [ev for fd in fights_list for ev in fd.get("salhadaar_wipe_events", [])]
+        if not all_flags:
+            return ""
+        items = ""
+        for ev in all_flags:
+            items += (f'<div class="sw-item">'
+                      f'<span class="sw-time">{escape(ev["time_str"])}</span>'
+                      f' <span class="sw-event">&#128308; {escape(ev["event_type"])}</span>'
+                      f' — orb reached the boss'
+                      f'</div>')
+        return (f'<div class="salhadaar-wipe-warn">'
+                f'<div class="sw-header">'
+                f'<span class="sw-title">&#128308; Wipe Condition Detected</span>'
+                f'</div>'
+                f'<div class="sw-body">{items}</div></div>')
+
+    def _build_salhadaar_interrupt_table(fights_list: list) -> str:
+        """Shadow Fracture interrupt wave table for Fallen-King Salhadaar.
+        Rows = players who interrupted, columns = waves, cells = spell + timestamp."""
+        waves = next((fd["salhadaar_fracture_waves"]
+                      for fd in fights_list if fd.get("salhadaar_fracture_waves")), [])
+        if not waves:
+            return ""
+
+        all_pids: set = set()
+        for wave in waves:
+            all_pids.update(int(k) if isinstance(k, str) else k for k in wave["players"])
+        if not all_pids:
+            return ""
+
+        sorted_int_pids = sorted(all_pids, key=pid_sort)
+
+        def _ts2(s):
+            m2, s2 = divmod(int(s), 60)
+            return f"{m2}:{s2:02d}"
+
+        t  = '<div class="alndust-panel">'
+        t += ('<div class="ag-header open" onclick="this.classList.toggle(\'open\');'
+              'this.nextElementSibling.classList.toggle(\'open\')">'
+              '<span class="ag-title">&#128683; Shadow Fracture — Interrupt Log</span>'
+              '<span class="ag-chevron">&#9660;</span></div>')
+        t += '<div class="ag-body open"><div style="overflow-x:auto">'
+        t += '<table class="boss-table" style="width:100%;border-collapse:collapse"><thead><tr>'
+        t += '<th style="text-align:left;padding:5px 10px;color:#aaa;white-space:nowrap">Player</th>'
+        for wave in waves:
+            ws_str = _ts2(wave["wave_start_s"])
+            we_str = _ts2(wave["wave_end_s"])
+            t += (f'<th style="text-align:center;padding:5px 8px;color:#aaa;'
+                  f'border-left:1px solid #2a2a4a;white-space:nowrap">'
+                  f'Wave {wave["wave_num"]}'
+                  f'<br><span style="color:#556;font-size:11px;font-weight:400">'
+                  f'{ws_str}–{we_str}</span></th>')
+        t += '</tr></thead><tbody>'
+
+        for pid in sorted_int_pids:
+            actor = actor_lookup.get(pid, {})
+            name  = escape(actor.get("name", f"#{pid}"))
+            color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+            t += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                  f'<span style="color:{color};font-weight:600">{name}</span></td>')
+            for wave in waves:
+                pdata = wave["players"].get(pid, wave["players"].get(str(pid), []))
+                if pdata:
+                    parts = " ".join(
+                        f'<span style="white-space:nowrap">'
+                        f'<span style="color:#a0c4ff">{escape(c["spell"])}</span>'
+                        f' <span class="ag-time">({escape(c["time_str"])})</span>'
+                        f'</span>'
+                        for c in pdata
+                    )
+                    t += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
+                          f'padding:4px 8px">{parts}</td>')
+                else:
+                    t += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+            t += '</tr>'
+
+        t += '</tbody></table></div></div></div>'
+        return t
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
         table_id       = f"boss-tbl-{id_prefix}-{boss_idx}"
         boss_name_base = boss_name.rsplit(" (", 1)[0]
@@ -2640,16 +3051,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         for fight in fights:
             all_pids_set.update(fight.get("deaths", {}).keys())
             all_pids_set.update(fight.get("all_player_ids", set()))
-
-        def _get_role(pid, fight=None):
-            """Return the role for a player in a specific fight, falling back to roster."""
-            char_name = actor_lookup.get(pid, {}).get("name", "")
-            pname, _  = lookup_roster(char_name)
-            if fight is not None:
-                spec_role = fight.get("spec_roles", {}).get(pid)
-                if spec_role:
-                    return spec_role
-            return PLAYER_ROLES.get(pname, "DPS")
 
         def pid_sort(pid):
             char_name = actor_lookup.get(pid, {}).get("name", "")
@@ -2664,290 +3065,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             return (ROLE_ORDER.get(role, 2), pname.lower())
 
         sorted_pids = sorted(all_pids_set, key=pid_sort)
-
-        def _hfmt(n):
-            return (f"{n/1_000_000_000:.1f}B" if n >= 1_000_000_000
-                    else (f"{n/1_000_000:.1f}M" if n >= 1_000_000 else f"{n//1000}k"))
-
-        def _overview_row(label, fight):
-            sp_dmg   = sum(v.get("total", 0) if isinstance(v, dict) else 0 for v in fight.get("uptime_map", {}).values())
-            sp_heal  = sum(v for v in fight.get("healing_map", {}).values() if isinstance(v, int))
-            sp_taken = sum(v for v in fight.get("dmg_taken", {}).values() if isinstance(v, int))
-            sp_dur_s = fight.get("fight_dur_ms", 0) / 1000 or 1
-            sp_dps   = sp_dmg / sp_dur_s
-            sp_m, sp_s = divmod(int(sp_dur_s), 60)
-            inner = (f'<span class="sov-title">{label}</span>'
-                     f'<span class="sov-dur">{sp_m}:{sp_s:02d}</span>'
-                     f'<span class="sov-item"><span class="sov-lbl">⚡ Raid DPS</span> <b>{_hfmt(sp_dps)}</b></span>'
-                     f'<span class="sov-item"><span class="sov-lbl">⚔ Dmg Done</span> <b>{_hfmt(sp_dmg) if sp_dmg else "—"}</b></span>'
-                     f'<span class="sov-item"><span class="sov-lbl">💚 Healing</span> <b>{_hfmt(sp_heal) if sp_heal else "—"}</b></span>'
-                     f'<span class="sov-item"><span class="sov-lbl">🛡 Dmg Taken</span> <b>{_hfmt(sp_taken) if sp_taken else "—"}</b></span>')
-            # Per-mechanic totals (hits + damage)
-            mts_all = fight.get("mechanic_timestamps", {})
-            for m in mech_defs:
-                lbl = m["label"]
-                total_hits = 0
-                total_dmg  = 0
-                for pid_hits in mts_all.values():
-                    for h in pid_hits.get(lbl, []):
-                        if isinstance(h, dict):
-                            total_hits += 1
-                            total_dmg  += h.get("dmg", 0)
-                if total_hits:
-                    color = "#81c784" if m["type"] == "soak" else "#e57373"
-                    inner += (f'<span class="sov-item" style="border-left:1px solid #2a2a4a;padding-left:12px">'
-                              f'<span class="sov-lbl">{escape(lbl)}</span>'
-                              f'<b style="color:{color}">{total_hits}×</b>'
-                              f' <span style="color:#aaa">{_hfmt(total_dmg)}</span></span>')
-            return f'<tr class="split-ov-row"><td colspan="{total_cols}"><div class="split-ov-bar">{inner}</div></td></tr>'
-
-        # ── Per-pull banner builder (frontal + avoid for any list of fights) ──
-
-        def _build_banners(fights_list: list) -> str:
-            """Build Frontal Failures + Avoidable Hits HTML for a given list of fights."""
-            out = ""
-            # Frontal failures
-            all_frontal = [f for fight in fights_list for f in fight.get("frontal_failures", [])]
-            if all_frontal:
-                rows = ""
-                for f in all_frontal:
-                    others_str = ", ".join(escape(p) for p in f["others"])
-                    rows += (f'<div class="ff-item">'
-                             f'<span class="ff-time">{escape(f["time_str"])}</span> '
-                             f'<span class="ff-label">{escape(f["label"])}</span> → '
-                             f'<span class="ff-primary">{escape(f["primary_player"])}</span>'
-                             + (f' <span class="ff-sep">||</span> <span class="ff-players">{others_str}</span>' if others_str else '')
-                             + '</div>')
-                out += (f'<div class="frontal-failures">'
-                        f'<div class="ff-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
-                        f'<span class="ff-title">⚠ Frontal Failures</span><span class="ff-chevron">▼</span></div>'
-                        f'<div class="ff-body open">{rows}</div></div>')
-            # Avoidable hits
-            avoid_defs_local = [m for m in mech_defs if m.get("type") == "avoid"]
-            if avoid_defs_local:
-                avoid_labels = {m["label"] for m in avoid_defs_local}
-                label_hits: dict = {}
-                for fight in fights_list:
-                    for pid, label_counts in fight.get("mechanics_data", {}).items():
-                        for lbl, cnt in label_counts.items():
-                            if lbl in avoid_labels:
-                                label_hits.setdefault(lbl, {})[pid] = label_hits.setdefault(lbl, {}).get(pid, 0) + cnt
-                if label_hits:
-                    rows = ""
-                    for m in avoid_defs_local:
-                        lbl = m["label"]
-                        if lbl not in label_hits:
-                            continue
-                        parts = " · ".join(
-                            f'<span class="av-player">{escape(actor_lookup.get(pid, {}).get("name", f"?{pid}"))}</span>'
-                            f'<span class="av-count"> ×{cnt}</span>'
-                            for pid, cnt in sorted(label_hits[lbl].items(), key=lambda x: -x[1])
-                        )
-                        rows += f'<div class="av-item"><span class="av-label">{escape(lbl)}</span> → {parts}</div>'
-                    if rows:
-                        out += (f'<div class="avoid-failures">'
-                                f'<div class="av-header" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">'
-                                f'<span class="av-title">⚡ Avoidable Hits</span><span class="av-chevron">▼</span></div>'
-                                f'<div class="av-body open">{rows}</div></div>')
-            return out
-
-        def _build_chart(*_) -> str:
-            return ""  # parked — see ideas/timeline_chart.html
-
-        # ── Shared table renderer (kills + wipes) ──
-        def _render_table(fights_list, tbl_id, pids=None):
-            if pids is None:
-                pids = sorted_pids
-
-            def _sth(col_idx, lbl, css=""):
-                return (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
-                        f' onclick="sortBossTable(\'{tbl_id}\',{col_idx},this)">'
-                        f'{lbl} <span class="sort-arrow">▼</span></th>')
-
-            t  = f'<div class="table-wrap"><table id="{tbl_id}" class="detail-col-hidden"><thead><tr>'
-            t += _sth(0, 'Player', 'player-header')
-            t += '<th class="death-h">Killed by (time)</th>'
-            t += _sth(2, 'Ext', 'ext-h')
-            t += _sth(3, 'Def', 'def-h')
-            t += _sth(4, 'Dmg Taken', 'dmg-h')
-            t += _sth(5, 'Uptime %', 'uptime-h')
-            if has_interrupts:
-                t += _sth(6, 'Interrupts', 'interrupt-h')
-            for mi, m in enumerate(mech_defs):
-                mci = (7 if has_interrupts else 6) + mi
-                css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
-                tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
-                t += (f'<th class="{css}" data-sortable="1" style="cursor:pointer;user-select:none"'
-                      f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()"'
-                      f' onclick="sortBossTable(\'{tbl_id}\',{mci},this)">'
-                      f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
-            if has_void_marked:
-                t += '<th class="detail-h" style="min-width:140px"><span>Void Marked</span></th>'
-            else:
-                t += '<th>Notes</th>'
-            t += '</tr></thead><tbody>'
-
-            for fi, fight in enumerate(fights_list, 1):
-                row_lbl = fight.get("_row_label") or f"Split {fi}"
-                t += _overview_row(row_lbl, fight)
-                current_role = None
-                for pid in pids:
-                    deaths_map = fight.get("deaths", {})
-                    if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
-                        continue
-                    actor     = actor_lookup.get(pid, {})
-                    char_name = actor.get("name", f"ID-{pid}")
-                    cls       = actor.get("subType", "Unknown")
-                    cls_color = CLASS_COLORS.get(cls, "#ccc")
-                    pname, _  = lookup_roster(char_name)
-                    role      = _get_role(pid, fight)
-
-                    if role != current_role:
-                        current_role = role
-                        t += f'<tr class="role-sep" data-role="{current_role}"><td colspan="{total_cols}">── {current_role}s ──</td></tr>'
-
-                    dmg_taken_map = fight.get("dmg_taken", {})
-                    uptime_map    = fight.get("uptime_map", {})
-                    interrupts    = fight.get("interrupts", {})
-                    fight_dur     = fight.get("fight_dur_ms", 0)
-                    fight_mechs   = fight.get("mechanics_data", {})
-
-                    death_list = deaths_map.get(pid, [])
-                    d_raw      = dmg_taken_map.get(pid, 0)
-                    dmg_str    = (f"{d_raw/1_000_000:.1f}M" if d_raw >= 1_000_000
-                                  else (f"{d_raw/1000:.0f}k" if d_raw > 0 else "—"))
-                    active     = (uptime_map.get(pid, {}).get("activeTime", 0)
-                                  if isinstance(uptime_map.get(pid), dict) else 0)
-                    uptime_str = (f"{min(active / fight_dur * 100, 100):.0f}%"
-                                  if fight_dur > 0 and active > 0 else "—")
-                    ext_list  = fight.get("external_casts", {}).get(pid, [])
-                    ext_count = len(ext_list)
-                    if ext_count > 0:
-                        ext_tip = "<br>".join(
-                            f'<span style="color:#c8e6c9">{escape(e["spell"])}</span>'
-                            f' <span style="color:#7289DA">{escape(e["time"])}</span>'
-                            for e in ext_list
-                        )
-                        ext_tip_attr = ext_tip.replace("'", "&#39;")
-                        ext_cell = (f'<td class="center ext-h" style="cursor:help"'
-                                    f' data-htip=\'{ext_tip_attr}\''
-                                    f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
-                                    f'<span class="ext-num">{ext_count}</span></td>')
-                    else:
-                        ext_cell = '<td class="center ext-h">—</td>'
-
-                    def_list   = fight.get("defensive_casts", {}).get(pid, [])
-                    def_count  = len(def_list)
-                    if def_count > 0:
-                        def_tip = "<br>".join(
-                            f'<span style="color:#a0c4ff">{escape(d["spell"])}</span>'
-                            f' <span style="color:#7289DA">{escape(d["time"])}</span>'
-                            for d in def_list
-                        )
-                        def_tip_attr = def_tip.replace("'", "&#39;")
-                        def_cell = (f'<td class="center def-h" style="cursor:help"'
-                                    f' data-htip=\'{def_tip_attr}\''
-                                    f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
-                                    f'<span class="def-num">{def_count}</span></td>')
-                    else:
-                        def_cell = '<td class="center def-h">—</td>'
-
-                    int_count  = interrupts.get(pid, 0)
-                    int_str    = str(int_count) if int_count > 0 else "—"
-                    int_style  = (' style="background:#1A3A1A"' if int_count > 0
-                                  else (' style="background:#5D1A1A"' if has_interrupts else ""))
-
-                    death_count  = len(death_list)
-                    killed_str   = ("<br>".join(
-                        f'{escape(d["ability"])} @ {escape(d["time"])} ({d.get("fight_pct", 0)}%)'
-                        for d in death_list) or "—")
-
-                    death_tip_html = ""
-                    if death_list:
-                        parts = []
-                        for d in death_list:
-                            tl    = d.get("timeline", [])
-                            block = f"<b style='color:#e57373'>☠ {escape(d['ability'])}</b> @ {escape(d['time'])} ({d.get('fight_pct',0)}%)"
-                            if tl:
-                                trows = []
-                                for tt in tl:
-                                    ik    = abs(tt["sec_before"]) < 0.05
-                                    col   = "#ff6b6b" if ik else "#aaa"
-                                    lbl   = " ← killing blow" if ik else f"-{tt['sec_before']:.1f}s"
-                                    trows.append(f"<span style='color:{col}'>{escape(tt['ability'])}: {escape(tt['amount_k'])} &nbsp;<span style='color:#666;font-size:11px'>{lbl}</span></span>")
-                                block += "<br>" + "<br>".join(trows)
-                            parts.append(block)
-                        death_tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
-
-                    row_cls = "boss-death-row" if death_count > 0 else ""
-                    t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
-                    slug = pname.lower()
-                    t += f'<td class="player-cell"><a href="players/player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
-                    if death_count > 0 and death_tip_html:
-                        tip_attr = death_tip_html.replace("'", "&#39;")
-                        t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
-                    else:
-                        t += f'<td class="death-h">{killed_str}</td>'
-                    t += ext_cell
-                    t += def_cell
-                    t += f'<td class="center dmg-h">{dmg_str}</td>'
-                    t += f'<td class="center uptime-h">{uptime_str}</td>'
-                    if has_interrupts:
-                        t += f'<td class="center interrupt-h"{int_style}>{int_str}</td>'
-                    pid_mechs = fight_mechs.get(pid, {})
-                    _mts_map  = fight.get("mechanic_timestamps", {})
-                    pid_mts   = _mts_map.get(pid) or _mts_map.get(str(pid), {})
-                    for m in mech_defs:
-                        cnt   = pid_mechs.get(m["label"], 0)
-                        hits  = pid_mts.get(m["label"], [])
-                        if cnt:
-                            bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                            def _fmt_dmg(v):
-                                if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
-                                if v >= 1_000:     return f"{v/1_000:.0f}k"
-                                return str(v)
-                            if hits:
-                                total_dmg = sum(h["dmg"] for h in hits if isinstance(h, dict))
-                                tip_html  = "<br>".join(
-                                    f'<span style="color:#a0b4ff">{escape(h["t"])}</span>'
-                                    f' <span style="color:#e57373">{_fmt_dmg(h["dmg"])}</span>'
-                                    if isinstance(h, dict) else escape(h)
-                                    for h in hits
-                                )
-                                tip_attr  = tip_html.replace("'", "&#39;")
-                                cell_txt  = f'{cnt} <span style="color:#aaa;font-size:11px">({_fmt_dmg(total_dmg)})</span>'
-                                t += (f'<td class="center" style="background:{bg};cursor:help"'
-                                      f' data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)"'
-                                      f' onmouseleave="hideHTip()">{cell_txt}</td>')
-                            else:
-                                t += f'<td class="center" style="background:{bg}">{cnt}</td>'
-                        else:
-                            t += '<td class="center">—</td>'
-                    if has_void_marked:
-                        vm_list = [mv for mv in fight.get("void_marked", []) if mv["target_pid"] == pid]
-                        if vm_list:
-                            parts = []
-                            for mv in vm_list:
-                                tm2, ts2 = divmod(mv["t_s"], 60)
-                                t_str2   = f"{tm2}:{ts2:02d}"
-                                if mv["dispeller_pid"] is not None:
-                                    d_name = escape(actor_lookup.get(mv["dispeller_pid"], {}).get("name", f"#{mv['dispeller_pid']}"))
-                                    parts.append(f'<span style="color:#e57373">{t_str2}</span>'
-                                                 f' <span class="vm-arrow">&#8594;</span>'
-                                                 f' <span style="color:#81c784">{d_name}</span>')
-                                else:
-                                    parts.append(f'<span style="color:#e57373">{t_str2}</span>'
-                                                 f' <span class="vm-arrow">&#8594;</span>'
-                                                 f' <span class="vm-expired">expired</span>')
-                            t += f'<td class="detail-cell">{"<br>".join(parts)}</td>'
-                        else:
-                            t += '<td class="center">—</td>'
-                    else:
-                        t += '<td></td>'
-                    t += '</tr>'
-
-            t += '</tbody></table></div>'
-            return t
 
         def _build_alndust_panel(fights_list: list) -> str:
             """Render the Alndust Upheaval up/down grouping panel for Chimaerus."""
@@ -3348,105 +3465,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
 """
             return t
 
-        def _build_vorasius_tank_swap_banner(fights_list: list) -> str:
-            """Orange warning for Shadowclaw Slam tank swap failures."""
-            all_swaps = [ev for fd in fights_list for ev in fd.get("vorasius_tank_swaps", [])]
-            if not all_swaps:
-                return ""
-            items = ""
-            for ev in all_swaps:
-                items += (f'<div class="ts-item">'
-                          f'<span class="ts-player">{escape(ev["player"])}</span>'
-                          f' <span class="ts-time">({escape(ev["time_str"])})</span>'
-                          f" didn't swap — Slam #{ev['slam_num']}"
-                          f'</div>')
-            return (f'<div class="tank-swap-warn">'
-                    f'<div class="ts-header">'
-                    f'<span class="ts-title">&#9888;&#65039; Tank Swap Missed — Shadowclaw Slam</span>'
-                    f'</div>'
-                    f'<div class="ts-body">{items}</div></div>')
-
-        def _build_salhadaar_wipe_banner(fights_list: list) -> str:
-            """Red banner if Void Infusion (orb reached boss) was detected."""
-            all_flags = [ev for fd in fights_list for ev in fd.get("salhadaar_wipe_events", [])]
-            if not all_flags:
-                return ""
-            items = ""
-            for ev in all_flags:
-                items += (f'<div class="sw-item">'
-                          f'<span class="sw-time">{escape(ev["time_str"])}</span>'
-                          f' <span class="sw-event">&#128308; {escape(ev["event_type"])}</span>'
-                          f' — orb reached the boss'
-                          f'</div>')
-            return (f'<div class="salhadaar-wipe-warn">'
-                    f'<div class="sw-header">'
-                    f'<span class="sw-title">&#128308; Wipe Condition Detected</span>'
-                    f'</div>'
-                    f'<div class="sw-body">{items}</div></div>')
-
-        def _build_salhadaar_interrupt_table(fights_list: list) -> str:
-            """Shadow Fracture interrupt wave table for Fallen-King Salhadaar.
-            Rows = players who interrupted, columns = waves, cells = spell + timestamp."""
-            waves = next((fd["salhadaar_fracture_waves"]
-                          for fd in fights_list if fd.get("salhadaar_fracture_waves")), [])
-            if not waves:
-                return ""
-
-            all_pids: set = set()
-            for wave in waves:
-                all_pids.update(int(k) if isinstance(k, str) else k for k in wave["players"])
-            if not all_pids:
-                return ""
-
-            sorted_int_pids = sorted(all_pids, key=pid_sort)
-
-            def _ts2(s):
-                m2, s2 = divmod(int(s), 60)
-                return f"{m2}:{s2:02d}"
-
-            t  = '<div class="alndust-panel">'
-            t += ('<div class="ag-header open" onclick="this.classList.toggle(\'open\');'
-                  'this.nextElementSibling.classList.toggle(\'open\')">'
-                  '<span class="ag-title">&#128683; Shadow Fracture — Interrupt Log</span>'
-                  '<span class="ag-chevron">&#9660;</span></div>')
-            t += '<div class="ag-body open"><div style="overflow-x:auto">'
-            t += '<table class="boss-table" style="width:100%;border-collapse:collapse"><thead><tr>'
-            t += '<th style="text-align:left;padding:5px 10px;color:#aaa;white-space:nowrap">Player</th>'
-            for wave in waves:
-                ws_str = _ts2(wave["wave_start_s"])
-                we_str = _ts2(wave["wave_end_s"])
-                t += (f'<th style="text-align:center;padding:5px 8px;color:#aaa;'
-                      f'border-left:1px solid #2a2a4a;white-space:nowrap">'
-                      f'Wave {wave["wave_num"]}'
-                      f'<br><span style="color:#556;font-size:11px;font-weight:400">'
-                      f'{ws_str}–{we_str}</span></th>')
-            t += '</tr></thead><tbody>'
-
-            for pid in sorted_int_pids:
-                actor = actor_lookup.get(pid, {})
-                name  = escape(actor.get("name", f"#{pid}"))
-                color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
-                t += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
-                      f'<span style="color:{color};font-weight:600">{name}</span></td>')
-                for wave in waves:
-                    pdata = wave["players"].get(pid, wave["players"].get(str(pid), []))
-                    if pdata:
-                        parts = " ".join(
-                            f'<span style="white-space:nowrap">'
-                            f'<span style="color:#a0c4ff">{escape(c["spell"])}</span>'
-                            f' <span class="ag-time">({escape(c["time_str"])})</span>'
-                            f'</span>'
-                            for c in pdata
-                        )
-                        t += (f'<td style="text-align:center;border-left:1px solid #2a2a4a;'
-                              f'padding:4px 8px">{parts}</td>')
-                    else:
-                        t += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
-                t += '</tr>'
-
-            t += '</tbody></table></div></div></div>'
-            return t
-
         # ── Pull selector + panes ──
         boss_wipes = wipe_data.get(boss_name, [])  # oldest → newest
 
@@ -3511,9 +3529,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
     for boss_name, boss_wipes in (wipe_data or {}).items():
         if boss_name in results or not boss_wipes:
             continue
-        boss_name_base = boss_name.rsplit(" (", 1)[0]
-        mech_defs      = BOSS_MECHANICS.get(boss_name_base, [])
-        has_interrupts = boss_name_base in BOSS_HAS_INTERRUPTS
+        boss_name_base  = boss_name.rsplit(" (", 1)[0]
+        mech_defs       = BOSS_MECHANICS.get(boss_name_base, [])
+        has_interrupts  = boss_name_base in BOSS_HAS_INTERRUPTS
+        has_void_marked = False  # wipe-only: boss was never killed
+        total_cols      = 8 + len(mech_defs) + (1 if has_interrupts else 0)
         table_id  = f"{id_prefix}-wipeonly-{boss_name_base.lower().replace(' ', '-').replace('&', 'and')}"
         total     = len(boss_wipes)
 
@@ -7761,10 +7781,6 @@ def main():
 
     # Per-raid pages
     for day_data in days_data:
-        # Skip splits that have no boss kills (e.g. a Mythic split with only wipes
-        # from a mixed heroic+mythic report) — wipe data still feeds progression pages.
-        if not day_data.get("boss_data"):
-            continue
         write_raid_html(day_data, _raid_filename(day_data))
 
     # Overview index
