@@ -7288,8 +7288,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all") -> di
     print(f"[OK] Report: {report_info.get('title', 'Untitled')} ({guild_name})")
 
     all_raw_fights  = report_info.get("fights", [])
-    all_fights      = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill")]
-    all_wipe_fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and not f.get("kill")]
+    _RAID_DIFFS     = {3, 4, 5}  # Normal / Heroic / Mythic — excludes M+ (difficulty 10)
+    all_fights      = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and f.get("kill") and f.get("difficulty", 0) in _RAID_DIFFS]
+    all_wipe_fights = [f for f in all_raw_fights if f.get("encounterID", 0) > 0 and not f.get("kill") and f.get("difficulty", 0) in _RAID_DIFFS]
     selected_fights = all_fights
 
     if all_fights:
@@ -7760,6 +7761,10 @@ def main():
 
     # Per-raid pages
     for day_data in days_data:
+        # Skip splits that have no boss kills (e.g. a Mythic split with only wipes
+        # from a mixed heroic+mythic report) — wipe data still feeds progression pages.
+        if not day_data.get("boss_data"):
+            continue
         write_raid_html(day_data, _raid_filename(day_data))
 
     # Overview index
