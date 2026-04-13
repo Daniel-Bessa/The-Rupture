@@ -7508,7 +7508,7 @@ def _fix_int_keys(boss_data: dict) -> dict:
     return boss_data
 
 
-def process_report(token: str, report_code: str, fight_input: str = "all") -> dict:
+def process_report(token: str, report_code: str, fight_input: str = "all", death_threshold: int = None) -> dict:
     """Fetch and process one WCL report. Loads from cache if available."""
     cache = _cache_path(report_code)
     if os.path.exists(cache):
