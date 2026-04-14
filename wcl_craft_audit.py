@@ -1923,7 +1923,7 @@ def analyze_avoidable_damage(damage_events: list, actor_lookup: dict,
 
 
 # How many deaths before we stop counting (wipe cascade filter)
-WIPE_DEATH_THRESHOLD = 4
+WIPE_DEATH_THRESHOLD = 3
 
 
 def analyze_deaths(death_events: list, fight_start_ms: int, ability_names: dict = None,
