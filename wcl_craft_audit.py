@@ -5476,8 +5476,9 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
     TARGET_DIFF  = "Mythic"
     WCL_BASE     = "https://www.warcraftlogs.com/reports"
-    IS_CHIMAERUS = "Chimaerus" in boss_name
-    IS_SALHADAAR = "Salhadaar" in boss_name
+    IS_CHIMAERUS = "Chimaerus"    in boss_name
+    IS_SALHADAAR = "Salhadaar"   in boss_name
+    IS_VANGUARD  = "Lightblinded" in boss_name
 
     def _fdmg(v):
         if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
@@ -5710,6 +5711,8 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
         if IS_CHIMAERUS and (alndust_agg or horror_agg):
             t += _build_chimaerus_totals_extra()
+        if IS_VANGUARD:
+            t += _build_vanguard_death_table(pulls)
         return t
 
     def _build_chimaerus_totals_extra():
@@ -5780,6 +5783,74 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                         f'{_low_td}'
                         f'</tr>')
             out += '</tbody></table></div></div>'
+        return out
+
+    # ── Vanguard death attribution helper ────────────────────────────────────
+    _VAN_TRACKED = ["Divine Toll", "Divine Hammer", "Divine Tempest"]
+
+    def _build_vanguard_death_table(pulls_subset):
+        """Per-player death attribution for Lightblinded Vanguard.
+        A death counts toward an ability if that ability appears in the player's
+        last-5s damage timeline; one death can count for multiple abilities.
+        """
+        pd: dict = {}  # {pname: {"color": ..., ab: count, "other": count}}
+        for p in pulls_subset:
+            fn, fc_ = p["_player"], p["_color"]
+            for raw_pid, dlist in p["deaths"].items():
+                pname = fn(raw_pid)
+                color = fc_(raw_pid)
+                if pname not in pd:
+                    pd[pname] = {"color": color, **{ab: 0 for ab in _VAN_TRACKED}, "other": 0}
+                for death in dlist:
+                    tl_abs = {hit["ability"] for hit in death.get("timeline", [])}
+                    hit_any = False
+                    for ab in _VAN_TRACKED:
+                        if ab in tl_abs:
+                            pd[pname][ab] += 1
+                            hit_any = True
+                    if not hit_any:
+                        pd[pname]["other"] += 1
+        if not pd:
+            return ""
+        col_style = "text-align:center;padding:4px 8px;border-left:1px solid #2a2a4a"
+        out  = ('<div style="margin-top:20px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">'
+                '&#9760; Death Attribution</div>'
+                '<div style="color:#556;font-size:11px;margin-bottom:6px">'
+                'A death is counted under an ability if that ability dealt damage in the last 5 seconds. '
+                'One death can appear in multiple columns.</div>'
+                '<div style="overflow-x:auto"><table class="sal-table" style="border-collapse:collapse"><thead><tr>'
+                '<th style="padding:4px 10px;color:#aaa;text-align:left">Player</th>')
+        for ab in _VAN_TRACKED:
+            out += f'<th style="{col_style};color:#aaa;white-space:nowrap">{_esc(ab)}</th>'
+        out += f'<th style="{col_style};color:#556">Other</th>'
+        out += f'<th style="{col_style};color:#aaa">Total</th>'
+        out += '</tr></thead><tbody>'
+        for pname, data in sorted(pd.items(), key=lambda x: -sum(x[1][ab] for ab in _VAN_TRACKED)):
+            total = sum(data[ab] for ab in _VAN_TRACKED) + data["other"]
+            out += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
+                    f'<span style="color:{data["color"]};font-weight:600">{_esc(pname)}</span></td>')
+            for ab in _VAN_TRACKED:
+                n = data[ab]
+                col = "#e05252" if n > 0 else "#333"
+                out += (f'<td data-val="{n}" style="{col_style}">'
+                        f'<span style="color:{col};font-weight:{"700" if n else "400"}">'
+                        f'{n if n else "—"}</span></td>')
+            other = data["other"]
+            out += (f'<td data-val="{other}" style="{col_style};color:#556">{other if other else "—"}</td>'
+                    f'<td data-val="{total}" style="{col_style};color:#aaa;font-weight:700">{total}</td>')
+            out += '</tr>'
+        # Totals row
+        col_totals = {ab: sum(d[ab] for d in pd.values()) for ab in _VAN_TRACKED}
+        grand_other = sum(d["other"] for d in pd.values())
+        grand_total = sum(col_totals.values()) + grand_other
+        out += ('<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
+                '<td style="padding:4px 10px;color:#aaa">Total</td>')
+        for ab in _VAN_TRACKED:
+            n = col_totals[ab]
+            out += f'<td style="{col_style};color:#e05252">{n if n else "—"}</td>'
+        out += (f'<td style="{col_style};color:#556">{grand_other if grand_other else "—"}</td>'
+                f'<td style="{col_style};color:#aaa">{grand_total}</td></tr>')
+        out += '</tbody></table></div></div>'
         return out
 
     # ── Step 6: per-pull tab ──────────────────────────────────────────────────
@@ -5944,6 +6015,9 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                         out += '<td style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
                 out += '</tr>'
             out += '</tbody></table></div></div>'
+
+        if IS_VANGUARD and p["deaths"]:
+            out += _build_vanguard_death_table([p])
 
         if not p["deaths"] and not mts and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'

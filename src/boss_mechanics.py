@@ -173,6 +173,18 @@ BOSS_MECHANICS = {
             "spell_ids": {1249047},
             "type": "avoid",
         },
+        {
+            "label": "Div.Storm",
+            "name": "Divine Storm: Rotating burst of holy energy — get out of the AoE.",
+            "spell_ids": {1246765, 1272310},
+            "type": "avoid",
+        },
+        {
+            "label": "Div.Tempest",
+            "name": "Divine Tempest: Holy tempest radiates outward — avoid the blast zone.",
+            "spell_ids": {1272324},
+            "type": "avoid",
+        },
     ],
 
     "Crown of the Cosmos": [
