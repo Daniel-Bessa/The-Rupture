@@ -5529,6 +5529,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 "is_kill": is_kill, "boss_pct": boss_pct, "dur_s": dur_s,
                 "deaths":  fight.get("deaths", {}),
                 "mts":     fight.get("mechanic_timestamps", {}),
+                "defs":    fight.get("defensive_casts", {}),
                 "waves":   fight.get("salhadaar_fracture_waves", []),
                 "alndust": alndust,
                 "horror":  horror,
@@ -5569,7 +5570,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
     # ── Step 3: aggregate totals ──────────────────────────────────────────────
     def _empty_player(char, color):
-        return {"char": char, "color": color, "deaths": 0, "interrupts": 0,
+        return {"char": char, "color": color, "deaths": 0, "interrupts": 0, "defs": 0,
                 "mech": {ml: {"hits": 0, "dmg": 0} for ml in mech_labels}}
 
     all_players: dict = {}
@@ -5597,6 +5598,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                     all_players[pname]["mech"][lbl]["hits"] += len(hits)
                     all_players[pname]["mech"][lbl]["dmg"]  += sum(
                         h.get("dmg", 0) for h in hits if isinstance(h, dict))
+        for raw_pid, dlist in p["defs"].items():
+            pname = fn(raw_pid)
+            if pname not in all_players:
+                all_players[pname] = _empty_player(fchar(raw_pid), fc(raw_pid))
+            all_players[pname]["defs"] += len(dlist)
 
     sorted_players = sorted(all_players.items(), key=lambda x: (-x[1]["deaths"], x[0]))
 
@@ -5664,7 +5670,8 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     # ── Step 5: Totals tab ────────────────────────────────────────────────────
     def _build_totals():
         hdrs = [("Player", "left", "min-width:140px", "", ""),
-                ("Deaths",  "center", "min-width:70px", "", "")]
+                ("Deaths",  "center", "min-width:70px", "", ""),
+                ("Defensives", "center", "min-width:80px", "Total personal defensive cooldowns used across all pulls.", "")]
         if IS_VANGUARD:
             hdrs.append(("Dmg Taken", "center", "min-width:90px",
                          "Total damage taken from tracked abilities (Divine Toll, Divine Hammer, Divine Tempest, Melee) in last 5s before each death.", ""))
@@ -5694,6 +5701,10 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                   f'<span style="color:#444;font-size:11px;margin-left:5px">({_esc(pname)})</span></td>')
             t += (f'<td data-val="{pd["deaths"]}" style="text-align:center;padding:5px 8px;font-weight:700;color:{d_col}">'
                   f'{pd["deaths"]}</td>')
+            def_n = pd["defs"]
+            def_col = "#3fb950" if def_n > 0 else "#556"
+            t += (f'<td data-val="{def_n}" style="text-align:center;padding:5px 8px;color:{def_col}">'
+                  f'{def_n if def_n else "—"}</td>')
             if IS_VANGUARD:
                 vdmg = _van_dmg.get(pname, 0)
                 t += (f'<td data-val="{vdmg}" style="text-align:center;padding:5px 8px;color:#e3a02e">'
@@ -5714,10 +5725,12 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             t += '</tr>'
 
         t_deaths = sum(pd["deaths"] for _, pd in sorted_players)
+        t_defs   = sum(pd["defs"]   for _, pd in sorted_players)
         t_ints   = sum(pd["interrupts"] for _, pd in sorted_players)
         t += (f'<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
               f'<td style="padding:5px 10px;color:#aaa">Total</td>'
-              f'<td style="text-align:center;padding:5px 8px;color:#e05252">{t_deaths}</td>')
+              f'<td style="text-align:center;padding:5px 8px;color:#e05252">{t_deaths}</td>'
+              f'<td style="text-align:center;padding:5px 8px;color:#3fb950">{t_defs if t_defs else "—"}</td>')
         if IS_VANGUARD:
             t_vdmg = sum(_van_dmg.values())
             t += (f'<td style="text-align:center;padding:5px 8px;color:#e3a02e">'
@@ -5915,14 +5928,17 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                             f'</div>')
             out += '</div></div>'
 
-        # Mechanic hits table
+        # Mechanic hits + defensives table
         mts    = p["mts"]
+        defs_p = p["defs"]
         tbl_id = f'wipe-tbl-{p["pull_num"]}'
-        if mts:
-            all_pids = sorted(set(int(k) if isinstance(k, str) else k for k in mts),
-                              key=lambda pid: fchar(pid).lower())
+        def_ci = 1 + len(mech_labels)  # column index for Defensives
+        if mts or defs_p:
+            _mts_pids  = {int(k) if isinstance(k, str) else k for k in mts}
+            _defs_pids = {int(k) if isinstance(k, str) else k for k in defs_p}
+            all_pids = sorted(_mts_pids | _defs_pids, key=lambda pid: fchar(pid).lower())
             out += ('<div style="margin-bottom:16px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">'
-                    '&#9888; Mechanic Hits</div>'
+                    '&#9888; Mechanic Hits &amp; Defensives</div>'
                     f'<div style="overflow-x:auto"><table class="sal-table" id="{tbl_id}" style="border-collapse:collapse"><thead><tr>')
             out += (f'<th onclick="wipeSort(\'{tbl_id}\',0)" style="cursor:pointer;text-align:left;'
                     f'padding:4px 10px;color:#aaa;white-space:nowrap">Player <span id="{tbl_id}-s0"></span></th>')
@@ -5935,12 +5951,15 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 out += (f'<th onclick="wipeSort(\'{tbl_id}\',{ci})"{_tattrib} style="cursor:pointer;text-align:center;'
                         f'padding:4px 8px;color:#aaa;border-left:1px solid #2a2a4a;white-space:nowrap">'
                         f'{_esc(ml)}{_subhtml} <span id="{tbl_id}-s{ci}"></span></th>')
+            out += (f'<th onclick="wipeSort(\'{tbl_id}\',{def_ci})" style="cursor:pointer;text-align:center;'
+                    f'padding:4px 8px;color:#3fb950;border-left:2px solid #2a3a2a;white-space:nowrap"'
+                    f' title="Personal defensive cooldowns used this pull">'
+                    f'Defensives <span id="{tbl_id}-s{def_ci}"></span></th>')
             out += '</tr></thead><tbody>'
             for pid in all_pids:
                 raw_pid = str(pid)
                 labels  = mts.get(pid, mts.get(raw_pid, {}))
-                if not labels:
-                    continue
+                def_list = defs_p.get(pid, defs_p.get(raw_pid, []))
                 char  = fchar(pid)
                 color = fc(pid)
                 out += (f'<tr><td data-val="{_esc(char)}" style="padding:4px 10px;white-space:nowrap">'
@@ -5957,6 +5976,15 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                                 f'<span style="color:#556;font-size:11px"> ({_fdmg(total_dmg)})</span></td>')
                     else:
                         out += '<td data-val="0" style="text-align:center;border-left:1px solid #2a2a4a;color:#333">—</td>'
+                # Defensives cell
+                if def_list:
+                    def_tip = "&#10;".join(
+                        f'{_esc(d["spell"])} · {_esc(d.get("time", ""))}' for d in def_list)
+                    out += (f'<td data-val="{len(def_list)}" style="text-align:center;border-left:2px solid #2a3a2a;'
+                            f'padding:4px 8px;cursor:default" title="{def_tip}">'
+                            f'<span style="color:#3fb950;font-weight:700">{len(def_list)}</span></td>')
+                else:
+                    out += f'<td data-val="0" style="text-align:center;border-left:2px solid #2a3a2a;color:#333">—</td>'
                 out += '</tr>'
             out += '</tbody></table></div></div>'
 
@@ -6060,7 +6088,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         if IS_VANGUARD and p["deaths"]:
             out += _build_vanguard_death_table([p])
 
-        if not p["deaths"] and not mts and not p["waves"] and not p["alndust"] and not p["horror"]:
+        if not p["deaths"] and not mts and not defs_p and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
         return out
 
