@@ -5786,7 +5786,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         return out
 
     # ── Vanguard death attribution helper ────────────────────────────────────
-    _VAN_TRACKED = ["Divine Toll", "Divine Hammer", "Divine Tempest"]
+    _VAN_TRACKED = ["Divine Toll", "Divine Hammer", "Divine Tempest", "Melee"]
 
     def _build_vanguard_death_table(pulls_subset):
         """Per-player death attribution for Lightblinded Vanguard.
