@@ -5809,17 +5809,18 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 color = fc_(raw_pid)
                 if pname not in pd:
                     pd[pname] = {"color": color, **{ab: 0 for ab in _VAN_TRACKED},
-                                 "other": 0, "total": 0, "dmg": 0}
+                                 "other": 0, "total": 0, "multi": 0, "dmg": 0}
                 for death in dlist:
                     tl = death.get("timeline", [])
                     tl_abs = {hit["ability"] for hit in tl}
                     pd[pname]["total"] += 1  # always count the actual death once
-                    hit_any = False
-                    for ab in _VAN_TRACKED:
-                        if ab in tl_abs:
+                    hit_abs = [ab for ab in _VAN_TRACKED if ab in tl_abs]
+                    if len(hit_abs) >= 2:
+                        pd[pname]["multi"] += 1
+                    if hit_abs:
+                        for ab in hit_abs:
                             pd[pname][ab] += 1
-                            hit_any = True
-                    if not hit_any:
+                    else:
                         pd[pname]["other"] += 1
                     # Sum damage from tracked abilities in last-5s window
                     for hit in tl:
@@ -5838,6 +5839,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         for ab in _VAN_TRACKED:
             out += f'<th style="{col_style};color:#aaa;white-space:nowrap">{_esc(ab)}</th>'
         out += f'<th style="{col_style};color:#556">Other</th>'
+        out += f'<th style="{col_style};color:#e3a02e;white-space:nowrap" title="Deaths where 2+ tracked abilities hit in the last 5s">2+ Abilities</th>'
         out += f'<th style="{col_style};color:#aaa">Total</th>'
         out += f'<th style="{col_style};color:#aaa">Dmg Taken</th>'
         out += '</tr></thead><tbody>'
@@ -5851,9 +5853,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                         f'<span style="color:{col};font-weight:{"700" if n else "400"}">'
                         f'{n if n else "—"}</span></td>')
             other = data["other"]
+            multi = data["multi"]
             total = data["total"]
             dmg   = data["dmg"]
             out += (f'<td data-val="{other}" style="{col_style};color:#556">{other if other else "—"}</td>'
+                    f'<td data-val="{multi}" style="{col_style};color:{"#e3a02e" if multi else "#333"};font-weight:{"700" if multi else "400"}">{multi if multi else "—"}</td>'
                     f'<td data-val="{total}" style="{col_style};color:#aaa;font-weight:700">{total}</td>'
                     f'<td data-val="{dmg}" style="{col_style};color:#e3a02e">{_fdmg(dmg) if dmg else "—"}</td>')
             out += '</tr>'
@@ -5861,6 +5865,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         col_totals  = {ab: sum(d[ab] for d in pd.values()) for ab in _VAN_TRACKED}
         grand_other = sum(d["other"] for d in pd.values())
         grand_total = sum(d["total"] for d in pd.values())
+        grand_multi = sum(d["multi"] for d in pd.values())
         grand_dmg   = sum(d["dmg"]   for d in pd.values())
         out += ('<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
                 '<td style="padding:4px 10px;color:#aaa">Total</td>')
@@ -5868,6 +5873,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             n = col_totals[ab]
             out += f'<td style="{col_style};color:#e05252">{n if n else "—"}</td>'
         out += (f'<td style="{col_style};color:#556">{grand_other if grand_other else "—"}</td>'
+                f'<td style="{col_style};color:#e3a02e;font-weight:700">{grand_multi if grand_multi else "—"}</td>'
                 f'<td style="{col_style};color:#aaa">{grand_total}</td>'
                 f'<td style="{col_style};color:#e3a02e">{_fdmg(grand_dmg) if grand_dmg else "—"}</td></tr>')
         out += '</tbody></table></div></div>'
