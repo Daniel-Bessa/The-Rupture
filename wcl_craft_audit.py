@@ -5801,7 +5801,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             try: return int(s)
             except: return 0
 
-        pd: dict = {}  # {pname: {"color", ab_counts, "other", "dmg"}}
+        pd: dict = {}  # {pname: {"color", ab_counts, "other", "total", "dmg"}}
         for p in pulls_subset:
             fn, fc_ = p["_player"], p["_color"]
             for raw_pid, dlist in p["deaths"].items():
@@ -5809,10 +5809,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 color = fc_(raw_pid)
                 if pname not in pd:
                     pd[pname] = {"color": color, **{ab: 0 for ab in _VAN_TRACKED},
-                                 "other": 0, "dmg": 0}
+                                 "other": 0, "total": 0, "dmg": 0}
                 for death in dlist:
                     tl = death.get("timeline", [])
                     tl_abs = {hit["ability"] for hit in tl}
+                    pd[pname]["total"] += 1  # always count the actual death once
                     hit_any = False
                     for ab in _VAN_TRACKED:
                         if ab in tl_abs:
@@ -5840,8 +5841,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         out += f'<th style="{col_style};color:#aaa">Total</th>'
         out += f'<th style="{col_style};color:#aaa">Dmg Taken</th>'
         out += '</tr></thead><tbody>'
-        for pname, data in sorted(pd.items(), key=lambda x: -sum(x[1][ab] for ab in _VAN_TRACKED)):
-            total = sum(data[ab] for ab in _VAN_TRACKED) + data["other"]
+        for pname, data in sorted(pd.items(), key=lambda x: -x[1]["total"]):
             out += (f'<tr><td style="padding:4px 10px;white-space:nowrap">'
                     f'<span style="color:{data["color"]};font-weight:600">{_esc(pname)}</span></td>')
             for ab in _VAN_TRACKED:
@@ -5851,6 +5851,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                         f'<span style="color:{col};font-weight:{"700" if n else "400"}">'
                         f'{n if n else "—"}</span></td>')
             other = data["other"]
+            total = data["total"]
             dmg   = data["dmg"]
             out += (f'<td data-val="{other}" style="{col_style};color:#556">{other if other else "—"}</td>'
                     f'<td data-val="{total}" style="{col_style};color:#aaa;font-weight:700">{total}</td>'
@@ -5859,7 +5860,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         # Totals row
         col_totals  = {ab: sum(d[ab] for d in pd.values()) for ab in _VAN_TRACKED}
         grand_other = sum(d["other"] for d in pd.values())
-        grand_total = sum(col_totals.values()) + grand_other
+        grand_total = sum(d["total"] for d in pd.values())
         grand_dmg   = sum(d["dmg"]   for d in pd.values())
         out += ('<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
                 '<td style="padding:4px 10px;color:#aaa">Total</td>')
