@@ -403,6 +403,12 @@ function sortBossTable(tableId, colIdx, thEl) {
   if (cur) segments.push(cur);
   function parseVal(cell) {
     if (!cell) return null;
+    if (cell.dataset.val !== undefined) {
+      const dv = cell.dataset.val.trim();
+      if (!dv || dv === '—') return null;
+      const n = parseFloat(dv);
+      return isNaN(n) ? dv.toLowerCase() : n;
+    }
     const text = cell.textContent.trim().replace(/⇅|▲|▼/g, '').trim();
     if (!text || text === '—') return null;
     const m = text.replace('%','').match(/^([\d.]+)\s*([MkKBbG]?)$/);

@@ -3038,7 +3038,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         t += '</tbody></table></div>'
         return t
 
-    def _build_mechanics_overview_pane(boss_wipes_list: list, ov_pids: list) -> str:
+    def _build_mechanics_overview_pane(boss_wipes_list: list, ov_pids: list, tbl_id: str = "") -> str:
         """Aggregate mechanic hit counts per player across all wipes.
         Total + (avg/pull) per mechanic column, sorted by role.
         """
@@ -3063,20 +3063,31 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     pid_mech_totals[p][lbl] = pid_mech_totals[p].get(lbl, 0) + cnt
         if not any(pid_mech_totals.values()):
             return ""
-        col_span = 1 + 1 + len(mech_defs) + 1  # player + deaths + mechs + pulls
+        col_span    = 1 + 1 + len(mech_defs) + 1  # player + deaths + mechs + pulls
+        inner_id    = f"tbl-{tbl_id}" if tbl_id else "ov-tbl"
+        pulls_ci    = 2 + len(mech_defs)
         t  = (f'<p style="color:#556;font-size:11px;margin:0 0 8px">'
               f'Totals across all {len(boss_wipes_list)} wipe(s). '
               f'<span style="color:#666">Parentheses = avg per pull.</span></p>')
-        t += '<div class="table-wrap"><table class="detail-col-hidden"><thead><tr>'
-        t += '<th class="player-header">Player</th>'
-        t += '<th class="death-h" style="text-align:center">Deaths</th>'
-        for m in mech_defs:
+        t += f'<div class="table-wrap"><table id="{inner_id}" class="detail-col-hidden"><thead><tr>'
+        t += (f'<th class="player-header" data-sortable="1"'
+              f' onclick="sortBossTable(\'{inner_id}\', 0, this)">'
+              f'Player <span class="sort-arrow">▼</span></th>')
+        t += (f'<th class="death-h" style="text-align:center;cursor:pointer"'
+              f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', 1, this)">'
+              f'Deaths <span class="sort-arrow">▼</span></th>')
+        for i, m in enumerate(mech_defs):
+            col_idx = 2 + i
             css = "mech-soak-h" if m["type"] == "soak" else "mech-bad-h"
             tip = escape(m.get("name", m["label"])).replace("'", "&#39;")
-            t += (f'<th class="{css}" style="cursor:help"'
+            t += (f'<th class="{css}" style="cursor:pointer"'
+                  f' data-sortable="1"'
+                  f' onclick="sortBossTable(\'{inner_id}\', {col_idx}, this)"'
                   f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
-                  f'{escape(m["label"])}</th>')
-        t += '<th style="color:#556;font-size:11px;font-weight:normal;text-align:center">Pulls</th>'
+                  f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
+        t += (f'<th style="color:#556;font-size:11px;font-weight:normal;text-align:center;cursor:pointer"'
+              f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', {pulls_ci}, this)">'
+              f'Pulls <span class="sort-arrow">▼</span></th>')
         t += '</tr></thead><tbody>'
         current_role = None
         for pid in ov_pids:
@@ -3101,21 +3112,21 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             # Deaths column
             if n_deaths > 0:
                 d_avg = n_deaths / n_wipes if n_wipes > 0 else 0
-                t += (f'<td class="center death-h" style="background:#3a1a1a">{n_deaths}'
+                t += (f'<td class="center death-h" style="background:#3a1a1a" data-val="{n_deaths}">{n_deaths}'
                       f'<span style="color:#aaa;font-size:11px"> ({d_avg:.1f})</span></td>')
             else:
-                t += '<td class="center death-h">—</td>'
+                t += '<td class="center death-h" data-val="0">—</td>'
             for m in mech_defs:
                 lbl   = m["label"]
                 total = pid_mech_totals.get(pid, {}).get(lbl, 0)
                 if total > 0:
                     bg  = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
                     avg = total / n_wipes if n_wipes > 0 else 0
-                    t += (f'<td class="center" style="background:{bg}">{total}'
+                    t += (f'<td class="center" style="background:{bg}" data-val="{total}">{total}'
                           f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
                 else:
-                    t += '<td class="center">—</td>'
-            t += f'<td class="center" style="color:#666;font-size:11px">{n_wipes}</td>'
+                    t += '<td class="center" data-val="0">—</td>'
+            t += f'<td class="center" style="color:#666;font-size:11px" data-val="{n_wipes}">{n_wipes}</td>'
             t += '</tr>'
         t += '</tbody></table></div>'
         return t
@@ -3687,7 +3698,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 key=pid_sort
             )
             ov_kw_id  = f"ov-{table_id}"
-            ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw)
+            ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw, tbl_id=ov_kw_id)
             if ov_kw_html:
                 pull_btns += (f'<button class="pull-btn" onclick="switchPull(this,\'{ov_kw_id}\')">'
                               f'All Wipes</button>')
@@ -3747,7 +3758,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             key=pid_sort
         )
         ov_tbl_id = f"ov-{table_id}"
-        ov_html   = _build_mechanics_overview_pane(boss_wipes, all_ov_pids)
+        ov_html   = _build_mechanics_overview_pane(boss_wipes, all_ov_pids, tbl_id=ov_tbl_id)
         pull_btns  = (f'<button class="pull-btn active" onclick="switchPull(this,\'{ov_tbl_id}\')">'
                       f'All Wipes</button>')
         wipe_panes = ""
@@ -4327,6 +4338,12 @@ function sortBossTable(tableId, colIdx, thEl) {{
   if (cur) segments.push(cur);
   function parseVal(cell) {{
     if (!cell) return null;
+    if (cell.dataset.val !== undefined) {{
+      const dv = cell.dataset.val.trim();
+      if (!dv || dv === '—') return null;
+      const n = parseFloat(dv);
+      return isNaN(n) ? dv.toLowerCase() : n;
+    }}
     const text = cell.textContent.trim().replace(/⇅|▲|▼/g, '').trim();
     if (!text || text === '—') return null;
     const m = text.replace('%','').match(/^([\d.]+)\s*([MkKBbG]?)$/);
