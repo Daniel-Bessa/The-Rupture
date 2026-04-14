@@ -3047,15 +3047,24 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         pid_mech_totals   = {}
         pid_wipes_present = {}
         pid_death_totals  = {}
+        pid_dmg_totals    = {}
+        pid_heal_totals   = {}
         for w in boss_wipes_list:
-            mechs  = w.get("mechanics_data", {})
-            deaths = w.get("deaths", {})
+            mechs       = w.get("mechanics_data", {})
+            deaths      = w.get("deaths", {})
+            uptime_map  = w.get("uptime_map", {})
+            healing_map = w.get("healing_map", {})
             pids_in_wipe = {p for p in
                             (set(w.get("all_player_ids", set())) | set(deaths.keys()))
                             if p in actor_lookup}
             for p in pids_in_wipe:
                 pid_wipes_present[p] = pid_wipes_present.get(p, 0) + 1
                 pid_death_totals[p]  = pid_death_totals.get(p, 0) + len(deaths.get(p, []))
+                pid_dmg_totals[p]    = pid_dmg_totals.get(p, 0) + (
+                    uptime_map.get(p, {}).get("total", 0)
+                    if isinstance(uptime_map.get(p), dict) else 0)
+                pid_heal_totals[p]   = pid_heal_totals.get(p, 0) + (
+                    healing_map.get(p, 0) if isinstance(healing_map.get(p), int) else 0)
                 for m in mech_defs:
                     lbl = m["label"]
                     cnt = mechs.get(p, {}).get(lbl, 0)
@@ -3063,9 +3072,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     pid_mech_totals[p][lbl] = pid_mech_totals[p].get(lbl, 0) + cnt
         if not any(pid_mech_totals.values()):
             return ""
-        col_span    = 1 + 1 + len(mech_defs) + 1  # player + deaths + mechs + pulls
+
+        def _fk(val):
+            if val >= 1_000_000: return f"{val/1_000_000:.1f}M"
+            if val > 0:          return f"{val/1000:.0f}k"
+            return "—"
+
+        col_span    = 1 + 1 + len(mech_defs) + 2 + 1  # player + deaths + mechs + dmg + heal + pulls
         inner_id    = f"tbl-{tbl_id}" if tbl_id else "ov-tbl"
-        pulls_ci    = 2 + len(mech_defs)
+        dmg_ci      = 2 + len(mech_defs)
+        heal_ci     = 3 + len(mech_defs)
+        pulls_ci    = 4 + len(mech_defs)
         t  = (f'<p style="color:#556;font-size:11px;margin:0 0 8px">'
               f'Totals across all {len(boss_wipes_list)} wipe(s). '
               f'<span style="color:#666">Parentheses = avg per pull.</span></p>')
@@ -3085,6 +3102,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                   f' onclick="sortBossTable(\'{inner_id}\', {col_idx}, this)"'
                   f' data-htip=\'{tip}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
                   f'{escape(m["label"])} <span class="sort-arrow">▼</span></th>')
+        t += (f'<th style="color:#8ab;font-size:11px;font-weight:normal;text-align:center;cursor:pointer"'
+              f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', {dmg_ci}, this)">'
+              f'Dmg Done <span class="sort-arrow">▼</span></th>')
+        t += (f'<th style="color:#8b8;font-size:11px;font-weight:normal;text-align:center;cursor:pointer"'
+              f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', {heal_ci}, this)">'
+              f'Healing <span class="sort-arrow">▼</span></th>')
         t += (f'<th style="color:#556;font-size:11px;font-weight:normal;text-align:center;cursor:pointer"'
               f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', {pulls_ci}, this)">'
               f'Pulls <span class="sort-arrow">▼</span></th>')
@@ -3126,6 +3149,24 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                           f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
                 else:
                     t += '<td class="center" data-val="0">—</td>'
+            # Dmg Done column
+            total_dmg = pid_dmg_totals.get(pid, 0)
+            if total_dmg > 0:
+                dmg_avg = total_dmg / n_wipes if n_wipes > 0 else 0
+                t += (f'<td class="center" style="color:#8ab;font-size:11px" data-val="{total_dmg}">'
+                      f'{_fk(total_dmg)}'
+                      f'<span style="color:#556"> ({_fk(dmg_avg)})</span></td>')
+            else:
+                t += '<td class="center" style="font-size:11px" data-val="0">—</td>'
+            # Healing column
+            total_heal = pid_heal_totals.get(pid, 0)
+            if total_heal > 0:
+                heal_avg = total_heal / n_wipes if n_wipes > 0 else 0
+                t += (f'<td class="center" style="color:#8b8;font-size:11px" data-val="{total_heal}">'
+                      f'{_fk(total_heal)}'
+                      f'<span style="color:#556"> ({_fk(heal_avg)})</span></td>')
+            else:
+                t += '<td class="center" style="font-size:11px" data-val="0">—</td>'
             t += f'<td class="center" style="color:#666;font-size:11px" data-val="{n_wipes}">{n_wipes}</td>'
             t += '</tr>'
         t += '</tbody></table></div>'
