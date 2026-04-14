@@ -5600,25 +5600,20 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
     sorted_players = sorted(all_players.items(), key=lambda x: (-x[1]["deaths"], x[0]))
 
-    # Vanguard: aggregate tracked-ability dmg from death timelines
+    # Vanguard: aggregate tracked-ability dmg across all pulls (from mechanic hit data)
     _VAN_TRACKED = ["Divine Toll", "Divine Hammer", "Divine Tempest", "Melee"]
+    _VAN_DMG_LABELS = {"Divine Toll", "Div.Hammer", "Div.Tempest"}
     _van_dmg: dict = {}  # {pname: total_dmg_int}
     if IS_VANGUARD:
-        def _parse_amt_v(s):
-            s = str(s).strip()
-            if s.endswith('k'): return int(float(s[:-1]) * 1_000)
-            if s.endswith('M'): return int(float(s[:-1]) * 1_000_000)
-            try: return int(s)
-            except: return 0
-        _tracked_set = set(_VAN_TRACKED)
         for _p in pulls:
             _fn = _p["_player"]
-            for _rpid, _dlist in _p["deaths"].items():
+            for _rpid, _labels in _p["mts"].items():
                 _pname = _fn(_rpid)
-                for _death in _dlist:
-                    for _hit in _death.get("timeline", []):
-                        if _hit["ability"] in _tracked_set:
-                            _van_dmg[_pname] = _van_dmg.get(_pname, 0) + _parse_amt_v(_hit.get("amount_k", 0))
+                for _lbl, _hits in _labels.items():
+                    if _lbl in _VAN_DMG_LABELS:
+                        for _h in _hits:
+                            if isinstance(_h, dict):
+                                _van_dmg[_pname] = _van_dmg.get(_pname, 0) + _h.get("dmg", 0)
 
     # Chimaerus: aggregate alndust + horror across kills
     alndust_agg: dict = {}
