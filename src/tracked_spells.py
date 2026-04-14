@@ -62,7 +62,11 @@ CLASS_DEFENSIVE_IDS = {
     45438,   # Ice Block
     55342,   # Mirror Image
     108978,  # Alter Time
+    342245,  # Alter Time (alternate)
     110959,  # Greater Invisibility
+    110960,  # Greater Invisibility (alternate)
+    414658,  # Ice Cold
+    11426,   # Ice Barrier
     86949,   # Cauterize (passive proc — tracked via aura applied)
     # Monk
     115203,  # Fortifying Brew
@@ -167,7 +171,9 @@ SPELL_NAMES = {
     233526: "Fortitude of the Bear",  264735: "Survival of the Fittest",
     # Personal defensives — Mage
     45438: "Ice Block",           55342: "Mirror Image",
-    108978: "Alter Time",         110959: "Greater Invisibility",
+    108978: "Alter Time",         342245: "Alter Time",
+    110959: "Greater Invisibility", 110960: "Greater Invisibility",
+    414658: "Ice Cold",           11426:  "Ice Barrier",
     86949: "Cauterize",
     # Personal defensives — Monk
     115203: "Fortifying Brew",    122783: "Diffuse Magic",
