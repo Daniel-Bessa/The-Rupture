@@ -4655,6 +4655,34 @@ _VOIDSPIRE_BOSS_ORDER = [
     "Lightblinded Vanguard",
     "Crown of the Cosmos",
 ]
+
+# Zone groupings for the Boss Progression page
+_RAID_ZONES = [
+    {
+        "name": "Dreamrift",
+        "bosses": [
+            "Chimaerus, the Undreamt God",
+        ],
+    },
+    {
+        "name": "Voidspire",
+        "bosses": [
+            "Imperator Averzian",
+            "Vorasius",
+            "Fallen-King Salhadaar",
+            "Vaelgor & Ezzorak",
+            "Lightblinded Vanguard",
+            "Crown of the Cosmos",
+        ],
+    },
+    {
+        "name": "March of Quel'Danas",
+        "bosses": [
+            "Belo'ren, Child of Al'ar",
+            "Midnight Falls",
+        ],
+    },
+]
 _BOSS_DEDICATED_PAGES = {
     "Chimaerus, the Undreamt God": "mythic/boss_chimaerus.html",
     "Imperator Averzian":          "mythic/boss_averzian.html",
@@ -4808,10 +4836,37 @@ def write_bosses_html(days_data: list, output_path: str, guild_name: str = "") -
             f'{link_close}'
         )
 
-    ordered   = _VOIDSPIRE_BOSS_ORDER
-    extras    = [b for b in boss_agg if b not in ordered]
-    all_bosses = ordered + extras
-    cards_html = "\n".join(_boss_card(b) for b in all_bosses)
+    # Build zone sections
+    all_zoned = [b for z in _RAID_ZONES for b in z["bosses"]]
+    extras    = [b for b in boss_agg if b not in all_zoned]
+    total_bosses = len(all_zoned) + len(extras)
+
+    zones_html = ""
+    for zone in _RAID_ZONES:
+        zone_cards = "\n".join(_boss_card(b) for b in zone["bosses"])
+        n_cols = len(zone["bosses"])
+        zones_html += f"""
+<div class="zone-section">
+  <div class="zone-header">
+    <span class="zone-name">{escape(zone["name"])}</span>
+    <span class="zone-count">{len(zone["bosses"])} boss{"es" if len(zone["bosses"]) != 1 else ""}</span>
+  </div>
+  <div class="boss-grid" style="grid-template-columns: repeat({n_cols}, 1fr)">
+{zone_cards}
+  </div>
+</div>"""
+
+    if extras:
+        extra_cards = "\n".join(_boss_card(b) for b in extras)
+        zones_html += f"""
+<div class="zone-section">
+  <div class="zone-header">
+    <span class="zone-name">Other</span>
+  </div>
+  <div class="boss-grid">
+{extra_cards}
+  </div>
+</div>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -4821,31 +4876,44 @@ def write_bosses_html(days_data: list, output_path: str, guild_name: str = "") -
 <title>Boss Progression — {escape(guild_name)}</title>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; }}
+body {{ background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, 'Segoe UI', sans-serif; padding: 28px 24px; max-width: 1100px; margin: 0 auto; }}
 .page-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }}
 h1 {{ color: #e0e0e0; font-size: 24px; }}
 .back {{ color: #7289DA; font-size: 13px; text-decoration: none; display: inline-block; margin-bottom: 20px; }}
 .back:hover {{ text-decoration: underline; }}
-.subtitle {{ color: #555; font-size: 13px; margin-bottom: 28px; }}
-.boss-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }}
-.boss-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 18px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
+.subtitle {{ color: #555; font-size: 13px; margin-bottom: 32px; }}
+.zone-section {{ margin-bottom: 40px; }}
+.zone-header {{
+  display: flex; align-items: baseline; gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2a2a4a;
+}}
+.zone-name {{
+  font-size: 18px; font-weight: 700; letter-spacing: 0.04em;
+  color: #c9a96e;
+  text-transform: uppercase;
+}}
+.zone-count {{ font-size: 11px; color: #444; font-weight: 500; }}
+.boss-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }}
+.boss-card {{ background: #16213e; border: 1px solid #2a2a4a; border-radius: 10px; padding: 16px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s, transform 0.15s; }}
 .boss-card:hover {{ transform: translateY(-2px); }}
 .boss-card-mythic  {{ border-color: #3a1a5a; }}
 .boss-card-mythic:hover  {{ border-color: #c77dff; }}
 .boss-card-heroic  {{ border-color: #1a2a4a; }}
 .boss-card-heroic:hover  {{ border-color: #64b5f6; }}
 .boss-card-normal  {{ border-color: #1a2a2a; }}
-.boss-card-unstarted {{ border-color: #222; opacity: 0.5; }}
+.boss-card-unstarted {{ border-color: #1e1e2a; opacity: 0.45; cursor: default; }}
 .bc-top {{ margin-bottom: 10px; }}
 .badge-diff {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }}
 .badge-normal  {{ background: #1a3a1a; color: #4caf50; }}
 .badge-heroic  {{ background: #1a2a4a; color: #64b5f6; }}
 .badge-mythic  {{ background: #2a1a3a; color: #c77dff; }}
-.bc-name {{ font-size: 15px; font-weight: 700; color: #e0e0e0; margin-bottom: 10px; line-height: 1.3; }}
+.bc-name {{ font-size: 14px; font-weight: 700; color: #e0e0e0; margin-bottom: 10px; line-height: 1.3; }}
 .bc-status {{ font-size: 13px; font-weight: 600; margin-bottom: 4px; }}
 .bc-killed {{ color: #81c784; }}
 .bc-prog   {{ color: #ffb74d; }}
-.bc-unstarted {{ color: #555; }}
+.bc-unstarted {{ color: #444; }}
 .bc-detail {{ font-size: 12px; color: #888; margin-bottom: 8px; }}
 .bc-link {{ color: #7289DA; font-size: 12px; font-weight: 600; margin-top: 10px; }}
 .boss-card:hover .bc-link {{ text-decoration: underline; }}
@@ -4854,10 +4922,8 @@ h1 {{ color: #e0e0e0; font-size: 24px; }}
 <body>
 <a class="back" href="index.html">&#8592; Back to Raids</a>
 <div class="page-header"><h1>&#9760; Boss Progression — {escape(guild_name)}</h1></div>
-<div class="subtitle">{len(all_bosses)} bosses tracked</div>
-<div class="boss-grid">
-{cards_html}
-</div>
+<div class="subtitle">{total_bosses} bosses tracked</div>
+{zones_html}
 </body>
 </html>"""
 
