@@ -4418,10 +4418,43 @@ function sortBossTable(tableId, colIdx, thEl) {{
 
 def build_player_profiles(days_data: list) -> dict:
     """Aggregate per-player stats across all reports/raids.
-    Returns {pname: {chars, class, role, appearances: [{boss_key, difficulty, date_str, parse, deaths, dmg_taken, uptime_pct, interrupts, def_count, mechanics}]}}
+    Returns {pname: {chars, class, role,
+        appearances: [{boss_key, difficulty, date_str, parse, deaths, dmg_taken, uptime_pct, interrupts, def_count, mechanics}],
+        boss_summary: {boss_name: {difficulty: {kills, wipes, total_deaths, total_dmg_taken, total_dmg_done, total_active_ms, total_interrupts, total_defs, pulls}}}
+    }}
     """
     from datetime import datetime, timezone
     profiles = {}
+
+    def _ensure_profile(pname, cls, role):
+        if pname not in profiles:
+            profiles[pname] = {"chars": set(), "class": cls, "role": role, "appearances": [], "boss_summary": {}}
+        p = profiles[pname]
+        p["class"] = cls
+        p["role"] = role
+        return p
+
+    def _accum_boss(p, boss_display, difficulty, is_kill, fight):
+        """Accumulate one fight into boss_summary for a player."""
+        bs = p["boss_summary"]
+        if boss_display not in bs:
+            bs[boss_display] = {}
+        if difficulty not in bs[boss_display]:
+            bs[boss_display][difficulty] = {
+                "kills": 0, "wipes": 0,
+                "total_deaths": 0, "total_dmg_taken": 0,
+                "total_dmg_done": 0, "total_active_ms": 0,
+                "total_interrupts": 0, "total_defs": 0,
+                "pulls": 0,
+            }
+        entry = bs[boss_display][difficulty]
+        entry["pulls"] += 1
+        if is_kill:
+            entry["kills"] += 1
+        else:
+            entry["wipes"] += 1
+        return entry
+
     for day_data in days_data:
         actor_lookup = {a["id"]: a for a in day_data.get("actors", [])}
         ri = day_data.get("report_info", {})
@@ -4429,6 +4462,7 @@ def build_player_profiles(days_data: list) -> dict:
         date_str = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if start_ts else "Unknown"
         difficulty = day_data.get("difficulty", "")
 
+        # Process kill fights (boss_data)
         for boss_key, fights in day_data.get("boss_data", {}).items():
             boss_display = boss_key.rsplit(" (", 1)[0]
             for fight in fights:
@@ -4443,12 +4477,8 @@ def build_player_profiles(days_data: list) -> dict:
                     role = (fight.get("spec_roles", {}).get(pid)
                             or PLAYER_ROLES.get(pname, "DPS"))
 
-                    if pname not in profiles:
-                        profiles[pname] = {"chars": set(), "class": cls, "role": role, "appearances": []}
-                    p = profiles[pname]
+                    p = _ensure_profile(pname, cls, role)
                     p["chars"].add(char_name)
-                    p["class"] = cls
-                    p["role"] = role
 
                     rmap = fight.get("rankings_map", {}).get(pid, {})
                     parse = rmap.get("rankPercent", 0)
@@ -4457,7 +4487,11 @@ def build_player_profiles(days_data: list) -> dict:
                     uptime = fight.get("uptime_map", {}).get(pid, {})
                     uptime_pct = (min(uptime.get("activeTime", 0) / fight_dur * 100, 100)
                                   if isinstance(uptime, dict) else 0)
+                    dmg_done = uptime.get("total", 0) if isinstance(uptime, dict) else 0
+                    active_ms = uptime.get("activeTime", 0) if isinstance(uptime, dict) else 0
                     interrupts = fight.get("interrupts", {}).get(pid, 0)
+                    if isinstance(interrupts, dict):
+                        interrupts = interrupts.get("count", 0)
                     def_count = len(fight.get("defensive_casts", {}).get(pid, []))
                     mechanics = dict(fight.get("mechanics_data", {}).get(pid, {}))
 
@@ -4474,6 +4508,50 @@ def build_player_profiles(days_data: list) -> dict:
                         "def_count": def_count,
                         "mechanics": mechanics,
                     })
+
+                    entry = _accum_boss(p, boss_display, difficulty, is_kill=True, fight=fight)
+                    entry["total_deaths"]     += deaths
+                    entry["total_dmg_taken"]  += dmg_taken
+                    entry["total_dmg_done"]   += dmg_done
+                    entry["total_active_ms"]  += active_ms
+                    entry["total_interrupts"] += interrupts
+                    entry["total_defs"]       += def_count
+
+        # Process wipe fights (wipe_data) — count wipes and aggregate stats
+        for boss_key, fights in day_data.get("wipe_data", {}).items():
+            boss_display = boss_key.rsplit(" (", 1)[0]
+            for fight in fights:
+                for pid in fight.get("all_player_ids", set()):
+                    actor = actor_lookup.get(pid, {})
+                    char_name = actor.get("name", "")
+                    cls = actor.get("subType", "Unknown")
+                    if not char_name:
+                        continue
+                    pname, _ = lookup_roster(char_name)
+                    role = (fight.get("spec_roles", {}).get(pid)
+                            or PLAYER_ROLES.get(pname, "DPS"))
+
+                    p = _ensure_profile(pname, cls, role)
+                    p["chars"].add(char_name)
+
+                    deaths = len(fight.get("deaths", {}).get(pid, []))
+                    dmg_taken = fight.get("dmg_taken", {}).get(pid, 0)
+                    uptime = fight.get("uptime_map", {}).get(pid, {})
+                    dmg_done = uptime.get("total", 0) if isinstance(uptime, dict) else 0
+                    active_ms = uptime.get("activeTime", 0) if isinstance(uptime, dict) else 0
+                    interrupts = fight.get("interrupts", {}).get(pid, 0)
+                    if isinstance(interrupts, dict):
+                        interrupts = interrupts.get("count", 0)
+                    def_count = len(fight.get("defensive_casts", {}).get(pid, []))
+
+                    entry = _accum_boss(p, boss_display, difficulty, is_kill=False, fight=fight)
+                    entry["total_deaths"]     += deaths
+                    entry["total_dmg_taken"]  += dmg_taken
+                    entry["total_dmg_done"]   += dmg_done
+                    entry["total_active_ms"]  += active_ms
+                    entry["total_interrupts"] += interrupts
+                    entry["total_defs"]       += def_count
+
     return profiles
 
 
@@ -4510,47 +4588,181 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
                 f' title="Filter by {_esc(c)}">{_esc(c)}</span>'
             )
 
-        # Build table rows with data-char attribute
-        rows_html = ""
-        for a in sorted(p["appearances"], key=lambda x: (x["boss"], x["date"])):
-            parse = a["parse"]
-            if parse >= 99:   pc = "#E5CC80"
-            elif parse >= 95: pc = "#FF8000"
-            elif parse >= 75: pc = "#A335EE"
-            elif parse >= 50: pc = "#0070DD"
-            elif parse >= 25: pc = "#1EFF00"
-            else:              pc = "#aaa"
-            parse_str  = f'<span style="color:{pc};font-weight:bold">{parse:.0f}%</span>' if parse else "—"
-            dmg        = a["dmg_taken"]
-            dmg_str    = (f"{dmg/1_000_000:.1f}M" if dmg >= 1_000_000 else (f"{dmg/1000:.0f}k" if dmg > 0 else "—"))
-            uptime_str = f'{a["uptime_pct"]:.0f}%' if a["uptime_pct"] > 0 else "—"
-            death_str  = f'<span style="color:#e57373;font-weight:bold">{a["deaths"]}</span>' if a["deaths"] else "—"
-            int_str    = str(a["interrupts"]) if a["interrupts"] else "—"
-            def_str    = str(a["def_count"]) if a["def_count"] else "—"
-            mech_parts = [f'{k}:{v}' for k, v in a["mechanics"].items() if v]
-            mech_str   = ", ".join(mech_parts) if mech_parts else "—"
-            char_name  = a.get("char", "")
-            char_cls   = char_classes.get(char_name.lower(), cls)
-            char_color = CLASS_COLORS.get(char_cls, "#888")
-            rows_html += (
-                f'<tr data-char="{_esc(char_name)}">'
-                f'<td>{_esc(a["boss"])}</td>'
-                f'<td style="color:#888">{_esc(a["difficulty"])}</td>'
-                f'<td style="color:#666">{_esc(a["date"])}</td>'
-                f'<td class="center" style="color:{char_color};font-size:11px">{_esc(char_name)}</td>'
-                f'<td class="center">{parse_str}</td>'
-                f'<td class="center">{death_str}</td>'
-                f'<td class="center">{dmg_str}</td>'
-                f'<td class="center">{uptime_str}</td>'
-                f'<td class="center">{int_str}</td>'
-                f'<td class="center" style="color:#64b5f6">{def_str}</td>'
-                f'<td style="color:#e57373;font-size:11px">{mech_str}</td>'
-                f'</tr>'
-            )
+        # Build rows grouped by difficulty
+        def _build_rows(appearances):
+            out = ""
+            for a in sorted(appearances, key=lambda x: (x["boss"], x["date"])):
+                parse = a["parse"]
+                if parse >= 99:   pc = "#E5CC80"
+                elif parse >= 95: pc = "#FF8000"
+                elif parse >= 75: pc = "#A335EE"
+                elif parse >= 50: pc = "#0070DD"
+                elif parse >= 25: pc = "#1EFF00"
+                else:              pc = "#aaa"
+                parse_str  = f'<span style="color:{pc};font-weight:bold">{parse:.0f}%</span>' if parse else "—"
+                dmg        = a["dmg_taken"]
+                dmg_str    = (f"{dmg/1_000_000:.1f}M" if dmg >= 1_000_000 else (f"{dmg/1000:.0f}k" if dmg > 0 else "—"))
+                uptime_str = f'{a["uptime_pct"]:.0f}%' if a["uptime_pct"] > 0 else "—"
+                death_str  = f'<span style="color:#e57373;font-weight:bold">{a["deaths"]}</span>' if a["deaths"] else "—"
+                int_str    = str(a["interrupts"]) if a["interrupts"] else "—"
+                def_str    = str(a["def_count"]) if a["def_count"] else "—"
+                mech_parts = [f'{k}:{v}' for k, v in a["mechanics"].items() if v]
+                mech_str   = ", ".join(mech_parts) if mech_parts else "—"
+                char_name  = a.get("char", "")
+                char_cls   = char_classes.get(char_name.lower(), cls)
+                char_color = CLASS_COLORS.get(char_cls, "#888")
+                out += (
+                    f'<tr data-char="{_esc(char_name)}">'
+                    f'<td>{_esc(a["boss"])}</td>'
+                    f'<td style="color:#666">{_esc(a["date"])}</td>'
+                    f'<td class="center" style="color:{char_color};font-size:11px">{_esc(char_name)}</td>'
+                    f'<td class="center">{parse_str}</td>'
+                    f'<td class="center">{death_str}</td>'
+                    f'<td class="center">{dmg_str}</td>'
+                    f'<td class="center">{uptime_str}</td>'
+                    f'<td class="center">{int_str}</td>'
+                    f'<td class="center" style="color:#64b5f6">{def_str}</td>'
+                    f'<td style="color:#e57373;font-size:11px">{mech_str}</td>'
+                    f'</tr>'
+                )
+            return out
 
-        def _sth(col, lbl):
-            return (f'<th onclick="sortPerfTable({col},this)" style="cursor:pointer;user-select:none">'
+        by_diff = {"Mythic": [], "Heroic": [], "Normal": []}
+        for a in p["appearances"]:
+            d = a.get("difficulty", "Normal")
+            by_diff.setdefault(d, []).append(a)
+
+        def _sth(tbl_id, col, lbl):
+            return (f'<th onclick="sortPerfTable(\'{tbl_id}\',{col},this)" style="cursor:pointer;user-select:none">'
                     f'{lbl} <span class="sarr">▼</span></th>')
+
+        def _diff_table(diff, tbl_id, collapsed=False):
+            rows = _build_rows(by_diff.get(diff, []))
+            if not rows:
+                return ""
+            diff_colors = {"Mythic": "#c77dff", "Heroic": "#64b5f6", "Normal": "#4caf50"}
+            dc = diff_colors.get(diff, "#888")
+            toggle_init = "▶ " if collapsed else "▼ "
+            display = "none" if collapsed else "block"
+            return f"""
+<div class="diff-section">
+  <div class="diff-header" onclick="toggleSection('{tbl_id}',this)" style="color:{dc}">
+    <span class="diff-toggle">{toggle_init}</span>{diff}
+  </div>
+  <div id="{tbl_id}-wrap" style="display:{display}">
+    <table id="{tbl_id}" class="perf-table">
+    <thead><tr>
+    {_sth(tbl_id,0,'Boss')}{_sth(tbl_id,1,'Date')}
+    <th class="center">Char</th>
+    {_sth(tbl_id,3,'Parse%')}{_sth(tbl_id,4,'Deaths')}{_sth(tbl_id,5,'Dmg Taken')}{_sth(tbl_id,6,'Uptime%')}{_sth(tbl_id,7,'Interrupts')}{_sth(tbl_id,8,'Def Used')}
+    <th>Mechanics</th>
+    </tr></thead>
+    <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>"""
+
+        tables_html = (
+            _diff_table("Mythic", "tbl-mythic", collapsed=False)
+            + _diff_table("Heroic", "tbl-heroic", collapsed=True)
+            + _diff_table("Normal", "tbl-normal", collapsed=True)
+        )
+
+        # ── Boss Summary section ──────────────────────────────────────────────
+        def _fmt_dmg(v):
+            if v <= 0: return "—"
+            if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
+            if v >= 1_000:     return f"{v/1000:.0f}k"
+            return str(int(v))
+
+        def _fmt_dps(dmg_done, active_ms):
+            if active_ms <= 0 or dmg_done <= 0: return "—"
+            dps = dmg_done / (active_ms / 1000)
+            return _fmt_dmg(dps)
+
+        _boss_order_all = [
+            "Chimaerus, the Undreamt God",
+            "Imperator Averzian",
+            "Vorasius",
+            "Fallen-King Salhadaar",
+            "Vaelgor & Ezzorak",
+            "Lightblinded Vanguard",
+            "Crown of the Cosmos",
+            "Belo'ren, Child of Al'ar",
+            "Midnight Falls",
+        ]
+
+        def _build_summary_rows(diff_data):
+            """Build rows for boss summary table given {boss: stats_dict}."""
+            rows = ""
+            ordered_bosses = [b for b in _boss_order_all if b in diff_data]
+            ordered_bosses += [b for b in diff_data if b not in _boss_order_all]
+            for boss in ordered_bosses:
+                e = diff_data[boss]
+                pulls = e["pulls"] or 1
+                avg_deaths  = e["total_deaths"]    / pulls
+                avg_dmg_tak = e["total_dmg_taken"] / pulls
+                avg_ints    = e["total_interrupts"] / pulls
+                avg_defs    = e["total_defs"]       / pulls
+                dps_str     = _fmt_dps(e["total_dmg_done"], e["total_active_ms"])
+                kills_str   = f'<span style="color:#3fb950;font-weight:bold">{e["kills"]}</span>' if e["kills"] else "—"
+                wipes_str   = f'<span style="color:#e05252">{e["wipes"]}</span>' if e["wipes"] else "—"
+                deaths_str  = (f'<span style="color:#e57373;font-weight:bold">{avg_deaths:.1f}</span>'
+                               if avg_deaths > 0 else "—")
+                dmg_str     = _fmt_dmg(avg_dmg_tak)
+                ints_str    = f"{avg_ints:.1f}" if avg_ints > 0 else "—"
+                defs_str    = (f'<span style="color:#64b5f6">{avg_defs:.1f}</span>'
+                               if avg_defs > 0 else "—")
+                rows += (
+                    f'<tr>'
+                    f'<td>{_esc(boss)}</td>'
+                    f'<td class="center">{kills_str}</td>'
+                    f'<td class="center">{wipes_str}</td>'
+                    f'<td class="center">{deaths_str}</td>'
+                    f'<td class="center">{dps_str}</td>'
+                    f'<td class="center">{dmg_str}</td>'
+                    f'<td class="center">{ints_str}</td>'
+                    f'<td class="center">{defs_str}</td>'
+                    f'</tr>'
+                )
+            return rows
+
+        def _summary_table(diff, tbl_id, collapsed=False):
+            """One difficulty section of the Boss Summary block."""
+            bs = p.get("boss_summary", {})
+            # Collect only bosses that have data for this difficulty
+            diff_data = {boss: diff_map[diff] for boss, diff_map in bs.items() if diff in diff_map}
+            if not diff_data:
+                return ""
+            diff_colors = {"Mythic": "#c77dff", "Heroic": "#64b5f6", "Normal": "#4caf50"}
+            dc = diff_colors.get(diff, "#888")
+            toggle_init = "▶ " if collapsed else "▼ "
+            display = "none" if collapsed else "block"
+            rows = _build_summary_rows(diff_data)
+            return f"""
+<div class="diff-section">
+  <div class="diff-header" onclick="toggleSection('{tbl_id}',this)" style="color:{dc}">
+    <span class="diff-toggle">{toggle_init}</span>{diff}
+  </div>
+  <div id="{tbl_id}-wrap" style="display:{display}">
+    <table id="{tbl_id}" class="perf-table summary-table">
+    <thead><tr>
+    <th>Boss</th>
+    <th class="center">Kills</th><th class="center">Wipes</th>
+    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+    <th class="center">Avg Defs</th>
+    </tr></thead>
+    <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>"""
+
+        summary_html = (
+            _summary_table("Mythic", "sum-mythic", collapsed=False)
+            + _summary_table("Heroic", "sum-heroic", collapsed=True)
+            + _summary_table("Normal", "sum-normal", collapsed=True)
+        )
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -4563,21 +4775,26 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
 body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px}}
 a{{color:#7289DA;text-decoration:none}} a:hover{{text-decoration:underline}}
 h1{{font-size:28px;font-weight:700;margin-bottom:4px}}
-h2{{font-size:13px;color:#7289DA;margin:24px 0 10px;letter-spacing:0.5px;text-transform:uppercase}}
 .role-badge{{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold;color:#0d1117;background:{role_color};margin-left:10px;vertical-align:middle}}
 .chars-list{{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}}
 .char-chip{{background:#1a2233;border:1px solid #2a3a6a;border-radius:20px;padding:3px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}}
 .char-chip:hover{{background:#1e2d4a;border-color:#7289DA}}
 .char-chip.active{{background:#2a3a6a;border-color:#7289DA;box-shadow:0 0 0 1px #7289DA}}
 .filter-note{{color:#555;font-size:11px;margin-top:6px}}
-table{{width:100%;border-collapse:collapse;background:#0d1525;margin-top:8px}}
-th{{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}}
-th:hover{{color:#a0b4ff}}
-td{{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}}
-tr:hover td{{background:#111827}}
+.diff-section{{margin-top:28px}}
+.diff-header{{font-size:13px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;user-select:none;padding:6px 0;display:flex;align-items:center;gap:6px;border-bottom:1px solid #1e2a3a;margin-bottom:8px}}
+.diff-header:hover{{opacity:0.8}}
+.diff-toggle{{font-size:11px;width:14px}}
+.perf-table{{width:100%;border-collapse:collapse;background:#0d1525}}
+.perf-table th{{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}}
+.perf-table th:hover{{color:#a0b4ff}}
+.summary-table th{{color:#9c6cde}}
+.perf-table td{{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}}
+.perf-table tr:hover td{{background:#111827}}
 .center{{text-align:center}}
 .sarr{{color:#555;font-size:10px}}
 .back{{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}}
+h2{{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transform:uppercase}}
 </style>
 </head>
 <body>
@@ -4588,16 +4805,11 @@ tr:hover td{{background:#111827}}
 <div class="chars-list">{chars_html}</div>
 <div class="filter-note" id="filter-note"></div>
 
-<h2>Boss Performance</h2>
-<table id="perf-table">
-<thead><tr>
-{_sth(0,'Boss')}{_sth(1,'Difficulty')}{_sth(2,'Date')}
-<th class="center">Char</th>
-{_sth(4,'Parse%')}{_sth(5,'Deaths')}{_sth(6,'Dmg Taken')}{_sth(7,'Uptime%')}{_sth(8,'Interrupts')}{_sth(9,'Def Used')}
-<th>Mechanics</th>
-</tr></thead>
-<tbody>{rows_html}</tbody>
-</table>
+<h2 style="margin-top:32px;color:#9c6cde;border-bottom:1px solid #2a2040;padding-bottom:4px">Boss Summary</h2>
+{summary_html}
+
+<h2 style="margin-top:40px;border-bottom:1px solid #1e2a3a;padding-bottom:4px">Raid History</h2>
+{tables_html}
 <script>
 let _activeChar = null;
 function filterChar(chip, charName) {{
@@ -4610,15 +4822,22 @@ function filterChar(chip, charName) {{
   note.textContent = _activeChar ? 'Showing: ' + _activeChar + ' — click again to clear' : '';
 }}
 function _applyFilter() {{
-  document.querySelectorAll('#perf-table tbody tr').forEach(row => {{
+  document.querySelectorAll('.perf-table tbody tr').forEach(row => {{
     row.style.display = (!_activeChar || row.dataset.char === _activeChar) ? '' : 'none';
   }});
 }}
-function sortPerfTable(col, th) {{
-  const tbody = document.querySelector('#perf-table tbody');
+function toggleSection(tblId, hdr) {{
+  const wrap = document.getElementById(tblId + '-wrap');
+  const tog  = hdr.querySelector('.diff-toggle');
+  const open = wrap.style.display === 'none';
+  wrap.style.display = open ? 'block' : 'none';
+  tog.textContent = open ? '▼ ' : '▶ ';
+}}
+function sortPerfTable(tblId, col, th) {{
+  const tbody = document.querySelector('#' + tblId + ' tbody');
   const rows = Array.from(tbody.rows);
   const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
-  document.querySelectorAll('#perf-table th').forEach(t => {{
+  document.querySelectorAll('#' + tblId + ' th').forEach(t => {{
     t.dataset.dir = '';
     const a = t.querySelector('.sarr'); if (a) a.textContent = '▼';
   }});

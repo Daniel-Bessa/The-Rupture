@@ -9,21 +9,26 @@
 body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px}
 a{color:#7289DA;text-decoration:none} a:hover{text-decoration:underline}
 h1{font-size:28px;font-weight:700;margin-bottom:4px}
-h2{font-size:13px;color:#7289DA;margin:24px 0 10px;letter-spacing:0.5px;text-transform:uppercase}
 .role-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold;color:#0d1117;background:#e57373;margin-left:10px;vertical-align:middle}
 .chars-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
 .char-chip{background:#1a2233;border:1px solid #2a3a6a;border-radius:20px;padding:3px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
 .char-chip:hover{background:#1e2d4a;border-color:#7289DA}
 .char-chip.active{background:#2a3a6a;border-color:#7289DA;box-shadow:0 0 0 1px #7289DA}
 .filter-note{color:#555;font-size:11px;margin-top:6px}
-table{width:100%;border-collapse:collapse;background:#0d1525;margin-top:8px}
-th{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}
-th:hover{color:#a0b4ff}
-td{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}
-tr:hover td{background:#111827}
+.diff-section{margin-top:28px}
+.diff-header{font-size:13px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;user-select:none;padding:6px 0;display:flex;align-items:center;gap:6px;border-bottom:1px solid #1e2a3a;margin-bottom:8px}
+.diff-header:hover{opacity:0.8}
+.diff-toggle{font-size:11px;width:14px}
+.perf-table{width:100%;border-collapse:collapse;background:#0d1525}
+.perf-table th{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}
+.perf-table th:hover{color:#a0b4ff}
+.summary-table th{color:#9c6cde}
+.perf-table td{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}
+.perf-table tr:hover td{background:#111827}
 .center{text-align:center}
 .sarr{color:#555;font-size:10px}
 .back{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}
+h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -34,16 +39,44 @@ tr:hover td{background:#111827}
 <div class="chars-list"><span class="char-chip" style="color:#C69B6D" onclick="filterChar(this,'Shugger')" title="Filter by Shugger">Shugger</span></div>
 <div class="filter-note" id="filter-note"></div>
 
-<h2>Boss Performance</h2>
-<table id="perf-table">
-<thead><tr>
-<th onclick="sortPerfTable(0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable(1,this)" style="cursor:pointer;user-select:none">Difficulty <span class="sarr">▼</span></th><th onclick="sortPerfTable(2,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
-<th class="center">Char</th>
-<th onclick="sortPerfTable(4,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable(5,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable(6,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable(7,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable(8,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable(9,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
-<th>Mechanics</th>
-</tr></thead>
-<tbody><tr data-char="Shugger"><td>Chimaerus, the Undreamt God</td><td style="color:#888">Normal</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#C69B6D;font-size:11px">Shugger</td><td class="center">—</td><td class="center">—</td><td class="center">1.1M</td><td class="center">98%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Rift Emerg.:2, Alndust Ess.:7, Alndust Uph.:1</td></tr><tr data-char="Shugger"><td>Lightblinded Vanguard</td><td style="color:#888">Normal</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#C69B6D;font-size:11px">Shugger</td><td class="center">—</td><td class="center">—</td><td class="center">782k</td><td class="center">98%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Trampled:2, Exec.Sentence:1, Div.Hammer:1</td></tr></tbody>
-</table>
+<h2 style="margin-top:32px;color:#9c6cde;border-bottom:1px solid #2a2040;padding-bottom:4px">Boss Summary</h2>
+
+<div class="diff-section">
+  <div class="diff-header" onclick="toggleSection('sum-normal',this)" style="color:#4caf50">
+    <span class="diff-toggle">▶ </span>Normal
+  </div>
+  <div id="sum-normal-wrap" style="display:none">
+    <table id="sum-normal" class="perf-table summary-table">
+    <thead><tr>
+    <th>Boss</th>
+    <th class="center">Kills</th><th class="center">Wipes</th>
+    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+    <th class="center">Avg Defs</th>
+    </tr></thead>
+    <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">60k</td><td class="center">1.1M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">103k</td><td class="center">782k</td><td class="center">—</td><td class="center">—</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<h2 style="margin-top:40px;border-bottom:1px solid #1e2a3a;padding-bottom:4px">Raid History</h2>
+
+<div class="diff-section">
+  <div class="diff-header" onclick="toggleSection('tbl-normal',this)" style="color:#4caf50">
+    <span class="diff-toggle">▶ </span>Normal
+  </div>
+  <div id="tbl-normal-wrap" style="display:none">
+    <table id="tbl-normal" class="perf-table">
+    <thead><tr>
+    <th onclick="sortPerfTable('tbl-normal',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
+    <th class="center">Char</th>
+    <th onclick="sortPerfTable('tbl-normal',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
+    <th>Mechanics</th>
+    </tr></thead>
+    <tbody><tr data-char="Shugger"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#C69B6D;font-size:11px">Shugger</td><td class="center">—</td><td class="center">—</td><td class="center">1.1M</td><td class="center">98%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Rift Emerg.:2, Alndust Ess.:7, Alndust Uph.:1</td></tr><tr data-char="Shugger"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#C69B6D;font-size:11px">Shugger</td><td class="center">—</td><td class="center">—</td><td class="center">782k</td><td class="center">98%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Trampled:2, Exec.Sentence:1, Div.Hammer:1</td></tr></tbody>
+    </table>
+  </div>
+</div>
 <script>
 let _activeChar = null;
 function filterChar(chip, charName) {
@@ -56,15 +89,22 @@ function filterChar(chip, charName) {
   note.textContent = _activeChar ? 'Showing: ' + _activeChar + ' — click again to clear' : '';
 }
 function _applyFilter() {
-  document.querySelectorAll('#perf-table tbody tr').forEach(row => {
+  document.querySelectorAll('.perf-table tbody tr').forEach(row => {
     row.style.display = (!_activeChar || row.dataset.char === _activeChar) ? '' : 'none';
   });
 }
-function sortPerfTable(col, th) {
-  const tbody = document.querySelector('#perf-table tbody');
+function toggleSection(tblId, hdr) {
+  const wrap = document.getElementById(tblId + '-wrap');
+  const tog  = hdr.querySelector('.diff-toggle');
+  const open = wrap.style.display === 'none';
+  wrap.style.display = open ? 'block' : 'none';
+  tog.textContent = open ? '▼ ' : '▶ ';
+}
+function sortPerfTable(tblId, col, th) {
+  const tbody = document.querySelector('#' + tblId + ' tbody');
   const rows = Array.from(tbody.rows);
   const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
-  document.querySelectorAll('#perf-table th').forEach(t => {
+  document.querySelectorAll('#' + tblId + ' th').forEach(t => {
     t.dataset.dir = '';
     const a = t.querySelector('.sarr'); if (a) a.textContent = '▼';
   });
