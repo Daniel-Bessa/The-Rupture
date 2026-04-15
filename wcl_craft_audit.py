@@ -4416,15 +4416,15 @@ function sortBossTable(tableId, colIdx, thEl) {{
     print(f"[OK] Raid page saved: {output_path}")
 
 
-def build_player_profiles(days_data: list) -> dict:
+def build_player_profiles(days_data: list):
     """Aggregate per-player stats across all reports/raids.
-    Returns {pname: {chars, class, role,
-        appearances: [{boss_key, difficulty, date_str, parse, deaths, dmg_taken, uptime_pct, interrupts, def_count, mechanics}],
-        boss_summary: {boss_name: {difficulty: {kills, wipes, total_deaths, total_dmg_taken, total_dmg_done, total_active_ms, total_interrupts, total_defs, pulls}}}
-    }}
+    Returns (profiles, guild_pulls) where:
+      profiles   = {pname: {chars, class, role, appearances, boss_summary}}
+      guild_pulls = {boss_display: {difficulty: total_pull_count}}
     """
     from datetime import datetime, timezone
     profiles = {}
+    guild_pulls: dict = {}   # {boss_display: {diff: total_pulls}}
 
     def _ensure_profile(pname, cls, role):
         if pname not in profiles:
@@ -4465,6 +4465,9 @@ def build_player_profiles(days_data: list) -> dict:
         # Process kill fights (boss_data)
         for boss_key, fights in day_data.get("boss_data", {}).items():
             boss_display = boss_key.rsplit(" (", 1)[0]
+            # Count guild-level pulls (kills)
+            guild_pulls.setdefault(boss_display, {})
+            guild_pulls[boss_display][difficulty] = guild_pulls[boss_display].get(difficulty, 0) + len(fights)
             for fight in fights:
                 fight_dur = fight.get("fight_dur_ms", 1) or 1
                 for pid in fight.get("all_player_ids", set()):
@@ -4520,6 +4523,9 @@ def build_player_profiles(days_data: list) -> dict:
         # Process wipe fights (wipe_data) — count wipes and aggregate stats
         for boss_key, fights in day_data.get("wipe_data", {}).items():
             boss_display = boss_key.rsplit(" (", 1)[0]
+            # Count guild-level pulls (wipes)
+            guild_pulls.setdefault(boss_display, {})
+            guild_pulls[boss_display][difficulty] = guild_pulls[boss_display].get(difficulty, 0) + len(fights)
             for fight in fights:
                 for pid in fight.get("all_player_ids", set()):
                     actor = actor_lookup.get(pid, {})
@@ -4552,14 +4558,14 @@ def build_player_profiles(days_data: list) -> dict:
                     entry["total_interrupts"] += interrupts
                     entry["total_defs"]       += def_count
 
-    return profiles
+    return profiles, guild_pulls
 
 
 def write_player_pages(days_data: list, output_dir: str = "players") -> None:
     """Generate one player_{slug}.html profile page per known player."""
     from html import escape as _esc
 
-    profiles = build_player_profiles(days_data)
+    profiles, guild_pulls = build_player_profiles(days_data)
 
     # Per-char class lookup
     char_classes: dict = {}
@@ -4670,11 +4676,16 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
             ordered += [b for b in diff_data if b not in _boss_order_all]
             for boss in ordered:
                 e = diff_data[boss]
-                pulls = e["pulls"] or 1
-                avg_deaths  = e["total_deaths"]    / pulls
-                avg_dmg_tak = e["total_dmg_taken"] / pulls
-                avg_ints    = e["total_interrupts"] / pulls
-                avg_defs    = e["total_defs"]       / pulls
+                player_pulls   = e["pulls"] or 1
+                total_pulls    = guild_pulls.get(boss, {}).get(diff, player_pulls)
+                pct            = player_pulls / total_pulls * 100 if total_pulls else 100
+                pct_color      = "#3fb950" if pct >= 80 else ("#e5c44a" if pct >= 50 else "#e05252")
+                pulls_str      = (f'<span style="color:{pct_color}">{player_pulls}</span>'
+                                  f'<span style="color:#555;font-size:10px"> /{total_pulls} ({pct:.0f}%)</span>')
+                avg_deaths  = e["total_deaths"]    / player_pulls
+                avg_dmg_tak = e["total_dmg_taken"] / player_pulls
+                avg_ints    = e["total_interrupts"] / player_pulls
+                avg_defs    = e["total_defs"]       / player_pulls
                 kills_str  = f'<span style="color:#3fb950;font-weight:bold">{e["kills"]}</span>' if e["kills"] else "—"
                 wipes_str  = f'<span style="color:#e05252">{e["wipes"]}</span>' if e["wipes"] else "—"
                 deaths_str = (f'<span style="color:#e57373;font-weight:bold">{avg_deaths:.1f}</span>'
@@ -4684,12 +4695,13 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
                 rows += (
                     f'<tr>'
                     f'<td>{_esc(boss)}</td>'
+                    f'<td class="center">{pulls_str}</td>'
                     f'<td class="center">{kills_str}</td>'
                     f'<td class="center">{wipes_str}</td>'
                     f'<td class="center">{deaths_str}</td>'
                     f'<td class="center">{_fmt_dps(e["total_dmg_done"], e["total_active_ms"])}</td>'
                     f'<td class="center">{_fmt_dmg(avg_dmg_tak)}</td>'
-                    f'<td class="center">{"" + f"{avg_ints:.1f}" if avg_ints > 0 else "—"}</td>'
+                    f'<td class="center">{f"{avg_ints:.1f}" if avg_ints > 0 else "—"}</td>'
                     f'<td class="center">{defs_str}</td>'
                     f'</tr>'
                 )
@@ -4722,6 +4734,7 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
       <table id="{sum_id}" class="perf-table summary-table">
       <thead><tr>
         <th>Boss</th>
+        <th class="center">Pulls</th>
         <th class="center">Kills</th><th class="center">Wipes</th>
         <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
         <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
@@ -5342,7 +5355,7 @@ def write_roster_html(days_data: list, output_path: str, guild_name: str = "") -
     """Write a roster overview page listing all players grouped by role."""
     from html import escape as _esc
 
-    profiles = build_player_profiles(days_data)
+    profiles, _guild_pulls = build_player_profiles(days_data)
 
     # Build per-character class lookup from all actors across all reports
     char_classes: dict = {}  # char_name_lower -> class_name
