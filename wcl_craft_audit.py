@@ -4763,18 +4763,17 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
   </div>
 </div>"""
 
-        all_diff_html = (
-            _diff_block("Mythic",  "mythic",  collapsed=False)
-            + _diff_block("Heroic",  "heroic",  collapsed=True)
-            + _diff_block("Normal",  "normal",  collapsed=True)
-        )
+        mythic_html = _diff_block("Mythic", "mythic", collapsed=False)
+        heroic_html = _diff_block("Heroic", "heroic", collapsed=False)
+        normal_html = _diff_block("Normal", "normal", collapsed=False)
 
-        html = f"""<!DOCTYPE html>
+        def _render_player_html(content_html, back_href, title_suffix=""):
+            return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_esc(pname)} — The Rupture</title>
+<title>{_esc(pname)}{title_suffix} — The Rupture</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',sans-serif;font-size:13px;padding:24px}}
@@ -4810,14 +4809,12 @@ h2{{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transf
 </style>
 </head>
 <body>
-<a class="back" href="../index.html">← Back to Raids</a>
+<a class="back" href="{back_href}">← Back to Raids</a>
 <h1 style="color:{cls_color}">{_esc(pname)}<span class="role-badge">{_esc(role)}</span></h1>
-
 <h2>Characters</h2>
 <div class="chars-list">{chars_html}</div>
 <div class="filter-note" id="filter-note"></div>
-
-{all_diff_html}
+{content_html}
 <script>
 let _activeChar = null;
 function filterChar(chip, charName) {{
@@ -4866,10 +4863,29 @@ function sortPerfTable(tblId, col, th) {{
 </body>
 </html>"""
 
-        os.makedirs(output_dir, exist_ok=True)
-        out_path = os.path.join(output_dir, f"player_{slug}.html")
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(html)
+        # ── Mythic page (main player page) ────────────────────────────────────
+        if mythic_html:
+            os.makedirs(output_dir, exist_ok=True)
+            out_path = os.path.join(output_dir, f"player_{slug}.html")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(_render_player_html(mythic_html, "../index.html"))
+
+        # ── Heroic page (unlisted, no links yet) ──────────────────────────────
+        if heroic_html:
+            heroic_dir = os.path.join(output_dir, "heroic")
+            os.makedirs(heroic_dir, exist_ok=True)
+            out_path = os.path.join(heroic_dir, f"player_{slug}.html")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(_render_player_html(heroic_html, "../../index.html", " (Heroic)"))
+
+        # ── Normal page (unlisted, no links yet) ──────────────────────────────
+        if normal_html:
+            normal_dir = os.path.join(output_dir, "normal")
+            os.makedirs(normal_dir, exist_ok=True)
+            out_path = os.path.join(normal_dir, f"player_{slug}.html")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(_render_player_html(normal_html, "../../index.html", " (Normal)"))
+
     print(f"[OK] Player pages saved: {len(profiles)} player(s).")
 
 
