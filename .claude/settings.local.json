@@ -14,7 +14,8 @@
       "Bash(sort -t- -k3 -n)",
       "Bash(sort -t'\\(' -k2 -n)",
       "Bash(sort -t' ' -k2 -n)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(ls \"c:/Users/iceco/Desktop/The Rupture/\"*.html)"
     ],
     "defaultMode": "bypassPermissions"
   }
