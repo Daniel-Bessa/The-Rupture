@@ -3038,14 +3038,17 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         t += '</tbody></table></div>'
         return t
 
-    def _build_mechanics_overview_pane(boss_wipes_list: list, ov_pids: list, tbl_id: str = "") -> str:
+    def _build_mechanics_overview_pane(boss_wipes_list: list, ov_pids: list, tbl_id: str = "",
+                                       boss_kills_list: list = None) -> str:
         """Aggregate mechanic hit counts per player across all wipes.
         Total + (avg/pull) per mechanic column, sorted by role.
         """
         if not mech_defs or not boss_wipes_list:
             return ""
+        boss_kills_list   = boss_kills_list or []
         pid_mech_totals   = {}
         pid_wipes_present = {}
+        pid_kills_present = {}
         pid_death_totals  = {}
         pid_dmg_totals    = {}
         pid_heal_totals   = {}
@@ -3070,6 +3073,14 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     cnt = mechs.get(p, {}).get(lbl, 0)
                     pid_mech_totals.setdefault(p, {})
                     pid_mech_totals[p][lbl] = pid_mech_totals[p].get(lbl, 0) + cnt
+        # Count kill attendance separately (kills don't go into mechanic/death averages)
+        for k in boss_kills_list:
+            pids_in_kill = {p for p in
+                            (set(k.get("all_player_ids", set())) | set(k.get("deaths", {}).keys()))
+                            if p in actor_lookup}
+            for p in pids_in_kill:
+                pid_kills_present[p] = pid_kills_present.get(p, 0) + 1
+        total_guild_pulls = len(boss_wipes_list) + len(boss_kills_list)
         if not any(pid_mech_totals.values()):
             return ""
 
@@ -3126,7 +3137,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 current_role = role_str
                 t += (f'<tr class="role-sep"><td colspan="{col_span}">'
                       f'── {current_role}s ──</td></tr>')
-            n_wipes  = pid_wipes_present.get(pid, 0)
+            n_wipes        = pid_wipes_present.get(pid, 0)
+            n_kills        = pid_kills_present.get(pid, 0)
+            player_pulls   = n_wipes + n_kills
+            pct            = player_pulls / total_guild_pulls * 100 if total_guild_pulls else 100
+            pct_color      = "#3fb950" if pct >= 80 else ("#e5c44a" if pct >= 50 else "#e05252")
             n_deaths = pid_death_totals.get(pid, 0)
             t += '<tr>'
             slug = pname.lower()
@@ -3167,7 +3182,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                       f'<span style="color:#556"> ({_fk(heal_avg)})</span></td>')
             else:
                 t += '<td class="center" style="font-size:11px" data-val="0">—</td>'
-            t += f'<td class="center" style="color:#666;font-size:11px" data-val="{n_wipes}">{n_wipes}</td>'
+            t += (f'<td class="center" style="font-size:11px" data-val="{player_pulls}">'
+                  f'<span style="color:{pct_color};font-weight:bold">{player_pulls}</span>'
+                  f'<span style="color:#555"> /{total_guild_pulls} ({pct:.0f}%)</span></td>')
             t += '</tr>'
         t += '</tbody></table></div>'
         return t
@@ -3739,7 +3756,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 key=pid_sort
             )
             ov_kw_id  = f"ov-{table_id}"
-            ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw, tbl_id=ov_kw_id)
+            ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw, tbl_id=ov_kw_id,
+                                                        boss_kills_list=fights)
             if ov_kw_html:
                 pull_btns += (f'<button class="pull-btn" onclick="switchPull(this,\'{ov_kw_id}\')">'
                               f'All Wipes</button>')
