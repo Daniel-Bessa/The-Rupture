@@ -4591,7 +4591,8 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
         # Build rows grouped by difficulty
         def _build_rows(appearances):
             out = ""
-            for a in sorted(appearances, key=lambda x: (x["boss"], x["date"])):
+            _order = ["Chimaerus, the Undreamt God","Imperator Averzian","Vorasius","Fallen-King Salhadaar","Vaelgor & Ezzorak","Lightblinded Vanguard","Crown of the Cosmos","Belo'ren, Child of Al'ar","Midnight Falls"]
+            for a in sorted(appearances, key=lambda x: (_order.index(x["boss"]) if x["boss"] in _order else 99, x["date"])):
                 parse = a["parse"]
                 if parse >= 99:   pc = "#E5CC80"
                 elif parse >= 95: pc = "#FF8000"
