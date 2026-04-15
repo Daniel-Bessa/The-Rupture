@@ -29,6 +29,9 @@ h1{font-size:28px;font-weight:700;margin-bottom:4px}
 .sarr{color:#555;font-size:10px}
 .back{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}
 h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transform:uppercase}
+.sub-section{margin:16px 0 8px 0}
+.sub-header{font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;user-select:none;padding:5px 0 5px 12px;display:flex;align-items:center;gap:6px;color:#7289DA;border-left:2px solid #2a3a6a;margin-bottom:6px}
+.sub-header:hover{color:#a0b4ff;border-left-color:#7289DA}
 </style>
 </head>
 <body>
@@ -39,42 +42,47 @@ h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transfo
 <div class="chars-list"><span class="char-chip" style="color:#FF7C0A" onclick="filterChar(this,'Schmosb')" title="Filter by Schmosb">Schmosb</span></div>
 <div class="filter-note" id="filter-note"></div>
 
-<h2 style="margin-top:32px;color:#9c6cde;border-bottom:1px solid #2a2040;padding-bottom:4px">Boss Summary</h2>
 
 <div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('sum-normal',this)" style="color:#4caf50">
+  <div class="diff-header" onclick="toggleSection('normal',this)" style="color:#4caf50">
     <span class="diff-toggle">▶ </span>Normal
   </div>
-  <div id="sum-normal-wrap" style="display:none">
-    <table id="sum-normal" class="perf-table summary-table">
-    <thead><tr>
-    <th>Boss</th>
-    <th class="center">Kills</th><th class="center">Wipes</th>
-    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
-    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
-    <th class="center">Avg Defs</th>
-    </tr></thead>
-    <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">73k</td><td class="center">643k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">58k</td><td class="center">2.1M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">112k</td><td class="center">501k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">2.0</span></td></tr></tbody>
-    </table>
+  <div id="normal-wrap" style="display:none">
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('sum-normal',this)">
+      <span class="diff-toggle">▼ </span>Boss Summary
+    </div>
+    <div id="sum-normal-wrap">
+      <table id="sum-normal" class="perf-table summary-table">
+      <thead><tr>
+        <th>Boss</th>
+        <th class="center">Kills</th><th class="center">Wipes</th>
+        <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+        <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+        <th class="center">Avg Defs</th>
+      </tr></thead>
+      <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">73k</td><td class="center">643k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">58k</td><td class="center">2.1M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">112k</td><td class="center">501k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">2.0</span></td></tr></tbody>
+      </table>
+    </div>
   </div>
-</div>
-
-<h2 style="margin-top:40px;border-bottom:1px solid #1e2a3a;padding-bottom:4px">Raid History</h2>
-
-<div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('tbl-normal',this)" style="color:#4caf50">
-    <span class="diff-toggle">▶ </span>Normal
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('tbl-normal',this)">
+      <span class="diff-toggle">▼ </span>Raid History
+    </div>
+    <div id="tbl-normal-wrap">
+      <table id="tbl-normal" class="perf-table">
+      <thead><tr>
+        <th onclick="sortPerfTable('tbl-normal',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
+        <th class="center">Char</th>
+        <th onclick="sortPerfTable('tbl-normal',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
+        <th>Mechanics</th>
+      </tr></thead>
+      <tbody><tr data-char="Schmosb"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">643k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Rift Emerg.:2, Alndust Ess.:1, Alndust Uph.:1</td></tr><tr data-char="Schmosb"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">501k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">2</td><td style="color:#e57373;font-size:11px">Trampled:1, Divine Toll:1, Exec.Sentence:1, Div.Hammer:1</td></tr><tr data-char="Schmosb"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">2.1M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Dread Breath:5</td></tr></tbody>
+      </table>
+    </div>
   </div>
-  <div id="tbl-normal-wrap" style="display:none">
-    <table id="tbl-normal" class="perf-table">
-    <thead><tr>
-    <th onclick="sortPerfTable('tbl-normal',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
-    <th class="center">Char</th>
-    <th onclick="sortPerfTable('tbl-normal',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
-    <th>Mechanics</th>
-    </tr></thead>
-    <tbody><tr data-char="Schmosb"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">643k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Rift Emerg.:2, Alndust Ess.:1, Alndust Uph.:1</td></tr><tr data-char="Schmosb"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">501k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">2</td><td style="color:#e57373;font-size:11px">Trampled:1, Divine Toll:1, Exec.Sentence:1, Div.Hammer:1</td></tr><tr data-char="Schmosb"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-29</td><td class="center" style="color:#FF7C0A;font-size:11px">Schmosb</td><td class="center">—</td><td class="center">—</td><td class="center">2.1M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Dread Breath:5</td></tr></tbody>
-    </table>
   </div>
 </div>
 <script>

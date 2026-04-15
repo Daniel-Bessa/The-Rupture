@@ -29,6 +29,9 @@ h1{font-size:28px;font-weight:700;margin-bottom:4px}
 .sarr{color:#555;font-size:10px}
 .back{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}
 h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transform:uppercase}
+.sub-section{margin:16px 0 8px 0}
+.sub-header{font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;user-select:none;padding:5px 0 5px 12px;display:flex;align-items:center;gap:6px;color:#7289DA;border-left:2px solid #2a3a6a;margin-bottom:6px}
+.sub-header:hover{color:#a0b4ff;border-left-color:#7289DA}
 </style>
 </head>
 <body>
@@ -39,75 +42,89 @@ h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transfo
 <div class="chars-list"><span class="char-chip" style="color:#A330C9" onclick="filterChar(this,'Beldríck')" title="Filter by Beldríck">Beldríck</span></div>
 <div class="filter-note" id="filter-note"></div>
 
-<h2 style="margin-top:32px;color:#9c6cde;border-bottom:1px solid #2a2040;padding-bottom:4px">Boss Summary</h2>
 
 <div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('sum-heroic',this)" style="color:#64b5f6">
+  <div class="diff-header" onclick="toggleSection('heroic',this)" style="color:#64b5f6">
     <span class="diff-toggle">▶ </span>Heroic
   </div>
-  <div id="sum-heroic-wrap" style="display:none">
-    <table id="sum-heroic" class="perf-table summary-table">
-    <thead><tr>
-    <th>Boss</th>
-    <th class="center">Kills</th><th class="center">Wipes</th>
-    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
-    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
-    <th class="center">Avg Defs</th>
-    </tr></thead>
-    <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">50k</td><td class="center">6.0M</td><td class="center">1.0</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Imperator Averzian</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">63k</td><td class="center">2.9M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr><tr><td>Vorasius</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">47k</td><td class="center">4.4M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">2.0</span></td></tr><tr><td>Fallen-King Salhadaar</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">47k</td><td class="center">4.5M</td><td class="center">3.0</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center"><span style="color:#e05252">2</span></td><td class="center">—</td><td class="center">71k</td><td class="center">2.8M</td><td class="center">3.0</td><td class="center"><span style="color:#64b5f6">3.7</span></td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">82k</td><td class="center">7.3M</td><td class="center">1.0</td><td class="center"><span style="color:#64b5f6">5.0</span></td></tr></tbody>
-    </table>
+  <div id="heroic-wrap" style="display:none">
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('sum-heroic',this)">
+      <span class="diff-toggle">▼ </span>Boss Summary
+    </div>
+    <div id="sum-heroic-wrap">
+      <table id="sum-heroic" class="perf-table summary-table">
+      <thead><tr>
+        <th>Boss</th>
+        <th class="center">Kills</th><th class="center">Wipes</th>
+        <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+        <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+        <th class="center">Avg Defs</th>
+      </tr></thead>
+      <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">50k</td><td class="center">6.0M</td><td class="center">1.0</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Imperator Averzian</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">63k</td><td class="center">2.9M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr><tr><td>Vorasius</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">47k</td><td class="center">4.4M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">2.0</span></td></tr><tr><td>Fallen-King Salhadaar</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">47k</td><td class="center">4.5M</td><td class="center">3.0</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center"><span style="color:#e05252">2</span></td><td class="center">—</td><td class="center">71k</td><td class="center">2.8M</td><td class="center">3.0</td><td class="center"><span style="color:#64b5f6">3.7</span></td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">82k</td><td class="center">7.3M</td><td class="center">1.0</td><td class="center"><span style="color:#64b5f6">5.0</span></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('tbl-heroic',this)">
+      <span class="diff-toggle">▼ </span>Raid History
+    </div>
+    <div id="tbl-heroic-wrap">
+      <table id="tbl-heroic" class="perf-table">
+      <thead><tr>
+        <th onclick="sortPerfTable('tbl-heroic',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
+        <th class="center">Char</th>
+        <th onclick="sortPerfTable('tbl-heroic',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
+        <th>Mechanics</th>
+      </tr></thead>
+      <tbody><tr data-char="Beldríck"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">6.0M</td><td class="center">98%</td><td class="center">1</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Rift Emerg.:4, Alndust Uph.:2, Disc.Roar:4</td></tr><tr data-char="Beldríck"><td>Fallen-King Salhadaar</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.5M</td><td class="center">100%</td><td class="center">3</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Tort.Extract:7, Twilight Spk.:2</td></tr><tr data-char="Beldríck"><td>Imperator Averzian</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.9M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Umbral Col.:6, Obliv.Wrath:1</td></tr><tr data-char="Beldríck"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">7.3M</td><td class="center">99%</td><td class="center">1</td><td class="center" style="color:#64b5f6">5</td><td style="color:#e57373;font-size:11px">Trampled:2, Div.Storm:1, Exec.Sentence:2, Div.Hammer:1</td></tr><tr data-char="Beldríck"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.5M</td><td class="center">97%</td><td class="center">6</td><td class="center" style="color:#64b5f6">8</td><td style="color:#e57373;font-size:11px">Dread Breath:2</td></tr><tr data-char="Beldríck"><td>Vorasius</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.4M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">2</td><td style="color:#e57373;font-size:11px">Claw Slam:14, Parasite Exp.:12, Blisterburst:14</td></tr></tbody>
+      </table>
+    </div>
+  </div>
   </div>
 </div>
 <div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('sum-normal',this)" style="color:#4caf50">
+  <div class="diff-header" onclick="toggleSection('normal',this)" style="color:#4caf50">
     <span class="diff-toggle">▶ </span>Normal
   </div>
-  <div id="sum-normal-wrap" style="display:none">
-    <table id="sum-normal" class="perf-table summary-table">
-    <thead><tr>
-    <th>Boss</th>
-    <th class="center">Kills</th><th class="center">Wipes</th>
-    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
-    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
-    <th class="center">Avg Defs</th>
-    </tr></thead>
-    <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">51k</td><td class="center">2.3M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Imperator Averzian</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">81k</td><td class="center">989k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Vorasius</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">38k</td><td class="center">1.7M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Fallen-King Salhadaar</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">42k</td><td class="center">1.7M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">57k</td><td class="center">2.2M</td><td class="center">5.0</td><td class="center"><span style="color:#64b5f6">5.0</span></td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">91k</td><td class="center">1.6M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Crown of the Cosmos</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">52k</td><td class="center">5.8M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr></tbody>
-    </table>
+  <div id="normal-wrap" style="display:none">
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('sum-normal',this)">
+      <span class="diff-toggle">▼ </span>Boss Summary
+    </div>
+    <div id="sum-normal-wrap">
+      <table id="sum-normal" class="perf-table summary-table">
+      <thead><tr>
+        <th>Boss</th>
+        <th class="center">Kills</th><th class="center">Wipes</th>
+        <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+        <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+        <th class="center">Avg Defs</th>
+      </tr></thead>
+      <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">51k</td><td class="center">2.3M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Imperator Averzian</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">81k</td><td class="center">989k</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Vorasius</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">38k</td><td class="center">1.7M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Fallen-King Salhadaar</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">42k</td><td class="center">1.7M</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Vaelgor &amp; Ezzorak</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">57k</td><td class="center">2.2M</td><td class="center">5.0</td><td class="center"><span style="color:#64b5f6">5.0</span></td></tr><tr><td>Lightblinded Vanguard</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">91k</td><td class="center">1.6M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">1.0</span></td></tr><tr><td>Crown of the Cosmos</td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">52k</td><td class="center">5.8M</td><td class="center">—</td><td class="center"><span style="color:#64b5f6">3.0</span></td></tr></tbody>
+      </table>
+    </div>
   </div>
-</div>
-
-<h2 style="margin-top:40px;border-bottom:1px solid #1e2a3a;padding-bottom:4px">Raid History</h2>
-
-<div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('tbl-heroic',this)" style="color:#64b5f6">
-    <span class="diff-toggle">▶ </span>Heroic
+    
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('tbl-normal',this)">
+      <span class="diff-toggle">▼ </span>Raid History
+    </div>
+    <div id="tbl-normal-wrap">
+      <table id="tbl-normal" class="perf-table">
+      <thead><tr>
+        <th onclick="sortPerfTable('tbl-normal',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
+        <th class="center">Char</th>
+        <th onclick="sortPerfTable('tbl-normal',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
+        <th>Mechanics</th>
+      </tr></thead>
+      <tbody><tr data-char="Beldríck"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.3M</td><td class="center">90%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Rift Emerg.:3, Alndust Uph.:1, Disc.Roar:2</td></tr><tr data-char="Beldríck"><td>Crown of the Cosmos</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">5.8M</td><td class="center">86%</td><td class="center">—</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Void Remnants:9, Grav.Collapse:14</td></tr><tr data-char="Beldríck"><td>Fallen-King Salhadaar</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.7M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Tort.Extract:7</td></tr><tr data-char="Beldríck"><td>Imperator Averzian</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">989k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Umbral Col.:4</td></tr><tr data-char="Beldríck"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.6M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Divine Toll:1, Exec.Sentence:1, Div.Hammer:1, Trampled:1</td></tr><tr data-char="Beldríck"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.2M</td><td class="center">99%</td><td class="center">5</td><td class="center" style="color:#64b5f6">5</td><td style="color:#e57373;font-size:11px">—</td></tr><tr data-char="Beldríck"><td>Vorasius</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.7M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Claw Slam:8, Parasite Exp.:8, Blisterburst:5</td></tr></tbody>
+      </table>
+    </div>
   </div>
-  <div id="tbl-heroic-wrap" style="display:none">
-    <table id="tbl-heroic" class="perf-table">
-    <thead><tr>
-    <th onclick="sortPerfTable('tbl-heroic',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
-    <th class="center">Char</th>
-    <th onclick="sortPerfTable('tbl-heroic',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-heroic',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
-    <th>Mechanics</th>
-    </tr></thead>
-    <tbody><tr data-char="Beldríck"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">6.0M</td><td class="center">98%</td><td class="center">1</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Rift Emerg.:4, Alndust Uph.:2, Disc.Roar:4</td></tr><tr data-char="Beldríck"><td>Fallen-King Salhadaar</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.5M</td><td class="center">100%</td><td class="center">3</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Tort.Extract:7, Twilight Spk.:2</td></tr><tr data-char="Beldríck"><td>Imperator Averzian</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.9M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Umbral Col.:6, Obliv.Wrath:1</td></tr><tr data-char="Beldríck"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">7.3M</td><td class="center">99%</td><td class="center">1</td><td class="center" style="color:#64b5f6">5</td><td style="color:#e57373;font-size:11px">Trampled:2, Div.Storm:1, Exec.Sentence:2, Div.Hammer:1</td></tr><tr data-char="Beldríck"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.5M</td><td class="center">97%</td><td class="center">6</td><td class="center" style="color:#64b5f6">8</td><td style="color:#e57373;font-size:11px">Dread Breath:2</td></tr><tr data-char="Beldríck"><td>Vorasius</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">4.4M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">2</td><td style="color:#e57373;font-size:11px">Claw Slam:14, Parasite Exp.:12, Blisterburst:14</td></tr></tbody>
-    </table>
-  </div>
-</div>
-<div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('tbl-normal',this)" style="color:#4caf50">
-    <span class="diff-toggle">▶ </span>Normal
-  </div>
-  <div id="tbl-normal-wrap" style="display:none">
-    <table id="tbl-normal" class="perf-table">
-    <thead><tr>
-    <th onclick="sortPerfTable('tbl-normal',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
-    <th class="center">Char</th>
-    <th onclick="sortPerfTable('tbl-normal',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-normal',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
-    <th>Mechanics</th>
-    </tr></thead>
-    <tbody><tr data-char="Beldríck"><td>Chimaerus, the Undreamt God</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.3M</td><td class="center">90%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Rift Emerg.:3, Alndust Uph.:1, Disc.Roar:2</td></tr><tr data-char="Beldríck"><td>Crown of the Cosmos</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">5.8M</td><td class="center">86%</td><td class="center">—</td><td class="center" style="color:#64b5f6">3</td><td style="color:#e57373;font-size:11px">Void Remnants:9, Grav.Collapse:14</td></tr><tr data-char="Beldríck"><td>Fallen-King Salhadaar</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.7M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">Tort.Extract:7</td></tr><tr data-char="Beldríck"><td>Imperator Averzian</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">989k</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Umbral Col.:4</td></tr><tr data-char="Beldríck"><td>Lightblinded Vanguard</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.6M</td><td class="center">99%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Divine Toll:1, Exec.Sentence:1, Div.Hammer:1, Trampled:1</td></tr><tr data-char="Beldríck"><td>Vaelgor &amp; Ezzorak</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">2.2M</td><td class="center">99%</td><td class="center">5</td><td class="center" style="color:#64b5f6">5</td><td style="color:#e57373;font-size:11px">—</td></tr><tr data-char="Beldríck"><td>Vorasius</td><td style="color:#666">2026-03-22</td><td class="center" style="color:#A330C9;font-size:11px">Beldríck</td><td class="center">—</td><td class="center">—</td><td class="center">1.7M</td><td class="center">100%</td><td class="center">—</td><td class="center" style="color:#64b5f6">1</td><td style="color:#e57373;font-size:11px">Claw Slam:8, Parasite Exp.:8, Blisterburst:5</td></tr></tbody>
-    </table>
   </div>
 </div>
 <script>

@@ -4632,43 +4632,11 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
             d = a.get("difficulty", "Normal")
             by_diff.setdefault(d, []).append(a)
 
+        # ── helpers ────────────────────────────────────────────────────────────
         def _sth(tbl_id, col, lbl):
             return (f'<th onclick="sortPerfTable(\'{tbl_id}\',{col},this)" style="cursor:pointer;user-select:none">'
                     f'{lbl} <span class="sarr">▼</span></th>')
 
-        def _diff_table(diff, tbl_id, collapsed=False):
-            rows = _build_rows(by_diff.get(diff, []))
-            if not rows:
-                return ""
-            diff_colors = {"Mythic": "#c77dff", "Heroic": "#64b5f6", "Normal": "#4caf50"}
-            dc = diff_colors.get(diff, "#888")
-            toggle_init = "▶ " if collapsed else "▼ "
-            display = "none" if collapsed else "block"
-            return f"""
-<div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('{tbl_id}',this)" style="color:{dc}">
-    <span class="diff-toggle">{toggle_init}</span>{diff}
-  </div>
-  <div id="{tbl_id}-wrap" style="display:{display}">
-    <table id="{tbl_id}" class="perf-table">
-    <thead><tr>
-    {_sth(tbl_id,0,'Boss')}{_sth(tbl_id,1,'Date')}
-    <th class="center">Char</th>
-    {_sth(tbl_id,3,'Parse%')}{_sth(tbl_id,4,'Deaths')}{_sth(tbl_id,5,'Dmg Taken')}{_sth(tbl_id,6,'Uptime%')}{_sth(tbl_id,7,'Interrupts')}{_sth(tbl_id,8,'Def Used')}
-    <th>Mechanics</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-    </table>
-  </div>
-</div>"""
-
-        tables_html = (
-            _diff_table("Mythic", "tbl-mythic", collapsed=False)
-            + _diff_table("Heroic", "tbl-heroic", collapsed=True)
-            + _diff_table("Normal", "tbl-normal", collapsed=True)
-        )
-
-        # ── Boss Summary section ──────────────────────────────────────────────
         def _fmt_dmg(v):
             if v <= 0: return "—"
             if v >= 1_000_000: return f"{v/1_000_000:.1f}M"
@@ -4677,8 +4645,7 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
 
         def _fmt_dps(dmg_done, active_ms):
             if active_ms <= 0 or dmg_done <= 0: return "—"
-            dps = dmg_done / (active_ms / 1000)
-            return _fmt_dmg(dps)
+            return _fmt_dmg(dmg_done / (active_ms / 1000))
 
         _boss_order_all = [
             "Chimaerus, the Undreamt God",
@@ -4692,76 +4659,113 @@ def write_player_pages(days_data: list, output_dir: str = "players") -> None:
             "Midnight Falls",
         ]
 
-        def _build_summary_rows(diff_data):
-            """Build rows for boss summary table given {boss: stats_dict}."""
+        def _summary_rows_for_diff(diff):
+            bs = p.get("boss_summary", {})
+            diff_data = {boss: diff_map[diff] for boss, diff_map in bs.items() if diff in diff_map}
+            if not diff_data:
+                return ""
             rows = ""
-            ordered_bosses = [b for b in _boss_order_all if b in diff_data]
-            ordered_bosses += [b for b in diff_data if b not in _boss_order_all]
-            for boss in ordered_bosses:
+            ordered = [b for b in _boss_order_all if b in diff_data]
+            ordered += [b for b in diff_data if b not in _boss_order_all]
+            for boss in ordered:
                 e = diff_data[boss]
                 pulls = e["pulls"] or 1
                 avg_deaths  = e["total_deaths"]    / pulls
                 avg_dmg_tak = e["total_dmg_taken"] / pulls
                 avg_ints    = e["total_interrupts"] / pulls
                 avg_defs    = e["total_defs"]       / pulls
-                dps_str     = _fmt_dps(e["total_dmg_done"], e["total_active_ms"])
-                kills_str   = f'<span style="color:#3fb950;font-weight:bold">{e["kills"]}</span>' if e["kills"] else "—"
-                wipes_str   = f'<span style="color:#e05252">{e["wipes"]}</span>' if e["wipes"] else "—"
-                deaths_str  = (f'<span style="color:#e57373;font-weight:bold">{avg_deaths:.1f}</span>'
-                               if avg_deaths > 0 else "—")
-                dmg_str     = _fmt_dmg(avg_dmg_tak)
-                ints_str    = f"{avg_ints:.1f}" if avg_ints > 0 else "—"
-                defs_str    = (f'<span style="color:#64b5f6">{avg_defs:.1f}</span>'
-                               if avg_defs > 0 else "—")
+                kills_str  = f'<span style="color:#3fb950;font-weight:bold">{e["kills"]}</span>' if e["kills"] else "—"
+                wipes_str  = f'<span style="color:#e05252">{e["wipes"]}</span>' if e["wipes"] else "—"
+                deaths_str = (f'<span style="color:#e57373;font-weight:bold">{avg_deaths:.1f}</span>'
+                              if avg_deaths > 0 else "—")
+                defs_str   = (f'<span style="color:#64b5f6">{avg_defs:.1f}</span>'
+                              if avg_defs > 0 else "—")
                 rows += (
                     f'<tr>'
                     f'<td>{_esc(boss)}</td>'
                     f'<td class="center">{kills_str}</td>'
                     f'<td class="center">{wipes_str}</td>'
                     f'<td class="center">{deaths_str}</td>'
-                    f'<td class="center">{dps_str}</td>'
-                    f'<td class="center">{dmg_str}</td>'
-                    f'<td class="center">{ints_str}</td>'
+                    f'<td class="center">{_fmt_dps(e["total_dmg_done"], e["total_active_ms"])}</td>'
+                    f'<td class="center">{_fmt_dmg(avg_dmg_tak)}</td>'
+                    f'<td class="center">{"" + f"{avg_ints:.1f}" if avg_ints > 0 else "—"}</td>'
                     f'<td class="center">{defs_str}</td>'
                     f'</tr>'
                 )
             return rows
 
-        def _summary_table(diff, tbl_id, collapsed=False):
-            """One difficulty section of the Boss Summary block."""
-            bs = p.get("boss_summary", {})
-            # Collect only bosses that have data for this difficulty
-            diff_data = {boss: diff_map[diff] for boss, diff_map in bs.items() if diff in diff_map}
-            if not diff_data:
+        def _history_rows_for_diff(diff):
+            return _build_rows(by_diff.get(diff, []))
+
+        def _diff_block(diff, outer_id, collapsed=False):
+            """Full difficulty block: outer toggle → Boss Summary sub + Raid History sub."""
+            sum_rows  = _summary_rows_for_diff(diff)
+            hist_rows = _history_rows_for_diff(diff)
+            if not sum_rows and not hist_rows:
                 return ""
             diff_colors = {"Mythic": "#c77dff", "Heroic": "#64b5f6", "Normal": "#4caf50"}
-            dc = diff_colors.get(diff, "#888")
-            toggle_init = "▶ " if collapsed else "▼ "
-            display = "none" if collapsed else "block"
-            rows = _build_summary_rows(diff_data)
+            dc           = diff_colors.get(diff, "#888")
+            outer_tog    = "▶ " if collapsed else "▼ "
+            outer_disp   = "none" if collapsed else "block"
+            sum_id       = f"sum-{outer_id}"
+            hist_id      = f"tbl-{outer_id}"
+
+            sum_block = ""
+            if sum_rows:
+                sum_block = f"""
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('{sum_id}',this)">
+      <span class="diff-toggle">▼ </span>Boss Summary
+    </div>
+    <div id="{sum_id}-wrap">
+      <table id="{sum_id}" class="perf-table summary-table">
+      <thead><tr>
+        <th>Boss</th>
+        <th class="center">Kills</th><th class="center">Wipes</th>
+        <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
+        <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
+        <th class="center">Avg Defs</th>
+      </tr></thead>
+      <tbody>{sum_rows}</tbody>
+      </table>
+    </div>
+  </div>"""
+
+            hist_block = ""
+            if hist_rows:
+                hist_block = f"""
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('{hist_id}',this)">
+      <span class="diff-toggle">▼ </span>Raid History
+    </div>
+    <div id="{hist_id}-wrap">
+      <table id="{hist_id}" class="perf-table">
+      <thead><tr>
+        {_sth(hist_id,0,'Boss')}{_sth(hist_id,1,'Date')}
+        <th class="center">Char</th>
+        {_sth(hist_id,3,'Parse%')}{_sth(hist_id,4,'Deaths')}{_sth(hist_id,5,'Dmg Taken')}{_sth(hist_id,6,'Uptime%')}{_sth(hist_id,7,'Interrupts')}{_sth(hist_id,8,'Def Used')}
+        <th>Mechanics</th>
+      </tr></thead>
+      <tbody>{hist_rows}</tbody>
+      </table>
+    </div>
+  </div>"""
+
             return f"""
 <div class="diff-section">
-  <div class="diff-header" onclick="toggleSection('{tbl_id}',this)" style="color:{dc}">
-    <span class="diff-toggle">{toggle_init}</span>{diff}
+  <div class="diff-header" onclick="toggleSection('{outer_id}',this)" style="color:{dc}">
+    <span class="diff-toggle">{outer_tog}</span>{diff}
   </div>
-  <div id="{tbl_id}-wrap" style="display:{display}">
-    <table id="{tbl_id}" class="perf-table summary-table">
-    <thead><tr>
-    <th>Boss</th>
-    <th class="center">Kills</th><th class="center">Wipes</th>
-    <th class="center">Avg Deaths</th><th class="center">Avg DPS</th>
-    <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
-    <th class="center">Avg Defs</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-    </table>
+  <div id="{outer_id}-wrap" style="display:{outer_disp}">
+    {sum_block}
+    {hist_block}
   </div>
 </div>"""
 
-        summary_html = (
-            _summary_table("Mythic", "sum-mythic", collapsed=False)
-            + _summary_table("Heroic", "sum-heroic", collapsed=True)
-            + _summary_table("Normal", "sum-normal", collapsed=True)
+        all_diff_html = (
+            _diff_block("Mythic",  "mythic",  collapsed=False)
+            + _diff_block("Heroic",  "heroic",  collapsed=True)
+            + _diff_block("Normal",  "normal",  collapsed=True)
         )
 
         html = f"""<!DOCTYPE html>
@@ -4795,6 +4799,9 @@ h1{{font-size:28px;font-weight:700;margin-bottom:4px}}
 .sarr{{color:#555;font-size:10px}}
 .back{{margin-bottom:20px;display:inline-block;color:#7289DA;font-size:13px}}
 h2{{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transform:uppercase}}
+.sub-section{{margin:16px 0 8px 0}}
+.sub-header{{font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;user-select:none;padding:5px 0 5px 12px;display:flex;align-items:center;gap:6px;color:#7289DA;border-left:2px solid #2a3a6a;margin-bottom:6px}}
+.sub-header:hover{{color:#a0b4ff;border-left-color:#7289DA}}
 </style>
 </head>
 <body>
@@ -4805,11 +4812,7 @@ h2{{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transf
 <div class="chars-list">{chars_html}</div>
 <div class="filter-note" id="filter-note"></div>
 
-<h2 style="margin-top:32px;color:#9c6cde;border-bottom:1px solid #2a2040;padding-bottom:4px">Boss Summary</h2>
-{summary_html}
-
-<h2 style="margin-top:40px;border-bottom:1px solid #1e2a3a;padding-bottom:4px">Raid History</h2>
-{tables_html}
+{all_diff_html}
 <script>
 let _activeChar = null;
 function filterChar(chip, charName) {{
