@@ -20,10 +20,14 @@ h1{font-size:28px;font-weight:700;margin-bottom:4px}
 .diff-header:hover{opacity:0.8}
 .diff-toggle{font-size:11px;width:14px}
 .perf-table{width:100%;border-collapse:collapse;background:#0d1525}
-.perf-table th{background:#111827;color:#7289DA;padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a}
+.perf-table th{background:#111827;color:#7289DA;padding:8px 10px;text-align:center;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;border-bottom:1px solid #2a3a6a;border-right:1px solid #1e2a3a}
+.perf-table th:first-child{text-align:left}
+.perf-table th:last-child{border-right:none}
 .perf-table th:hover{color:#a0b4ff}
 .summary-table th{color:#9c6cde}
-.perf-table td{padding:7px 10px;border-bottom:1px solid #151f2e;font-size:12px}
+.perf-table td{padding:7px 10px;border-bottom:1px solid #151f2e;border-right:1px solid #1a2233;font-size:12px;text-align:center}
+.perf-table td:first-child{text-align:left}
+.perf-table td:last-child{border-right:none}
 .perf-table tr:hover td{background:#111827}
 .center{text-align:center}
 .sarr{color:#555;font-size:10px}
