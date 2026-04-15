@@ -2634,7 +2634,7 @@ _CROWN_MECHANICS_CSS = """
 """
 
 
-def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None) -> dict:
+def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None, root: str = "") -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
     wipe_data  = wipe_data or {}
@@ -2911,7 +2911,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 row_cls = "boss-death-row" if death_count > 0 else ""
                 t += f'<tr class="{row_cls}" data-role="{role}" data-class="{cls}" data-player="{escape(pname.lower())}">'
                 slug = pname.lower()
-                t += f'<td class="player-cell"><a href="players/player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
+                t += f'<td class="player-cell"><a href="{root}players/player_{slug}.html" class="pname" style="color:{cls_color}">{escape(pname)}</a></td>'
                 if death_count > 0 and death_tip_html:
                     tip_attr = death_tip_html.replace("'", "&#39;")
                     t += f'<td class="death-h" data-htip=\'{tip_attr}\' onmouseenter="showHTip(this)" onmouseleave="hideHTip()" style="cursor:help">{killed_str}</td>'
@@ -3130,7 +3130,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             n_deaths = pid_death_totals.get(pid, 0)
             t += '<tr>'
             slug = pname.lower()
-            t += (f'<td class="player-cell"><a href="players/player_{slug}.html"'
+            t += (f'<td class="player-cell"><a href="{root}players/player_{slug}.html"'
                   f' class="pname" style="color:{cls_color}">{escape(pname)}</a></td>')
             # Deaths column
             if n_deaths > 0:
@@ -4001,6 +4001,10 @@ def _filter_bar_html(split_id: str) -> str:
 
 def write_raid_html(day_data: dict, output_path: str) -> None:
     """Write a single raid day as a standalone HTML page (Gear + Split tabs)."""
+    _dir = os.path.dirname(output_path)
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
+    _root = "../" if _dir else ""
     ri         = day_data["report_info"]
     rc         = day_data["report_code"]
     date_str   = datetime.fromtimestamp(ri["startTime"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") if ri.get("startTime") else ""
@@ -4037,7 +4041,7 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
         merged_boss_data.setdefault(boss_name, []).extend(fights)
 
     boss_htmls = _build_boss_html(merged_boss_data, actor_lookup, id_prefix="b",
-                                  wipe_data=day_data.get("wipe_data", {}))
+                                  wipe_data=day_data.get("wipe_data", {}), root=_root)
 
     tab_buttons = ""
     split_divs  = ""
@@ -4267,7 +4271,7 @@ th[data-sortable]:hover .sort-arrow {{ opacity: 1; }}
 <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>
 <body>
-<div class="breadcrumb"><a href="index.html">← Overview</a> / {escape(title)}</div>
+<div class="breadcrumb"><a href="{_root}index.html">← Overview</a> / {escape(title)}</div>
 <h1>{escape(title)}</h1>
 <div class="raid-meta">
   <span class="raid-date">{date_str}</span>
@@ -4652,13 +4656,13 @@ _VOIDSPIRE_BOSS_ORDER = [
     "Crown of the Cosmos",
 ]
 _BOSS_DEDICATED_PAGES = {
-    "Chimaerus, the Undreamt God": "boss_chimaerus_mythic.html",
-    "Imperator Averzian":          "boss_averzian_mythic.html",
-    "Vorasius":                    "boss_vorasius_mythic.html",
-    "Fallen-King Salhadaar":       "boss_salhadaar_mythic.html",
-    "Vaelgor & Ezzorak":           "boss_vaelgor_mythic.html",
-    "Lightblinded Vanguard":       "boss_vanguard_mythic.html",
-    "Crown of the Cosmos":         "boss_crown_heroic.html",
+    "Chimaerus, the Undreamt God": "mythic/boss_chimaerus.html",
+    "Imperator Averzian":          "mythic/boss_averzian.html",
+    "Vorasius":                    "mythic/boss_vorasius.html",
+    "Fallen-King Salhadaar":       "mythic/boss_salhadaar.html",
+    "Vaelgor & Ezzorak":           "mythic/boss_vaelgor.html",
+    "Lightblinded Vanguard":       "mythic/boss_vanguard.html",
+    "Crown of the Cosmos":         "heroic/boss_crown.html",
 }
 
 # Short subtitle shown under each mechanic column header on boss Mythic pages.
@@ -5193,6 +5197,10 @@ h1{{color:#7289DA;font-size:22px;font-weight:700}}
 def write_boss_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
     """Write Chimaerus Heroic boss progression page: aggregated Alndust + Horror wave stats across all kills."""
     from html import escape as _esc
+    _dir = os.path.dirname(output_path)
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
+    _root = "../" if _dir else ""
 
     TARGET_BOSS = "Chimaerus, the Undreamt God"
     TARGET_DIFF = "Heroic"
@@ -5443,7 +5451,7 @@ table.prog-tbl td:last-child{{border-right:none}}
 </style>
 </head>
 <body>
-<a class="back" href="index.html">← Back to Raids</a>
+<a class="back" href="{_root}index.html">← Back to Raids</a>
 <h1>⚔ {_esc(TARGET_BOSS)} — {TARGET_DIFF} Progression</h1>
 <div class="subtitle">{num_pulls} kill(s) tracked · Data from all reports · Hover counts for details</div>
 
@@ -5514,6 +5522,10 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     Salhadaar also gets the Shadow Fracture interrupt wave table per pull.
     """
     from html import escape as _esc
+    _dir = os.path.dirname(output_path)
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
+    _root = "../" if _dir else ""
 
     TARGET_DIFF  = "Mythic"
     WCL_BASE     = "https://www.warcraftlogs.com/reports"
@@ -6191,7 +6203,7 @@ a{{color:#6e9fcc;text-decoration:none}} a:hover{{text-decoration:underline}}
 <div class="page-header">
   <h1>&#9760; {_esc(boss_name)} \u2014 Mythic</h1>
   <span style="color:#556;font-size:14px">{_esc(subtitle)}</span>
-  <a class="back-link" href="bosses.html">&#8592; Boss Overview</a>
+  <a class="back-link" href="{_root}bosses.html">&#8592; Boss Overview</a>
 </div>
 <div class="tab-bar">{tab_btns}</div>
 {tab_panels}
@@ -6252,6 +6264,10 @@ def write_salhadaar_progression_html(days_data: list, output_path: str, guild_na
     Collects from both boss_data (kills) and wipe_data (wipes) for the boss.
     """
     from html import escape as _esc
+    _dir = os.path.dirname(output_path)
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
+    _root = "../" if _dir else ""
 
     TARGET_BOSS = "Fallen-King Salhadaar"
     TARGET_DIFF = "Heroic"
@@ -6542,7 +6558,7 @@ a:hover{{text-decoration:underline}}
 <div class="page-header">
   <h1>&#9760; Fallen-King Salhadaar — Heroic</h1>
   <span class="subtitle">{len(pulls)} pull{'s' if len(pulls) != 1 else ''} tracked</span>
-  <a class="back-link" href="bosses.html">&#8592; Boss Overview</a>
+  <a class="back-link" href="{_root}bosses.html">&#8592; Boss Overview</a>
 </div>
 
 <div class="section-header">Pull Timeline</div>
@@ -6570,6 +6586,10 @@ def write_crown_progression_html(days_data: list, output_path: str, guild_name: 
     across all wipes.
     """
     from html import escape as _esc
+    _dir = os.path.dirname(output_path)
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
+    _root = "../" if _dir else ""
 
     TARGET_BOSS = "Crown of the Cosmos"
     TARGET_DIFF = "Heroic"
@@ -6817,7 +6837,7 @@ h2{{font-size:15px;font-weight:600;margin:24px 0 10px;color:#e6edf3;border-botto
 </style>
 </head>
 <body>
-<a href="index.html" class="back">← Back to Index</a>
+<a href="{_root}index.html" class="back">← Back to Index</a>
 <h1>{_esc(title)}</h1>
 <h2>Silverstrike Multi-Hit Summary — {len(wipes)} wipe(s)</h2>
 <table class="summary-table" id="summary-tbl">
@@ -8163,7 +8183,9 @@ def _raid_filename(day_data: dict) -> str:
     rc     = day_data["report_code"]
     diff   = day_data.get("difficulty", "")
     psplit = day_data.get("player_split")
-    return f"raid_{rc}{'_' + diff.lower() if diff else ''}{'_split' + str(psplit) if psplit else ''}.html"
+    folder = diff.lower() if diff else "normal"
+    fname  = f"raid_{rc}{'_split' + str(psplit) if psplit else ''}.html"
+    return f"{folder}/{fname}"
 
 
 def main():
@@ -8233,11 +8255,11 @@ def main():
     write_bosses_html(days_data, "bosses.html", guild_name=guild_name)
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
-    write_boss_progression_html(days_data, "boss_chimaerus_heroic.html", guild_name=guild_name)
-    write_crown_progression_html(days_data, "boss_crown_heroic.html", guild_name=guild_name)
-    write_salhadaar_progression_html(days_data, "boss_salhadaar_heroic.html", guild_name=guild_name)
+    write_boss_progression_html(days_data, "heroic/boss_chimaerus.html", guild_name=guild_name)
+    write_crown_progression_html(days_data, "heroic/boss_crown.html", guild_name=guild_name)
+    write_salhadaar_progression_html(days_data, "heroic/boss_salhadaar.html", guild_name=guild_name)
     for _bname, _bfile in _BOSS_DEDICATED_PAGES.items():
-        if _bfile.endswith("_mythic.html"):
+        if _bfile.startswith("mythic/"):
             write_boss_mythic_html(days_data, _bname, _bfile, guild_name=guild_name)
     write_player_pages(days_data)
 
