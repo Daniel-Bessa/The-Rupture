@@ -65,11 +65,27 @@ h2{font-size:13px;color:#556;margin:24px 0 8px;letter-spacing:0.5px;text-transfo
         <th class="center">Avg Dmg Taken</th><th class="center">Avg Ints</th>
         <th class="center">Avg Defs</th>
       </tr></thead>
-      <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#e05252">5</span><span style="color:#555;font-size:10px"> /28 (18%)</span></td><td class="center">—</td><td class="center"><span style="color:#e05252">5</span></td><td class="center"><span style="color:#e57373;font-weight:bold">0.2</span></td><td class="center">68k</td><td class="center">4.2M</td><td class="center">0.8</td><td class="center"><span style="color:#64b5f6">2.8</span></td></tr></tbody>
+      <tbody><tr><td>Chimaerus, the Undreamt God</td><td class="center"><span style="color:#e05252">5</span><span style="color:#555;font-size:10px"> /28 (18%)</span></td><td class="center">—</td><td class="center"><span style="color:#e05252">5</span></td><td class="center"><span style="color:#e57373;font-weight:bold">0.2</span></td><td class="center">68k</td><td class="center">4.2M</td><td class="center">0.8</td><td class="center"><span style="color:#64b5f6">2.8</span></td></tr><tr><td>Imperator Averzian</td><td class="center"><span style="color:#e05252">2</span><span style="color:#555;font-size:10px"> /6 (33%)</span></td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center"><span style="color:#e05252">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td></tr><tr><td>Vorasius</td><td class="center"><span style="color:#e05252">1</span><span style="color:#555;font-size:10px"> /15 (7%)</span></td><td class="center"><span style="color:#3fb950;font-weight:bold">1</span></td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td></tr></tbody>
       </table>
     </div>
   </div>
     
+  <div class="sub-section">
+    <div class="sub-header" onclick="toggleSection('tbl-mythic',this)">
+      <span class="diff-toggle">▼ </span>Raid History
+    </div>
+    <div id="tbl-mythic-wrap">
+      <table id="tbl-mythic" class="perf-table">
+      <thead><tr>
+        <th onclick="sortPerfTable('tbl-mythic',0,this)" style="cursor:pointer;user-select:none">Boss <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',1,this)" style="cursor:pointer;user-select:none">Date <span class="sarr">▼</span></th>
+        <th class="center">Char</th>
+        <th onclick="sortPerfTable('tbl-mythic',3,this)" style="cursor:pointer;user-select:none">Parse% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',4,this)" style="cursor:pointer;user-select:none">Deaths <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',5,this)" style="cursor:pointer;user-select:none">Dmg Taken <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',6,this)" style="cursor:pointer;user-select:none">Uptime% <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',7,this)" style="cursor:pointer;user-select:none">Interrupts <span class="sarr">▼</span></th><th onclick="sortPerfTable('tbl-mythic',8,this)" style="cursor:pointer;user-select:none">Def Used <span class="sarr">▼</span></th>
+        <th>Mechanics</th>
+      </tr></thead>
+      <tbody><tr data-char="Doomkry"><td>Imperator Averzian</td><td style="color:#666">2026-04-16</td><td class="center" style="color:#C69B6D;font-size:11px">Doomkry</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">—</td></tr><tr data-char="Doomkry"><td>Vorasius</td><td style="color:#666">2026-04-16</td><td class="center" style="color:#C69B6D;font-size:11px">Doomkry</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center">—</td><td class="center" style="color:#64b5f6">—</td><td style="color:#e57373;font-size:11px">—</td></tr></tbody>
+      </table>
+    </div>
+  </div>
   </div>
 </div>
 <script>

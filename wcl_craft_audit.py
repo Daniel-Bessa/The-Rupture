@@ -5084,9 +5084,13 @@ def write_bosses_html(days_data: list, output_path: str, guild_name: str = "") -
             if best_kill_ms:
                 m, s   = divmod(best_kill_ms // 1000, 60)
                 kill_time = f' &middot; Best: {m}:{s:02d}'
+            total_pulls = kills + len(wipes)
+            pulls_detail = (f' &middot; {len(wipes)} wipe{"s" if len(wipes) != 1 else ""} · {total_pulls} pulls'
+                            if wipes else "")
             status_html = (
                 f'<div class="bc-status bc-killed">&#10003; Killed'
-                f'<span class="bc-detail"> &middot; {kills} kill{"s" if kills != 1 else ""}{kill_time}</span>'
+                f'<span class="bc-detail"> &middot; {kills} kill{"s" if kills != 1 else ""}'
+                f'{kill_time}{pulls_detail}</span>'
                 f'</div>'
             )
         elif wipes:
@@ -7503,7 +7507,8 @@ def _build_boss_sheet(ws, boss_name: str, fights: list, report_info: dict, actor
             return pct if pct is not None else "—"
 
         def _fmt_interrupts(pid):
-            count = interrupts_map.get(pid, 0)
+            val = interrupts_map.get(pid, 0)
+            count = val.get("count", 0) if isinstance(val, dict) else val
             return count if count > 0 else "—"
 
         for pid, death_times in fight.get("deaths", {}).items():
@@ -8039,6 +8044,7 @@ def load_config(path="wcl_config.txt"):
                     continue
                 if key.startswith("REPORT_URL"):
                     death_thr = None
+                    merge_id  = None
                     if " #" in line.split("=", 1)[1]:
                         for part in line.split("=", 1)[1].split(" #", 1)[1].split():
                             if part.startswith("death_threshold="):
@@ -8046,8 +8052,10 @@ def load_config(path="wcl_config.txt"):
                                     death_thr = int(part.split("=", 1)[1])
                                 except ValueError:
                                     pass
+                            elif part.startswith("merge_id="):
+                                merge_id = part.split("=", 1)[1]
                     report_urls.append({"url": val, "split_start": split_start,
-                                        "death_threshold": death_thr})
+                                        "death_threshold": death_thr, "merge_id": merge_id})
                 else:
                     config[key] = val
     except FileNotFoundError:
@@ -8528,6 +8536,82 @@ def _raid_filename(day_data: dict) -> str:
     return f"{folder}/{fname}"
 
 
+def _remap_fight_actors(fight: dict, id_remap: dict) -> dict:
+    """Remap actor IDs in a fight/wipe dict from one report's ID space to another."""
+    def remap(pid):
+        p = int(pid) if isinstance(pid, str) else pid
+        return id_remap.get(p, p)
+
+    def remap_keys(d):
+        return {str(remap(k)): v for k, v in d.items()}
+
+    def remap_list(lst):
+        return [remap(p) for p in lst]
+
+    def remap_wave_list(lst, pid_key):
+        return [{**item, pid_key: remap_list(item[pid_key])} if pid_key in item else item
+                for item in lst]
+
+    f = dict(fight)
+    for key in ("deaths", "dmg_taken", "spec_roles", "uptime_map", "healing_map",
+                "interrupts", "avoidable_damage", "mechanics_data",
+                "defensive_casts", "external_casts", "mechanic_timestamps",
+                "add_damage", "horror_damage"):
+        if isinstance(f.get(key), dict):
+            f[key] = remap_keys(f[key])
+    if isinstance(f.get("all_player_ids"), list):
+        f["all_player_ids"] = remap_list(f["all_player_ids"])
+    for key, pid_key in (("alndust_groups", "down_pids"), ("horror_waves", "down_pids"),
+                         ("gloom_soaks", "hit_pids")):
+        if isinstance(f.get(key), list):
+            f[key] = remap_wave_list(f[key], pid_key)
+    if isinstance(f.get("void_marked"), list):
+        f["void_marked"] = [
+            {**item,
+             "target_pid":    remap(item["target_pid"]) if item.get("target_pid") is not None else None,
+             "dispeller_pid": remap(item["dispeller_pid"]) if item.get("dispeller_pid") is not None else None}
+            for item in f["void_marked"]
+        ]
+    return f
+
+
+def merge_day_data(day_data_list: list) -> dict:
+    """Merge multiple day_data dicts from the same raid night into one."""
+    if len(day_data_list) == 1:
+        return day_data_list[0]
+
+    base = day_data_list[0]
+    gameid_to_base_id = {a["gameID"]: a["id"] for a in base["actors"] if a.get("gameID")}
+    max_id            = max((a["id"] for a in base["actors"]), default=0)
+    merged_actors     = list(base["actors"])
+    merged_boss       = {k: list(v) for k, v in base["boss_data"].items()}
+    merged_wipes      = {k: list(v) for k, v in base.get("wipe_data", {}).items()}
+
+    for other in day_data_list[1:]:
+        id_remap     = {}
+        extra_actors = []
+        for actor in other["actors"]:
+            gid = actor.get("gameID")
+            if gid and gid in gameid_to_base_id:
+                id_remap[actor["id"]] = gameid_to_base_id[gid]
+            else:
+                max_id += 1
+                id_remap[actor["id"]] = max_id
+                extra_actors.append({**actor, "id": max_id})
+                if gid:
+                    gameid_to_base_id[gid] = max_id
+        merged_actors.extend(extra_actors)
+
+        for bname, fights in other["boss_data"].items():
+            merged_boss.setdefault(bname, []).extend(
+                _remap_fight_actors(f, id_remap) for f in fights)
+        for bname, wipes in other.get("wipe_data", {}).items():
+            merged_wipes.setdefault(bname, []).extend(
+                _remap_fight_actors(w, id_remap) for w in wipes)
+
+    return {**base, "boss_data": merged_boss, "wipe_data": merged_wipes, "actors": merged_actors}
+
+
 def main():
     print("=" * 60)
     print("  WarcraftLogs Crafted Gear Audit — Midnight Season 1")
@@ -8558,11 +8642,12 @@ def main():
 
     fight_mode = "interactive" if len(report_configs) == 1 else "all"
 
-    days_data = []
+    raw_days = []  # list of (day_data, merge_id)
     for rc in report_configs:
         url             = rc["url"] if isinstance(rc, dict) else rc
         split_start     = rc.get("split_start", 1) if isinstance(rc, dict) else 1
         death_threshold = rc.get("death_threshold") if isinstance(rc, dict) else None
+        mid             = rc.get("merge_id") if isinstance(rc, dict) else None
         code            = _extract_report_code(url)
         try:
             result = process_report(token, code, fight_input=fight_mode,
@@ -8571,9 +8656,21 @@ def main():
                 for dd in split_report_by_player_group(r):
                     if "player_split" in dd:
                         dd["player_split"] = dd["player_split"] + split_start - 1
-                    days_data.append(dd)
+                    raw_days.append((dd, mid))
         except Exception as e:
             print(f"[ERROR] Failed to process report {code}: {e}")
+
+    # Group reports that share a merge_id (same raid, multiple log files)
+    days_data   = []
+    merge_groups: dict = {}
+    for dd, mid in raw_days:
+        if mid:
+            group_key = (mid, dd.get("difficulty", ""), dd.get("player_split"))
+            merge_groups.setdefault(group_key, []).append(dd)
+        else:
+            days_data.append(dd)
+    for group in merge_groups.values():
+        days_data.append(merge_day_data(group))
 
     if not days_data:
         print("[ERROR] No reports processed successfully.")
