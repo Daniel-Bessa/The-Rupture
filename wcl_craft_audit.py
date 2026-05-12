@@ -306,6 +306,18 @@ def analyze_interrupts(interrupt_events: list, actor_lookup: dict,
     return result
 
 
+_MIDNIGHT_NPC_NAMES = {
+    240391: "L'ura",
+    243824: "Arator the Redeemer",
+    249614: "Vereesa Windrunner",
+    260906: "Termination Matrix",
+    260971: "Grim Symphony",
+    250778: "Dark Drifter",
+    250777: "Erasure Warden",
+    250781: "Stygian Herald",
+}
+
+
 def analyze_midnight_interrupt_targets(interrupt_events: list, actor_lookup: dict,
                                        fight_start_ms: int = 0, ability_names: dict = None) -> dict:
     """Group interrupts by target NPC for Midnight Falls.
@@ -314,17 +326,21 @@ def analyze_midnight_interrupt_targets(interrupt_events: list, actor_lookup: dic
     ability_names = ability_names or {}
     targets: dict = {}
     for event in interrupt_events:
-        pid       = event.get("sourceID")
-        target_id = event.get("targetID")
-        extra_id  = event.get("extraAbilityGameID", 0)
+        pid        = event.get("sourceID")
+        target_id  = event.get("targetID")
+        target_gid = event.get("targetGameID")
+        extra_id   = event.get("extraAbilityGameID", 0)
         if pid is None or target_id is None:
             continue
         if pid not in actor_lookup:
             continue
-        target_actor = actor_lookup.get(target_id, {})
-        if target_actor.get("type") == "Player":
+        # Skip player targets
+        if target_id in actor_lookup and actor_lookup[target_id].get("type") == "Player":
             continue
-        npc_name   = target_actor.get("name", f"NPC#{target_id}")
+        # Resolve NPC name: prefer game ID lookup, fall back to actor_lookup, then ID
+        npc_name = (_MIDNIGHT_NPC_NAMES.get(target_gid)
+                    or actor_lookup.get(target_id, {}).get("name")
+                    or (f"NPC-{target_gid}" if target_gid else f"NPC#{target_id}"))
         spell_name = ability_names.get(extra_id, f"#{extra_id}" if extra_id else "Unknown")
         elapsed    = (event.get("timestamp", fight_start_ms) - fight_start_ms) / 1000
         m2, s2     = divmod(int(max(0, elapsed)), 60)
