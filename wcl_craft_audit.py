@@ -4928,6 +4928,8 @@ _VOIDSPIRE_BOSS_ORDER = [
     "Vaelgor & Ezzorak",
     "Lightblinded Vanguard",
     "Crown of the Cosmos",
+    "Belo'ren, Child of Al'ar",
+    "Midnight Falls",
 ]
 
 # Zone groupings for the Boss Progression page
@@ -4965,6 +4967,8 @@ _BOSS_DEDICATED_PAGES = {
     "Vaelgor & Ezzorak":           "mythic/boss_vaelgor.html",
     "Lightblinded Vanguard":       "mythic/boss_vanguard.html",
     "Crown of the Cosmos":         "heroic/boss_crown.html",
+    "Belo'ren, Child of Al'ar":    "mythic/boss_beloren.html",
+    "Midnight Falls":              "mythic/boss_midnight.html",
 }
 
 # Short subtitle shown under each mechanic column header on boss Mythic pages.
@@ -5013,6 +5017,21 @@ _MECH_SUBTITLE = {
     "Singularity":    "eruption",
     "Dev.Cosmos":     "zone",
     "Grav.Collapse":  "knockup",
+    # Belo'ren, Child of Al'ar
+    "Burning Heart":  "DoT",
+    "VL Convergence": "soak",
+    "Void Flames":    "ground",
+    "Void Edict":     "targeted",
+    "Death Drop":     "dodge",
+    "VL Rupture":     "eruptions",
+    # Midnight Falls
+    "Shattered Sky":  "raid dmg",
+    "Heaven's Lance": "lance",
+    "Hvn's Glaives":  "glaives",
+    "Disintegration": "beam",
+    "Dark Rune":      "runes",
+    "Light's End":    "burst",
+    "Radiance":       "burst",
 }
 
 

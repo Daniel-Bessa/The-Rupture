@@ -238,6 +238,90 @@ BOSS_MECHANICS = {
         },
     ],
 
+    "Belo'ren, Child of Al'ar": [
+        {
+            "label": "Burning Heart",
+            "name": "Burning Heart: Persistent fire DoT applied to players — track damage taken.",
+            "spell_ids": {1264650},
+            "type": "dmg_hits",
+        },
+        {
+            "label": "VL Convergence",
+            "name": "Voidlight Convergence (SOAK): Belo'ren collapses voidlight energy — stack up to split the damage. Higher = better.",
+            "spell_ids": {1241932, 1242515},
+            "type": "soak",
+        },
+        {
+            "label": "Void Flames",
+            "name": "Void/Light Flames: Patches of void and light flame erupt on the ground — don't stand in them.",
+            "spell_ids": {1242815, 1242803},
+            "type": "avoid",
+        },
+        {
+            "label": "Void Edict",
+            "name": "Void/Light Edict: Targeted ability striking assigned players — track hits.",
+            "spell_ids": {1241676, 1241646, 1265793, 1265781},
+            "type": "dmg_hits",
+        },
+        {
+            "label": "Death Drop",
+            "name": "Death Drop: Belo'ren drops void energy on player locations — dodge the impact zones.",
+            "spell_ids": {1241333},
+            "type": "avoid",
+        },
+        {
+            "label": "VL Rupture",
+            "name": "Voidlight Rupture: Void eruptions blast outward — step away from the impact zones.",
+            "spell_ids": {1243866},
+            "type": "avoid",
+        },
+    ],
+
+    "Midnight Falls": [
+        {
+            "label": "Shattered Sky",
+            "name": "Shattered Sky: L'ura shatters the sky with void energy — unavoidable raid-wide damage, track for healing.",
+            "spell_ids": {1249797, 1249796},
+            "type": "dmg_hits",
+        },
+        {
+            "label": "Heaven's Lance",
+            "name": "Heaven's Lance: Spear launched at a player, applying Impaled — the targeted player must face it away from the raid.",
+            "spell_ids": {1253878, 1253879},
+            "type": "dmg_hits",
+        },
+        {
+            "label": "Hvn's Glaives",
+            "name": "Heaven's Glaives: Thrown glaives arc across the arena — dodge them.",
+            "spell_ids": {1253915, 1254076},
+            "type": "avoid",
+        },
+        {
+            "label": "Disintegration",
+            "name": "Disintegration: L'ura disintegrates a targeted player with a focused beam — step out of the beam path.",
+            "spell_ids": {1251649},
+            "type": "avoid",
+        },
+        {
+            "label": "Dark Rune",
+            "name": "Dark Rune: Void rune fields placed on the ground — don't stand in them.",
+            "spell_ids": {1249594, 1249609},
+            "type": "avoid",
+        },
+        {
+            "label": "Light's End",
+            "name": "Light's End: L'ura unleashes a devastating burst of void energy — major raid damage, all defensives.",
+            "spell_ids": {1284699},
+            "type": "dmg_hits",
+        },
+        {
+            "label": "Radiance",
+            "name": "Radiance: Burst of radiant energy from L'ura — track hits.",
+            "spell_ids": {1282458},
+            "type": "dmg_hits",
+        },
+    ],
+
     "Chimaerus, the Undreamt God": [
         {
             "label": "Alndust Ess.",
@@ -274,4 +358,6 @@ BOSS_HAS_INTERRUPTS = {
     "Lightblinded Vanguard",
     "Crown of the Cosmos",
     "Chimaerus, the Undreamt God",
+    "Belo'ren, Child of Al'ar",
+    "Midnight Falls",
 }
