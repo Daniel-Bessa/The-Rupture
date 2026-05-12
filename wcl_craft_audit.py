@@ -8043,8 +8043,9 @@ def load_config(path="wcl_config.txt"):
                 if not val:
                     continue
                 if key.startswith("REPORT_URL"):
-                    death_thr = None
-                    merge_id  = None
+                    death_thr   = None
+                    merge_id    = None
+                    only_fights = None
                     if " #" in line.split("=", 1)[1]:
                         for part in line.split("=", 1)[1].split(" #", 1)[1].split():
                             if part.startswith("death_threshold="):
@@ -8054,8 +8055,11 @@ def load_config(path="wcl_config.txt"):
                                     pass
                             elif part.startswith("merge_id="):
                                 merge_id = part.split("=", 1)[1]
+                            elif part.startswith("only_fights="):
+                                only_fights = part.split("=", 1)[1]
                     report_urls.append({"url": val, "split_start": split_start,
-                                        "death_threshold": death_thr, "merge_id": merge_id})
+                                        "death_threshold": death_thr, "merge_id": merge_id,
+                                        "only_fights": only_fights})
                 else:
                     config[key] = val
     except FileNotFoundError:
@@ -8648,9 +8652,11 @@ def main():
         split_start     = rc.get("split_start", 1) if isinstance(rc, dict) else 1
         death_threshold = rc.get("death_threshold") if isinstance(rc, dict) else None
         mid             = rc.get("merge_id") if isinstance(rc, dict) else None
+        only_fights     = rc.get("only_fights") if isinstance(rc, dict) else None
+        effective_fight_input = only_fights if only_fights else fight_mode
         code            = _extract_report_code(url)
         try:
-            result = process_report(token, code, fight_input=fight_mode,
+            result = process_report(token, code, fight_input=effective_fight_input,
                                     death_threshold=death_threshold)
             for r in split_report_by_difficulty(result):
                 for dd in split_report_by_player_group(r):
