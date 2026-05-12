@@ -319,28 +319,32 @@ _MIDNIGHT_NPC_NAMES = {
 
 
 def analyze_midnight_interrupt_targets(interrupt_events: list, actor_lookup: dict,
-                                       fight_start_ms: int = 0, ability_names: dict = None) -> dict:
+                                       fight_start_ms: int = 0, ability_names: dict = None,
+                                       npc_lookup: dict = None) -> dict:
     """Group interrupts by target NPC for Midnight Falls.
     Returns {npc_name: {"spell_name": str, "npc_actor_id": int, "per_player": {pid: [time_strs]}}}
+    npc_lookup: {actor_id: actor_dict} for NPC actors (from masterData)
     """
     ability_names = ability_names or {}
+    npc_lookup    = npc_lookup or {}
     targets: dict = {}
     for event in interrupt_events:
         pid        = event.get("sourceID")
         target_id  = event.get("targetID")
-        target_gid = event.get("targetGameID")
         extra_id   = event.get("extraAbilityGameID", 0)
         if pid is None or target_id is None:
             continue
         if pid not in actor_lookup:
             continue
         # Skip player targets
-        if target_id in actor_lookup and actor_lookup[target_id].get("type") == "Player":
+        if target_id in actor_lookup:
             continue
-        # Resolve NPC name: prefer game ID lookup, fall back to actor_lookup, then ID
-        npc_name = (_MIDNIGHT_NPC_NAMES.get(target_gid)
-                    or actor_lookup.get(target_id, {}).get("name")
-                    or (f"NPC-{target_gid}" if target_gid else f"NPC#{target_id}"))
+        # Resolve NPC name: game-ID lookup → NPC actor name → fallback
+        npc_actor  = npc_lookup.get(target_id, {})
+        game_id    = npc_actor.get("gameID")
+        npc_name   = (_MIDNIGHT_NPC_NAMES.get(game_id)
+                      or npc_actor.get("name")
+                      or (f"NPC-{game_id}" if game_id else f"NPC#{target_id}"))
         spell_name = ability_names.get(extra_id, f"#{extra_id}" if extra_id else "Unknown")
         elapsed    = (event.get("timestamp", fight_start_ms) - fight_start_ms) / 1000
         m2, s2     = divmod(int(max(0, elapsed)), 60)
@@ -8309,6 +8313,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
     _AVERZIAN_ADD_GAME_IDS = {252918, 256942}  # Abyssal Voidshaper + Obscurion Endwalker
     averzian_add_actor_ids = {a["id"] for a in npc_actors if a.get("gameID") in _AVERZIAN_ADD_GAME_IDS}
 
+    # NPC actor lookup (for interrupt target name resolution)
+    npc_lookup = {a["id"]: a for a in npc_actors}
+
     # Gear
     all_combatant_events = []
     fight_spec_roles: dict = {}   # fid → {pid: role}
@@ -8499,7 +8506,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 salhadaar_wipe_events = detect_salhadaar_wipe_events(
                     cast_events, fight_start, ability_names=ability_names)
             midnight_int_targets = (analyze_midnight_interrupt_targets(
-                interrupt_events, actor_lookup, fight_start, ability_names=ability_names)
+                interrupt_events, actor_lookup, fight_start,
+                ability_names=ability_names, npc_lookup=npc_lookup)
                 if "Midnight" in fname else {})
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
@@ -8626,7 +8634,8 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                     w_sal_wipe_events = detect_salhadaar_wipe_events(
                         cast_events, fight_start, ability_names=ability_names)
                 w_midnight_int_targets = (analyze_midnight_interrupt_targets(
-                    interrupt_events, actor_lookup, fight_start, ability_names=ability_names)
+                    interrupt_events, actor_lookup, fight_start,
+                    ability_names=ability_names, npc_lookup=npc_lookup)
                     if "Midnight" in fname else {})
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
