@@ -306,6 +306,35 @@ def analyze_interrupts(interrupt_events: list, actor_lookup: dict,
     return result
 
 
+def analyze_midnight_interrupt_targets(interrupt_events: list, actor_lookup: dict,
+                                       fight_start_ms: int = 0, ability_names: dict = None) -> dict:
+    """Group interrupts by target NPC for Midnight Falls.
+    Returns {npc_name: {"spell_name": str, "npc_actor_id": int, "per_player": {pid: [time_strs]}}}
+    """
+    ability_names = ability_names or {}
+    targets: dict = {}
+    for event in interrupt_events:
+        pid       = event.get("sourceID")
+        target_id = event.get("targetID")
+        extra_id  = event.get("extraAbilityGameID", 0)
+        if pid is None or target_id is None:
+            continue
+        if pid not in actor_lookup:
+            continue
+        target_actor = actor_lookup.get(target_id, {})
+        if target_actor.get("type") == "Player":
+            continue
+        npc_name   = target_actor.get("name", f"NPC#{target_id}")
+        spell_name = ability_names.get(extra_id, f"#{extra_id}" if extra_id else "Unknown")
+        elapsed    = (event.get("timestamp", fight_start_ms) - fight_start_ms) / 1000
+        m2, s2     = divmod(int(max(0, elapsed)), 60)
+        t_str      = f"{m2}:{s2:02d}"
+        if npc_name not in targets:
+            targets[npc_name] = {"spell_name": spell_name, "npc_actor_id": target_id, "per_player": {}}
+        targets[npc_name]["per_player"].setdefault(pid, []).append(t_str)
+    return targets
+
+
 def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: list) -> dict:
     """Count per-player hits for each boss mechanic based on spell IDs.
     Returns {pid: {mechanic_label: count}}
@@ -5899,6 +5928,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     IS_CHIMAERUS = "Chimaerus"    in boss_name
     IS_SALHADAAR = "Salhadaar"   in boss_name
     IS_VANGUARD  = "Lightblinded" in boss_name
+    IS_MIDNIGHT  = "Midnight"    in boss_name
 
     def _fdmg(v):
         if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
@@ -5953,6 +5983,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 "waves":   fight.get("salhadaar_fracture_waves", []),
                 "alndust": alndust,
                 "horror":  horror,
+                "midnight_ints": fight.get("midnight_int_targets", {}),
                 "_char": _char, "_player": _player, "_color": _color,
                 "_al": al,
             })
@@ -6172,6 +6203,8 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             t += _build_chimaerus_totals_extra()
         if IS_VANGUARD:
             t += _build_vanguard_death_table(pulls)
+        if IS_MIDNIGHT:
+            t += _build_midnight_interrupt_totals(pulls)
         return t
 
     def _build_chimaerus_totals_extra():
@@ -6325,6 +6358,86 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 f'<td style="{col_style};color:#e3a02e;font-weight:700">{grand_multi if grand_multi else "—"}</td>'
                 f'<td style="{col_style};color:#aaa">{grand_total}</td></tr>')
         out += '</tbody></table></div></div>'
+        return out
+
+    # ── Midnight Falls: interrupt target helpers ──────────────────────────────
+    def _build_midnight_interrupt_chips(ints_map: dict, fchar, fc, all_pids_set: set) -> str:
+        """Render per-NPC interrupt chips: green who kicked, red who didn't."""
+        if not ints_map:
+            return ""
+        out  = ('<div style="margin-top:20px"><div style="color:#e6edf3;font-weight:600;margin-bottom:8px">'
+                '&#9889; Interrupt Targets</div>')
+        for npc_name, npc_data in sorted(ints_map.items()):
+            spell  = npc_data.get("spell_name", "")
+            kicked = npc_data.get("per_player", {})
+            kicked_pids = {int(k) if isinstance(k, str) else k for k in kicked}
+            out += (f'<div style="margin-bottom:10px">'
+                    f'<div style="color:#a0c4ff;font-size:13px;font-weight:600;margin-bottom:4px">'
+                    f'{_esc(npc_name)}'
+                    f'<span style="color:#556;font-size:11px;font-weight:400"> — {_esc(spell)}</span></div>'
+                    f'<div style="display:flex;flex-wrap:wrap;gap:6px">')
+            for pid, times in sorted(kicked.items(), key=lambda kv: -len(kv[1])):
+                pid_i = int(pid) if isinstance(pid, str) else pid
+                out += (f'<span style="background:#1a3a1a;border:1px solid #2a4a2a;border-radius:4px;'
+                        f'padding:2px 8px;white-space:nowrap">'
+                        f'<span style="color:{fc(pid_i)};font-weight:600">{_esc(fchar(pid_i))}</span>'
+                        f' <span style="color:#3fb950;font-size:11px">×{len(times)}</span></span>')
+            for pid in sorted(all_pids_set - kicked_pids):
+                out += (f'<span style="background:#1a0a0a;border:1px solid #4a1a1a;border-radius:4px;'
+                        f'padding:2px 8px;white-space:nowrap">'
+                        f'<span style="color:{fc(pid)};font-weight:600">{_esc(fchar(pid))}</span>'
+                        f' <span style="color:#e05252;font-size:11px">0</span></span>')
+            out += '</div></div>'
+        out += '</div>'
+        return out
+
+    def _build_midnight_interrupt_totals(pulls_list: list) -> str:
+        """Aggregate interrupt targets across all Midnight Falls pulls."""
+        # {npc_name: {"spell_name": str, "per_player_name": {pname: count}}}
+        agg: dict = {}
+        all_pnames: set = set(all_players.keys())
+        for p in pulls_list:
+            fn, fc, fchar = p["_player"], p["_color"], p["_char"]
+            for npc_name, npc_data in p.get("midnight_ints", {}).items():
+                if npc_name not in agg:
+                    agg[npc_name] = {"spell_name": npc_data.get("spell_name", ""), "per_player": {}}
+                for pid, times in npc_data.get("per_player", {}).items():
+                    pname = fn(pid)
+                    agg[npc_name]["per_player"][pname] = agg[npc_name]["per_player"].get(pname, 0) + len(times)
+        if not agg:
+            return ""
+        out  = ('<div style="margin-top:24px"><div style="color:#e6edf3;font-weight:600;'
+                'font-size:15px;margin-bottom:8px">&#9889; Interrupt Targets</div>')
+        for npc_name, npc_data in sorted(agg.items()):
+            spell    = npc_data["spell_name"]
+            per_p    = npc_data["per_player"]
+            never    = sorted(all_pnames - per_p.keys())
+            kicked   = sorted(per_p.items(), key=lambda kv: -kv[1])
+            out += (f'<div style="margin-bottom:12px">'
+                    f'<div style="color:#a0c4ff;font-size:13px;font-weight:600;margin-bottom:5px">'
+                    f'{_esc(npc_name)}'
+                    f'<span style="color:#556;font-size:11px;font-weight:400"> — {_esc(spell)}</span></div>'
+                    f'<div style="display:flex;flex-wrap:wrap;gap:6px">')
+            for pname, cnt in kicked:
+                color = next((p["_color"](pid)
+                              for p in pulls_list
+                              for pid in p.get("midnight_ints", {}).get(npc_name, {}).get("per_player", {})
+                              if p["_player"](pid) == pname), "#ccc")
+                out += (f'<span style="background:#1a3a1a;border:1px solid #2a4a2a;border-radius:4px;'
+                        f'padding:2px 8px;white-space:nowrap">'
+                        f'<span style="color:{color};font-weight:600">{_esc(pname)}</span>'
+                        f' <span style="color:#3fb950;font-size:11px">×{cnt}</span></span>')
+            for pname in never:
+                color = next((p["_color"](pid)
+                              for p in pulls_list
+                              for pid, _ in p["_al"].items()
+                              if p["_player"](pid) == pname), "#ccc")
+                out += (f'<span style="background:#1a0a0a;border:1px solid #4a1a1a;border-radius:4px;'
+                        f'padding:2px 8px;white-space:nowrap">'
+                        f'<span style="color:{color};font-weight:600">{_esc(pname)}</span>'
+                        f' <span style="color:#e05252;font-size:11px">0</span></span>')
+            out += '</div></div>'
+        out += '</div>'
         return out
 
     # ── Step 6: per-pull tab ──────────────────────────────────────────────────
@@ -6507,6 +6620,15 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
         if IS_VANGUARD and p["deaths"]:
             out += _build_vanguard_death_table([p])
+
+        if IS_MIDNIGHT and p.get("midnight_ints"):
+            pull_pids = {int(pid) if isinstance(pid, str) else pid
+                         for pid in (set(p["mts"]) | set(p["defs"]) | set(p["deaths"])
+                                     | {int(k) if isinstance(k, str) else k
+                                        for npc in p["midnight_ints"].values()
+                                        for k in npc.get("per_player", {})})}
+            out += _build_midnight_interrupt_chips(
+                p["midnight_ints"], fchar, fc, pull_pids)
 
         if not p["deaths"] and not mts and not defs_p and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
@@ -8360,6 +8482,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                     cc_events=sal_cc_events)
                 salhadaar_wipe_events = detect_salhadaar_wipe_events(
                     cast_events, fight_start, ability_names=ability_names)
+            midnight_int_targets = (analyze_midnight_interrupt_targets(
+                interrupt_events, actor_lookup, fight_start, ability_names=ability_names)
+                if "Midnight" in fname else {})
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
                 "deaths": deaths, "all_player_ids": all_pids,
@@ -8380,6 +8505,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 "mechanic_timestamps":     mechanic_timestamps,
                 "salhadaar_fracture_waves": salhadaar_fracture_waves,
                 "salhadaar_wipe_events":    salhadaar_wipe_events,
+                "midnight_int_targets":     midnight_int_targets,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(v['count'] for v in interrupts.values())} interrupts.")
         except Exception as e:
@@ -8483,6 +8609,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                         cc_events=w_sal_cc_events)
                     w_sal_wipe_events = detect_salhadaar_wipe_events(
                         cast_events, fight_start, ability_names=ability_names)
+                w_midnight_int_targets = (analyze_midnight_interrupt_targets(
+                    interrupt_events, actor_lookup, fight_start, ability_names=ability_names)
+                    if "Midnight" in fname else {})
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
                     "wipe_num": wipe_num, "boss_pct": boss_pct,
@@ -8500,6 +8629,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                     "mechanic_timestamps":      w_mechanic_timestamps,
                     "salhadaar_fracture_waves": w_sal_fracture_waves,
                     "salhadaar_wipe_events":    w_sal_wipe_events,
+                    "midnight_int_targets":     w_midnight_int_targets,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
