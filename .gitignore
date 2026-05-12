@@ -1,6 +1,9 @@
 # Credentials — never commit these
 wcl_config.txt
 
+# WoW combat log files — too large for git
+WoWCombatLog*.txt
+
 # Output files (generated each run) — index.html IS committed (GitHub Pages)
 craft_audit.html
 craft_audit.xlsx
