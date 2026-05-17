@@ -3181,6 +3181,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
               f' data-sortable="1" onclick="sortBossTable(\'{inner_id}\', {pulls_ci}, this)">'
               f'Pulls <span class="sort-arrow">▼</span></th>')
         t += '</tr></thead><tbody>'
+        # Build most-common spec role per pid from all wipes (handles mid-tier spec swaps)
+        _pid_spec_counts: dict = {}
+        for _w in boss_wipes_list:
+            for _pk, _rv in _w.get("spec_roles", {}).items():
+                _pi = int(_pk) if isinstance(_pk, str) else _pk
+                _pid_spec_counts.setdefault(_pi, {})
+                _pid_spec_counts[_pi][_rv] = _pid_spec_counts[_pi].get(_rv, 0) + 1
         current_role = None
         for pid in ov_pids:
             if pid not in pid_mech_totals and pid not in pid_wipes_present:
@@ -3190,7 +3197,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             cls       = actor.get("subType", "Unknown")
             cls_color = CLASS_COLORS.get(cls, "#ccc")
             pname, _  = lookup_roster(char_name)
-            role_str  = PLAYER_ROLES.get(pname, "DPS")
+            _sc       = _pid_spec_counts.get(pid, {})
+            role_str  = max(_sc, key=_sc.get) if _sc else PLAYER_ROLES.get(pname, "DPS")
             if role_str != current_role:
                 current_role = role_str
                 t += (f'<tr class="role-sep"><td colspan="{col_span}">'
