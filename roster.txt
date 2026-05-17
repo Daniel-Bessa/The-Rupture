@@ -12,7 +12,7 @@ Minxy       | Healer | Minxymender:Main, Minxycat:Alt, Drunkminxy:Alt
 Hipe        | Healer | Wype:Main, Nype:Alt, Cype:Alt
 Zush        | Healer | Züsh:Main, Zush:Alt, Ryuhko:Alt                    | Shaman
 Jimy        | DPS    | Madhmag:Main, Notyunyun:Alt, Käz:Alt
-Icecold     | DPS    | Icecöld:Main, Icecoldleap:Alt, Icecold:Alt, Chocoice:Alt | Druid
+Icecold     | DPS    | Icecöld:Main, Icecoldleap:Alt, Icecold:Alt, Chocoice:Alt, Icecoldudu:Alt | Druid
 Zodiacos    | DPS    | Zodiacos:Main                                       | Warrior
 Kutcher     | DPS    | Kutcherdh:Main, Kutcherdhtwo:Alt, Kutchersplit:Alt
 Hypno       | DPS    | Hypno:Main, Hypnodh:Alt, Hypnø:Alt

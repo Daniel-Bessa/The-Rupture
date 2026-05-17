@@ -355,6 +355,140 @@ def analyze_midnight_interrupt_targets(interrupt_events: list, actor_lookup: dic
     return targets
 
 
+def build_midnight_kick_cycles(midnight_int_targets: dict, actor_lookup: dict,
+                               rotation: dict, gap_s: int = 15) -> list:
+    """Cluster Midnight Falls kicks into cycles and compare against the assigned rotation.
+
+    rotation = {'TM1': [slot1_char, slot2_char, ...], 'TM2': [...], 'TM3': [...]}
+    Returns list of cycle dicts:
+      { 'window': (first_t_str, last_t_str),
+        'groups': { 'TM1': [{'expected': str, 'actual': str|None,
+                              'time': str|None, 'status': 'ok'|'missed'|'wrong_order'}, ...],
+                    ... },
+        'extras': [(player_name, time_str), ...] }
+    """
+    def _t2s(t): m, s = t.split(':'); return int(m) * 60 + int(s)
+
+    pid_to_name = {pid: a.get("name", f"PID{pid}") for pid, a in actor_lookup.items()}
+    all_assigned = {p for g in rotation.values() for p in g}
+
+    # Flatten all kicks: (seconds, player_name, time_str)
+    raw: list = []
+    for npc_data in midnight_int_targets.values():
+        for pid, times in npc_data.get("per_player", {}).items():
+            pname = pid_to_name.get(int(pid) if isinstance(pid, str) else pid, f"PID{pid}")
+            for t in times:
+                raw.append((_t2s(t), pname, t))
+    if not raw:
+        return []
+
+    raw.sort()
+
+    # Cluster into cycles
+    cycles_raw: list = []
+    cur = [raw[0]]
+    for kick in raw[1:]:
+        if kick[0] - cur[-1][0] > gap_s:
+            cycles_raw.append(cur)
+            cur = [kick]
+        else:
+            cur.append(kick)
+    cycles_raw.append(cur)
+
+    cycles = []
+    for cycle_kicks in cycles_raw:
+        groups = {}
+        for grp_name, assigned in rotation.items():
+            grp_kicks = sorted([(t, p, ts) for t, p, ts in cycle_kicks if p in assigned])
+            slots = []
+            for slot_i, expected in enumerate(assigned):
+                if slot_i < len(grp_kicks):
+                    _, actual, tstr = grp_kicks[slot_i]
+                    status = "ok" if actual == expected else "wrong_order"
+                    slots.append({"expected": expected, "actual": actual,
+                                  "time": tstr, "status": status})
+                else:
+                    slots.append({"expected": expected, "actual": None,
+                                  "time": None, "status": "missed"})
+            groups[grp_name] = slots
+        extras = [(p, ts) for _, p, ts in cycle_kicks if p not in all_assigned]
+        cycles.append({
+            "window": (cycle_kicks[0][2], cycle_kicks[-1][2]),
+            "groups": groups,
+            "extras": extras,
+        })
+    return cycles
+
+
+def render_midnight_rotation_html(cycles: list, rotation: dict) -> str:
+    """Render per-cycle kick rotation table for Midnight Falls."""
+    if not cycles or not rotation:
+        return ""
+    tm_names = list(rotation.keys())
+    n_slots   = max(len(v) for v in rotation.values())
+
+    STATUS_STYLE = {
+        "ok":          "background:#1a3a1a;color:#4ec94e",
+        "missed":      "background:#3a0a0a;color:#e05252",
+        "wrong_order": "background:#3a2a00;color:#e0b84e",
+    }
+    STATUS_ICON = {"ok": "✓", "missed": "✗", "wrong_order": "↑"}
+
+    t = ('<div style="margin:10px 0 0">'
+         '<span style="color:#8ab;font-size:13px;font-weight:600">'
+         '&#9889; Kick Rotation</span></div>')
+
+    for ci, cycle in enumerate(cycles, 1):
+        w0, w1 = cycle["window"]
+        has_issue = any(
+            s["status"] != "ok"
+            for grp in cycle["groups"].values()
+            for s in grp
+        ) or cycle["extras"]
+
+        hdr_col = "#e05252" if has_issue else "#4ec94e"
+        t += (f'<div style="margin:6px 0 2px;font-size:11px;color:{hdr_col};font-weight:600">'
+              f'Cycle {ci} &nbsp;<span style="color:#556;font-weight:normal">'
+              f'{w0} – {w1}</span></div>')
+        t += ('<table style="border-collapse:collapse;margin-bottom:6px;font-size:12px">'
+              '<thead><tr>'
+              '<th style="padding:2px 6px;color:#556;font-weight:normal;text-align:left">Slot</th>')
+        for tm in tm_names:
+            t += f'<th style="padding:2px 10px;color:#8ab;text-align:center">{tm}</th>'
+        t += '</tr></thead><tbody>'
+
+        for slot_i in range(n_slots):
+            t += '<tr>'
+            t += f'<td style="padding:2px 6px;color:#556;text-align:center">{slot_i + 1}</td>'
+            for tm in tm_names:
+                slots = cycle["groups"].get(tm, [])
+                if slot_i >= len(slots):
+                    t += '<td></td>'
+                    continue
+                s    = slots[slot_i]
+                sty  = STATUS_STYLE.get(s["status"], "")
+                icon = STATUS_ICON.get(s["status"], "")
+                if s["status"] == "ok":
+                    txt = f'{icon} {s["actual"]} <span style="color:#556">{s["time"]}</span>'
+                elif s["status"] == "missed":
+                    txt = f'{icon} <span style="color:#e05252">{s["expected"]}</span>'
+                else:  # wrong_order
+                    txt = (f'{icon} {s["actual"]} <span style="color:#556">{s["time"]}</span>'
+                           f'<br><span style="color:#777;font-size:10px">'
+                           f'exp: {s["expected"]}</span>')
+                t += (f'<td style="{sty};padding:3px 8px;text-align:center;'
+                      f'white-space:nowrap;border:1px solid #1a1a2e">{txt}</td>')
+            t += '</tr>'
+
+        t += '</tbody></table>'
+        if cycle["extras"]:
+            extra_str = ", ".join(f'{p} {ts}' for p, ts in cycle["extras"])
+            t += (f'<div style="font-size:11px;color:#888;margin-bottom:4px">'
+                  f'Extra kicks: {extra_str}</div>')
+
+    return t
+
+
 def analyze_boss_mechanics(damage_events: list, actor_lookup: dict, mechanics: list) -> dict:
     """Count per-player hits for each boss mechanic based on spell IDs.
     Returns {pid: {mechanic_label: count}}
@@ -2683,7 +2817,7 @@ _CROWN_MECHANICS_CSS = """
 """
 
 
-def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None, root: str = "") -> dict:
+def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", wipe_data: dict = None, root: str = "", midnight_rotation: dict = None) -> dict:
     """Build HTML for each boss tab. Returns {boss_name: html_string}."""
     ROLE_ORDER = {"Tank": 0, "Healer": 1, "DPS": 2}
     wipe_data  = wipe_data or {}
@@ -3960,9 +4094,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 wipe_vorasius_swap         = _build_vorasius_tank_swap_banner([w]) if "Vorasius"  in boss_name else ""
                 wipe_sal_interrupts        = _build_salhadaar_interrupt_table([w]) if "Salhadaar" in boss_name else ""
                 wipe_midnight_interrupts   = _build_midnight_interrupt_table([w])  if "Midnight"  in boss_name else ""
+                if "Midnight" in boss_name and midnight_rotation:
+                    _mid_cycles = build_midnight_kick_cycles(
+                        w.get("midnight_int_targets", {}), actor_lookup, midnight_rotation)
+                    wipe_midnight_rotation = render_midnight_rotation_html(_mid_cycles, midnight_rotation)
+                else:
+                    wipe_midnight_rotation = ""
                 wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                                f'{wipe_sal_wipe}{wipe_vorasius_swap}{wipe_banners}'
-                               f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}{wipe_midnight_interrupts}</div>')
+                               f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}'
+                               f'{wipe_midnight_interrupts}{wipe_midnight_rotation}</div>')
 
             pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
             kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_content}</div>'
@@ -4032,9 +4173,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             wo_vorasius_swap    = _build_vorasius_tank_swap_banner([w])        if "Vorasius"  in boss_name_base else ""
             wo_sal_interrupts       = _build_salhadaar_interrupt_table([w])       if "Salhadaar" in boss_name_base else ""
             wo_midnight_interrupts  = _build_midnight_interrupt_table([w])        if "Midnight"  in boss_name_base else ""
+            if "Midnight" in boss_name_base and midnight_rotation:
+                _mid_cycles = build_midnight_kick_cycles(
+                    w.get("midnight_int_targets", {}), actor_lookup, midnight_rotation)
+                wo_midnight_rotation = render_midnight_rotation_html(_mid_cycles, midnight_rotation)
+            else:
+                wo_midnight_rotation = ""
             wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
-                           f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}{wo_midnight_interrupts}</div>')
+                           f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}'
+                           f'{wo_midnight_interrupts}{wo_midnight_rotation}</div>')
 
         ov_pane       = f'<div class="pull-pane active" id="pane-{ov_tbl_id}">{ov_html}</div>'
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
@@ -8944,6 +9092,14 @@ def main():
     print("=" * 60)
 
     config = load_config()
+
+    # Parse Midnight Falls kick rotation from config
+    _midnight_rotation: dict = {}
+    for _tm in ("TM1", "TM2", "TM3"):
+        _key = f"MIDNIGHT_KICK_{_tm}"
+        if _key in config:
+            _midnight_rotation[_tm] = [p.strip() for p in config[_key].split(",") if p.strip()]
+    config["MIDNIGHT_ROTATION"] = _midnight_rotation
 
     if config.get("CLIENT_ID") and config.get("CLIENT_SECRET"):
         client_id, client_secret = config["CLIENT_ID"], config["CLIENT_SECRET"]
