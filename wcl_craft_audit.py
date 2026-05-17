@@ -4358,7 +4358,7 @@ def _filter_bar_html(split_id: str) -> str:
     )
 
 
-def write_raid_html(day_data: dict, output_path: str) -> None:
+def write_raid_html(day_data: dict, output_path: str, midnight_rotation: dict = None) -> None:
     """Write a single raid day as a standalone HTML page (Gear + Split tabs)."""
     _dir = os.path.dirname(output_path)
     if _dir:
@@ -4400,7 +4400,8 @@ def write_raid_html(day_data: dict, output_path: str) -> None:
         merged_boss_data.setdefault(boss_name, []).extend(fights)
 
     boss_htmls = _build_boss_html(merged_boss_data, actor_lookup, id_prefix="b",
-                                  wipe_data=day_data.get("wipe_data", {}), root=_root)
+                                  wipe_data=day_data.get("wipe_data", {}), root=_root,
+                                  midnight_rotation=midnight_rotation)
 
     tab_buttons = ""
     split_divs  = ""
@@ -9169,7 +9170,8 @@ def main():
 
     # Per-raid pages
     for day_data in days_data:
-        write_raid_html(day_data, _raid_filename(day_data))
+        write_raid_html(day_data, _raid_filename(day_data),
+                        midnight_rotation=config.get("MIDNIGHT_ROTATION", {}))
 
     # Overview index
     write_index_html(days_data, "index.html", guild_name=guild_name)
