@@ -3337,6 +3337,59 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         t += '</tbody></table></div></div></div>'
         return t
 
+    def _build_midnight_interrupt_table(fights_list: list) -> str:
+        """Per-NPC interrupt chip table for Midnight Falls.
+        Green chips = players who kicked, red = raid members who never kicked."""
+        # Merge midnight_int_targets across all fights in the list
+        merged: dict = {}  # {npc_name: {"spell_name": str, "per_player": {pid: [times]}}}
+        all_pids_set: set = set()
+        for fd in fights_list:
+            for pid in set(fd.get("all_player_ids", [])) | set(fd.get("deaths", {}).keys()):
+                if pid in actor_lookup:
+                    all_pids_set.add(int(pid) if isinstance(pid, str) else pid)
+            for npc_name, npc_data in fd.get("midnight_int_targets", {}).items():
+                if npc_name not in merged:
+                    merged[npc_name] = {"spell_name": npc_data.get("spell_name", ""), "per_player": {}}
+                for pid, times in npc_data.get("per_player", {}).items():
+                    pid_i = int(pid) if isinstance(pid, str) else pid
+                    merged[npc_name]["per_player"].setdefault(pid_i, []).extend(times)
+        if not merged or not all_pids_set:
+            return ""
+        t  = '<div class="alndust-panel">'
+        t += ('<div class="ag-header open" onclick="this.classList.toggle(\'open\');'
+              'this.nextElementSibling.classList.toggle(\'open\')">'
+              '<span class="ag-title">&#9889; Interrupt Targets — Midnight Falls</span>'
+              '<span class="ag-chevron">&#9660;</span></div>')
+        t += '<div class="ag-body open"><div style="padding:8px 0">'
+        for npc_name, npc_data in sorted(merged.items()):
+            spell      = npc_data["spell_name"]
+            kicked     = npc_data["per_player"]
+            kicked_ids = set(kicked.keys())
+            t += (f'<div style="margin-bottom:10px">'
+                  f'<div style="color:#a0c4ff;font-size:13px;font-weight:600;margin-bottom:5px">'
+                  f'{escape(npc_name)}'
+                  f'<span style="color:#556;font-size:11px;font-weight:400"> — {escape(spell)}</span></div>'
+                  f'<div style="display:flex;flex-wrap:wrap;gap:6px">')
+            for pid, times in sorted(kicked.items(), key=lambda kv: -len(kv[1])):
+                actor = actor_lookup.get(pid, {})
+                name  = escape(actor.get("name", f"#{pid}"))
+                color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                t += (f'<span style="background:#1a3a1a;border:1px solid #2a4a2a;border-radius:4px;'
+                      f'padding:2px 8px;white-space:nowrap">'
+                      f'<span style="color:{color};font-weight:600">{name}</span>'
+                      f' <span style="color:#3fb950;font-size:11px">×{len(times)}</span></span>')
+            for pid in sorted(all_pids_set - kicked_ids):
+                actor = actor_lookup.get(pid, {})
+                name  = escape(actor.get("name", f"#{pid}"))
+                color = CLASS_COLORS.get(actor.get("subType", ""), "#ccc")
+                t += (f'<span style="background:#1a0a0a;border:1px solid #4a1a1a;border-radius:4px;'
+                      f'padding:2px 8px;white-space:nowrap">'
+                      f'<span style="color:{color};font-weight:600">{name}</span>'
+                      f' <span style="color:#e05252;font-size:11px">0</span></span>')
+            t += '</div></div>'
+        t += '</div></div></div>'
+        return t
+
     # ─────────────────────────────────────────────────────────────────────────
 
     for boss_idx, (boss_name, fights) in enumerate(boss_data.items()):
@@ -3778,11 +3831,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_void_marked     = _build_void_marked_panel(fights)          if "Averzian"   in boss_name else ""
         kill_add_damage      = _build_add_damage_panel(fights)           if "Averzian"   in boss_name else ""
         kill_vorasius_swap   = _build_vorasius_tank_swap_banner(fights)  if "Vorasius"   in boss_name else ""
-        kill_sal_wipe        = _build_salhadaar_wipe_banner(fights)      if "Salhadaar"  in boss_name else ""
-        kill_sal_interrupts  = _build_salhadaar_interrupt_table(fights)  if "Salhadaar"  in boss_name else ""
+        kill_sal_wipe           = _build_salhadaar_wipe_banner(fights)      if "Salhadaar"  in boss_name else ""
+        kill_sal_interrupts     = _build_salhadaar_interrupt_table(fights)  if "Salhadaar"  in boss_name else ""
+        kill_midnight_interrupts= _build_midnight_interrupt_table(fights)   if "Midnight"   in boss_name else ""
         kill_content = (kill_sal_wipe + kill_vorasius_swap + kill_banners + kill_table + kill_chart
                         + kill_horror_waves + kill_alndust + kill_gloom
-                        + kill_void_marked + kill_add_damage + kill_sal_interrupts)
+                        + kill_void_marked + kill_add_damage + kill_sal_interrupts + kill_midnight_interrupts)
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -3827,12 +3881,13 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 wipe_banners         = _build_banners([w])
                 wipe_table           = _render_table([w], wtbl_id, pids=wipe_pids)
                 wipe_chart           = _build_chart(w, wtbl_id)
-                wipe_sal_wipe        = _build_salhadaar_wipe_banner([w])     if "Salhadaar" in boss_name else ""
-                wipe_vorasius_swap   = _build_vorasius_tank_swap_banner([w]) if "Vorasius"  in boss_name else ""
-                wipe_sal_interrupts  = _build_salhadaar_interrupt_table([w]) if "Salhadaar" in boss_name else ""
+                wipe_sal_wipe              = _build_salhadaar_wipe_banner([w])     if "Salhadaar" in boss_name else ""
+                wipe_vorasius_swap         = _build_vorasius_tank_swap_banner([w]) if "Vorasius"  in boss_name else ""
+                wipe_sal_interrupts        = _build_salhadaar_interrupt_table([w]) if "Salhadaar" in boss_name else ""
+                wipe_midnight_interrupts   = _build_midnight_interrupt_table([w])  if "Midnight"  in boss_name else ""
                 wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                                f'{wipe_sal_wipe}{wipe_vorasius_swap}{wipe_banners}'
-                               f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}</div>')
+                               f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}{wipe_midnight_interrupts}</div>')
 
             pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
             kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_content}</div>'
@@ -3887,10 +3942,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             crown_html          = _build_crown_mechanics_html(w, actor_lookup) if "Crown"     in boss_name_base else ""
             wo_sal_wipe         = _build_salhadaar_wipe_banner([w])            if "Salhadaar" in boss_name_base else ""
             wo_vorasius_swap    = _build_vorasius_tank_swap_banner([w])        if "Vorasius"  in boss_name_base else ""
-            wo_sal_interrupts   = _build_salhadaar_interrupt_table([w])        if "Salhadaar" in boss_name_base else ""
+            wo_sal_interrupts       = _build_salhadaar_interrupt_table([w])       if "Salhadaar" in boss_name_base else ""
+            wo_midnight_interrupts  = _build_midnight_interrupt_table([w])        if "Midnight"  in boss_name_base else ""
             wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
-                           f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}</div>')
+                           f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}{wo_midnight_interrupts}</div>')
 
         ov_pane       = f'<div class="pull-pane active" id="pane-{ov_tbl_id}">{ov_html}</div>'
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
