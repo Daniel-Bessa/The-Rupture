@@ -4042,10 +4042,9 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         kill_vorasius_swap   = _build_vorasius_tank_swap_banner(fights)  if "Vorasius"   in boss_name else ""
         kill_sal_wipe           = _build_salhadaar_wipe_banner(fights)      if "Salhadaar"  in boss_name else ""
         kill_sal_interrupts     = _build_salhadaar_interrupt_table(fights)  if "Salhadaar"  in boss_name else ""
-        kill_midnight_interrupts= _build_midnight_interrupt_table(fights)   if "Midnight"   in boss_name else ""
         kill_content = (kill_sal_wipe + kill_vorasius_swap + kill_banners + kill_table + kill_chart
                         + kill_horror_waves + kill_alndust + kill_gloom
-                        + kill_void_marked + kill_add_damage + kill_sal_interrupts + kill_midnight_interrupts)
+                        + kill_void_marked + kill_add_damage + kill_sal_interrupts)
 
         if boss_wipes:
             total_wipes = len(boss_wipes)
@@ -4093,7 +4092,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 wipe_sal_wipe              = _build_salhadaar_wipe_banner([w])     if "Salhadaar" in boss_name else ""
                 wipe_vorasius_swap         = _build_vorasius_tank_swap_banner([w]) if "Vorasius"  in boss_name else ""
                 wipe_sal_interrupts        = _build_salhadaar_interrupt_table([w]) if "Salhadaar" in boss_name else ""
-                wipe_midnight_interrupts   = _build_midnight_interrupt_table([w])  if "Midnight"  in boss_name else ""
                 if "Midnight" in boss_name and midnight_rotation:
                     _mid_cycles = build_midnight_kick_cycles(
                         w.get("midnight_int_targets", {}), actor_lookup, midnight_rotation)
@@ -4103,7 +4101,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                                f'{wipe_sal_wipe}{wipe_vorasius_swap}{wipe_banners}'
                                f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}'
-                               f'{wipe_midnight_interrupts}{wipe_midnight_rotation}</div>')
+                               f'{wipe_midnight_rotation}</div>')
 
             pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
             kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_content}</div>'
@@ -4172,7 +4170,6 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             wo_sal_wipe         = _build_salhadaar_wipe_banner([w])            if "Salhadaar" in boss_name_base else ""
             wo_vorasius_swap    = _build_vorasius_tank_swap_banner([w])        if "Vorasius"  in boss_name_base else ""
             wo_sal_interrupts       = _build_salhadaar_interrupt_table([w])       if "Salhadaar" in boss_name_base else ""
-            wo_midnight_interrupts  = _build_midnight_interrupt_table([w])        if "Midnight"  in boss_name_base else ""
             if "Midnight" in boss_name_base and midnight_rotation:
                 _mid_cycles = build_midnight_kick_cycles(
                     w.get("midnight_int_targets", {}), actor_lookup, midnight_rotation)
@@ -4182,7 +4179,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
                            f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}'
-                           f'{wo_midnight_interrupts}{wo_midnight_rotation}</div>')
+                           f'{wo_midnight_rotation}</div>')
 
         ov_pane       = f'<div class="pull-pane active" id="pane-{ov_tbl_id}">{ov_html}</div>'
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
@@ -6516,8 +6513,6 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             t += _build_chimaerus_totals_extra()
         if IS_VANGUARD:
             t += _build_vanguard_death_table(pulls)
-        if IS_MIDNIGHT:
-            t += _build_midnight_interrupt_totals(pulls)
         return t
 
     def _build_chimaerus_totals_extra():
@@ -6933,15 +6928,6 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
         if IS_VANGUARD and p["deaths"]:
             out += _build_vanguard_death_table([p])
-
-        if IS_MIDNIGHT and p.get("midnight_ints"):
-            pull_pids = {int(pid) if isinstance(pid, str) else pid
-                         for pid in (set(p["mts"]) | set(p["defs"]) | set(p["deaths"])
-                                     | {int(k) if isinstance(k, str) else k
-                                        for npc in p["midnight_ints"].values()
-                                        for k in npc.get("per_player", {})})}
-            out += _build_midnight_interrupt_chips(
-                p["midnight_ints"], fchar, fc, pull_pids)
 
         if not p["deaths"] and not mts and not defs_p and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
