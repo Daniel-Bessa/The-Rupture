@@ -2841,6 +2841,14 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             row_lbl = fight.get("_row_label") or f"Split {fi}"
             t += _overview_row(row_lbl, fight)
             current_role = None
+            # Sort players by this fight's actual spec roles so separators land correctly
+            _fight_spec = fight.get("spec_roles", {})
+            def _fpsort(pid, _s=_fight_spec):
+                _cn  = actor_lookup.get(pid, {}).get("name", "")
+                _pn, _ = lookup_roster(_cn)
+                _r   = _s.get(pid) or PLAYER_ROLES.get(_pn, "DPS")
+                return (ROLE_ORDER.get(_r, 2), _pn.lower())
+            fight_pids = sorted(pids, key=_fpsort)
             # Pre-compute soak expected counts + event timelines for this fight
             _fight_mts_all   = fight.get("mechanic_timestamps", {})
             _fight_mechs_all = fight.get("mechanics_data", {})
@@ -2848,11 +2856,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             _soak_evt_times  = {}
             for _sm in mech_defs:
                 if _sm["type"] == "soak":
-                    _sm_counts  = [_fight_mechs_all.get(p, {}).get(_sm["label"], 0) for p in pids]
+                    _sm_counts  = [_fight_mechs_all.get(p, {}).get(_sm["label"], 0) for p in fight_pids]
                     _sm_nonzero = [c for c in _sm_counts if c > 0]
                     _soak_expected[_sm["label"]] = max(_sm_nonzero) if _sm_nonzero else 0
                     _sm_all_t = []
-                    for _sp in pids:
+                    for _sp in fight_pids:
                         _sp_mts = _fight_mts_all.get(_sp) or _fight_mts_all.get(str(_sp), {})
                         for _h in _sp_mts.get(_sm["label"], []):
                             if isinstance(_h, dict) and "t" in _h:
@@ -2867,7 +2875,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                         if not _sm_uniq or _st - _sm_uniq[-1] > 5:
                             _sm_uniq.append(_st)
                     _soak_evt_times[_sm["label"]] = _sm_uniq
-            for pid in pids:
+            for pid in fight_pids:
                 deaths_map = fight.get("deaths", {})
                 if pid not in fight.get("all_player_ids", set()) and pid not in deaths_map:
                     continue
@@ -3906,6 +3914,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         total_cols      = 8 + len(mech_defs) + (1 if has_interrupts else 0)
         table_id  = f"{id_prefix}-wipeonly-{boss_name_base.lower().replace(' ', '-').replace('&', 'and')}"
         total     = len(boss_wipes)
+
+        # Redefine pid_sort for this boss using its own wipe spec data
+        def pid_sort(pid, _wipes=boss_wipes):
+            char_name = actor_lookup.get(pid, {}).get("name", "")
+            pname, _  = lookup_roster(char_name)
+            spec_role = next(
+                (w.get("spec_roles", {}).get(pid) for w in _wipes if w.get("spec_roles", {}).get(pid)),
+                None)
+            role = spec_role or PLAYER_ROLES.get(pname, "DPS")
+            return (ROLE_ORDER.get(role, 2), pname.lower())
 
         for wi, w in enumerate(boss_wipes):
             bpct  = w.get("boss_pct", 0)
