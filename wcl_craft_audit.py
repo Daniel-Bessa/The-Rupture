@@ -6271,7 +6271,7 @@ table.prog-tbl td:last-child{{border-right:none}}
     print(f"[OK] Boss progression page saved: {output_path}")
 
 
-def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, guild_name: str = "") -> None:
+def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, guild_name: str = "", midnight_rotation: dict = None) -> None:
     """Generic Mythic boss progression page: Totals tab + per-pull tabs.
 
     Handles all Mythic bosses. Chimaerus also gets Alndust + Horror tables.
@@ -6563,7 +6563,60 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             t += _build_chimaerus_totals_extra()
         if IS_VANGUARD:
             t += _build_vanguard_death_table(pulls)
+        if IS_MIDNIGHT and midnight_rotation:
+            t += _build_midnight_kick_summary_totals()
         return t
+
+    def _build_midnight_kick_summary_totals():
+        """Kick actual/expected summary across all pulls for the boss progression page."""
+        _kick_actual:   dict = {}
+        _kick_expected: dict = {}
+        _all_assigned = {p for g in midnight_rotation.values() for p in g}
+        for p in pulls:
+            _mit = p.get("midnight_ints", {})
+            _cycles = build_midnight_kick_cycles(_mit, actor_lookup, midnight_rotation)
+            _n_cycles = len(_cycles)
+            # players present in this pull (by name)
+            _present_names = set()
+            for _pid in set(p.get("mts", [])) | set(p.get("defs", [])) | set(p.get("deaths", [])):
+                _cn = actor_lookup.get(_pid, {}).get("name", "")
+                if _cn:
+                    _present_names.add(_cn)
+            for _grp, _assigned in midnight_rotation.items():
+                for _pl in _assigned:
+                    if _pl in _present_names:
+                        _kick_expected[_pl] = _kick_expected.get(_pl, 0) + _n_cycles
+            for _cycle in _cycles:
+                for _grp_slots in _cycle["groups"].values():
+                    for _s in _grp_slots:
+                        if _s["status"] == "ok":
+                            _kick_actual[_s["actual"]] = _kick_actual.get(_s["actual"], 0) + 1
+
+        out = ('<div style="margin-top:24px">'
+               '<div style="color:#e6edf3;font-weight:600;font-size:15px;margin-bottom:12px">'
+               '&#9889; Kick Summary</div>'
+               '<div style="display:flex;gap:32px;flex-wrap:wrap">')
+        for _grp, _assigned in midnight_rotation.items():
+            out += f'<div><div style="color:#556;font-size:11px;margin-bottom:6px">{_grp}</div>'
+            out += '<table style="border-collapse:collapse;font-size:13px">'
+            for _pl in _assigned:
+                _act = _kick_actual.get(_pl, 0)
+                _exp = _kick_expected.get(_pl, 0)
+                _pct = _act / _exp * 100 if _exp else 100
+                _col = ("#4ec94e" if _pct >= 95 else "#e0b84e" if _pct >= 75 else "#e05252")
+                _bar_w = int(_pct * 80 / 100)
+                out += (f'<tr>'
+                        f'<td style="padding:3px 12px 3px 0;white-space:nowrap;color:#ccc">{_pl}</td>'
+                        f'<td style="padding:3px 0;white-space:nowrap">'
+                        f'<span style="color:{_col};font-weight:700">{_act}</span>'
+                        f'<span style="color:#444"> / {_exp}</span></td>'
+                        f'<td style="padding:3px 0 3px 10px">'
+                        f'<div style="width:80px;height:7px;background:#1a1a2e;border-radius:4px">'
+                        f'<div style="width:{_bar_w}px;height:7px;background:{_col};border-radius:4px"></div>'
+                        f'</div></td></tr>')
+            out += '</table></div>'
+        out += '</div></div>'
+        return out
 
     def _build_chimaerus_totals_extra():
         out = ""
@@ -6978,6 +7031,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
 
         if IS_VANGUARD and p["deaths"]:
             out += _build_vanguard_death_table([p])
+
+        if IS_MIDNIGHT and midnight_rotation and p.get("midnight_ints"):
+            _mid_cycles = build_midnight_kick_cycles(
+                p["midnight_ints"], actor_lookup, midnight_rotation)
+            out += render_midnight_rotation_html(_mid_cycles, midnight_rotation)
 
         if not p["deaths"] and not mts and not defs_p and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
@@ -9219,7 +9277,8 @@ def main():
     write_salhadaar_progression_html(days_data, "heroic/boss_salhadaar.html", guild_name=guild_name)
     for _bname, _bfile in _BOSS_DEDICATED_PAGES.items():
         if _bfile.startswith("mythic/"):
-            write_boss_mythic_html(days_data, _bname, _bfile, guild_name=guild_name)
+            write_boss_mythic_html(days_data, _bname, _bfile, guild_name=guild_name,
+                                   midnight_rotation=config.get("MIDNIGHT_ROTATION", {}))
     write_player_pages(days_data)
 
     # XLSX: most recent day only
