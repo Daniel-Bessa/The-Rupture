@@ -4149,6 +4149,56 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         )
         ov_tbl_id = f"ov-{table_id}"
         ov_html   = _build_mechanics_overview_pane(boss_wipes, all_ov_pids, tbl_id=ov_tbl_id)
+
+        # Midnight Falls: append kick aggregate summary to All Wipes pane
+        if "Midnight" in boss_name_base and midnight_rotation:
+            pid_to_name = {pid: a.get("name", "") for pid, a in actor_lookup.items()}
+            # actual kicks and expected cycles per player
+            _kick_actual:   dict = {}  # {char_name: int}
+            _kick_expected: dict = {}  # {char_name: int}
+            _all_assigned = {p for g in midnight_rotation.values() for p in g}
+            for _w in boss_wipes:
+                _cycles = build_midnight_kick_cycles(
+                    _w.get("midnight_int_targets", {}), actor_lookup, midnight_rotation)
+                _n_cycles = len(_cycles)
+                _present = {pid_to_name.get(p, "") for p in
+                            set(_w.get("all_player_ids", set())) | set(_w.get("deaths", {}).keys())}
+                for _grp, _assigned in midnight_rotation.items():
+                    for _p in _assigned:
+                        if _p in _present:
+                            _kick_expected[_p] = _kick_expected.get(_p, 0) + _n_cycles
+                for _cycle in _cycles:
+                    for _grp_slots in _cycle["groups"].values():
+                        for _s in _grp_slots:
+                            if _s["status"] == "ok":
+                                _kick_actual[_s["actual"]] = _kick_actual.get(_s["actual"], 0) + 1
+
+            # Build summary table
+            _ks = '<div style="margin:14px 0 4px"><span style="color:#8ab;font-size:13px;font-weight:600">&#9889; Kick Summary</span></div>'
+            _ks += '<div style="display:flex;gap:24px;flex-wrap:wrap">'
+            for _grp, _assigned in midnight_rotation.items():
+                _ks += f'<div><div style="color:#556;font-size:11px;margin-bottom:4px">{_grp}</div>'
+                _ks += '<table style="border-collapse:collapse;font-size:12px">'
+                for _p in _assigned:
+                    _act = _kick_actual.get(_p, 0)
+                    _exp = _kick_expected.get(_p, 0)
+                    _pct = _act / _exp * 100 if _exp else 100
+                    _col = ("#4ec94e" if _pct >= 95 else
+                            "#e0b84e" if _pct >= 75 else "#e05252")
+                    _bar_w = int(_pct * 60 / 100)
+                    _ks += (f'<tr><td style="padding:2px 8px 2px 0;white-space:nowrap">'
+                            f'<span style="color:#ccc">{_p}</span></td>'
+                            f'<td style="padding:2px 0;white-space:nowrap">'
+                            f'<span style="color:{_col};font-weight:600">{_act}</span>'
+                            f'<span style="color:#556"> / {_exp}</span></td>'
+                            f'<td style="padding:2px 0 2px 8px">'
+                            f'<div style="width:60px;height:6px;background:#1a1a2e;border-radius:3px">'
+                            f'<div style="width:{_bar_w}px;height:6px;background:{_col};border-radius:3px"></div>'
+                            f'</div></td></tr>')
+                _ks += '</table></div>'
+            _ks += '</div>'
+            ov_html += _ks
+
         pull_btns  = (f'<button class="pull-btn active" onclick="switchPull(this,\'{ov_tbl_id}\')">'
                       f'All Wipes</button>')
         wipe_panes = ""
