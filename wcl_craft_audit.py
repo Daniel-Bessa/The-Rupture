@@ -2705,7 +2705,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         char_name = actor_lookup.get(pid, {}).get("name", "")
         pname, _  = lookup_roster(char_name)
         if fight is not None:
-            spec_role = fight.get("spec_roles", {}).get(pid)
+            sr = fight.get("spec_roles", {})
+            spec_role = sr.get(pid) or sr.get(str(pid))
             if spec_role:
                 return spec_role
         return PLAYER_ROLES.get(pname, "DPS")
@@ -2846,7 +2847,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             def _fpsort(pid, _s=_fight_spec):
                 _cn  = actor_lookup.get(pid, {}).get("name", "")
                 _pn, _ = lookup_roster(_cn)
-                _r   = _s.get(pid) or PLAYER_ROLES.get(_pn, "DPS")
+                _r   = _s.get(pid) or _s.get(str(pid)) or PLAYER_ROLES.get(_pn, "DPS")
                 return (ROLE_ORDER.get(_r, 2), _pn.lower())
             fight_pids = sorted(pids, key=_fpsort)
             # Pre-compute soak expected counts + event timelines for this fight
@@ -3416,10 +3417,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         def pid_sort(pid):
             char_name = actor_lookup.get(pid, {}).get("name", "")
             pname, _  = lookup_roster(char_name)
-            # Use spec from first available fight for stable sort order
+            pid_key   = str(pid)
             all_fight_list = list(fights) + list(wipe_data.get(boss_name, []))
             spec_role = next(
-                (f.get("spec_roles", {}).get(pid) for f in all_fight_list if f.get("spec_roles", {}).get(pid)),
+                (f["spec_roles"].get(pid) or f["spec_roles"].get(pid_key)
+                 for f in all_fight_list if f.get("spec_roles") and
+                 (f["spec_roles"].get(pid) or f["spec_roles"].get(pid_key))),
                 None
             )
             role = spec_role or PLAYER_ROLES.get(pname, "DPS")
@@ -3919,8 +3922,11 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         def pid_sort(pid, _wipes=boss_wipes):
             char_name = actor_lookup.get(pid, {}).get("name", "")
             pname, _  = lookup_roster(char_name)
+            pid_key   = str(pid)
             spec_role = next(
-                (w.get("spec_roles", {}).get(pid) for w in _wipes if w.get("spec_roles", {}).get(pid)),
+                (w["spec_roles"].get(pid) or w["spec_roles"].get(pid_key)
+                 for w in _wipes if w.get("spec_roles") and
+                 (w["spec_roles"].get(pid) or w["spec_roles"].get(pid_key))),
                 None)
             role = spec_role or PLAYER_ROLES.get(pname, "DPS")
             return (ROLE_ORDER.get(role, 2), pname.lower())
