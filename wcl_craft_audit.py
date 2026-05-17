@@ -6298,6 +6298,12 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     def _dur(s): return f"{s//60}:{s%60:02d}"
 
     # ── Step 1: collect all pulls ─────────────────────────────────────────────
+    # Build a merged actor lookup across all days (used by kick rotation helpers)
+    actor_lookup: dict = {}
+    for _dd in days_data:
+        for _a in _dd.get("actors", []):
+            actor_lookup.setdefault(_a["id"], _a)
+
     pulls = []
     for day_data in sorted(days_data, key=lambda d: d["report_info"].get("startTime", 0)):
         rc = day_data["report_code"]
