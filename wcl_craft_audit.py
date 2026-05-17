@@ -3153,6 +3153,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             if val > 0:          return f"{val/1000:.0f}k"
             return "—"
 
+        # Pre-compute top-3 threshold per mechanic so only the worst offenders get red
+        _mech_top3: dict = {}
+        for _m in mech_defs:
+            _lbl = _m["label"]
+            _vals = sorted(
+                (pid_mech_totals.get(p, {}).get(_lbl, 0) for p in pid_mech_totals),
+                reverse=True
+            )
+            _mech_top3[_lbl] = _vals[2] if len(_vals) >= 3 else (_vals[-1] if _vals else 0)
+
         col_span    = 1 + 1 + len(mech_defs) + 2 + 1  # player + deaths + mechs + dmg + heal + pulls
         inner_id    = f"tbl-{tbl_id}" if tbl_id else "ov-tbl"
         dmg_ci      = 2 + len(mech_defs)
@@ -3264,10 +3274,16 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 lbl   = m["label"]
                 total = pid_mech_totals.get(pid, {}).get(lbl, 0)
                 if total > 0:
-                    bg  = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
-                    avg = total / n_wipes if n_wipes > 0 else 0
-                    t += (f'<td class="center" style="background:{bg}" data-val="{total}">{total}'
-                          f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
+                    avg       = total / n_wipes if n_wipes > 0 else 0
+                    threshold = _mech_top3.get(lbl, 0)
+                    in_top3   = threshold > 0 and total >= threshold
+                    if in_top3:
+                        bg = "#1A3D1A" if m["type"] == "soak" else "#5D1A1A"
+                        t += (f'<td class="center" style="background:{bg}" data-val="{total}">{total}'
+                              f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
+                    else:
+                        t += (f'<td class="center" data-val="{total}">{total}'
+                              f'<span style="color:#aaa;font-size:11px"> ({avg:.1f})</span></td>')
                 else:
                     t += '<td class="center" data-val="0">—</td>'
             # Dmg Done column
