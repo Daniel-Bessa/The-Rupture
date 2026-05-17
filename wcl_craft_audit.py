@@ -3104,13 +3104,14 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
         if not mech_defs or not boss_wipes_list:
             return ""
         boss_kills_list   = boss_kills_list or []
-        pid_mech_totals   = {}
-        pid_wipes_present = {}
-        pid_kills_present = {}
-        pid_death_totals  = {}
-        pid_dmg_totals    = {}
-        pid_heal_totals   = {}
-        for w in boss_wipes_list:
+        pid_mech_totals    = {}
+        pid_wipes_present  = {}
+        pid_kills_present  = {}
+        pid_death_totals   = {}
+        pid_dmg_totals     = {}
+        pid_heal_totals    = {}
+        pid_death_per_pull: dict = {}  # {pid: [(wipe_idx, boss_pct, death_list), ...]}
+        for wi, w in enumerate(boss_wipes_list, 1):
             mechs       = w.get("mechanics_data", {})
             deaths      = w.get("deaths", {})
             uptime_map  = w.get("uptime_map", {})
@@ -3120,7 +3121,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                             if p in actor_lookup}
             for p in pids_in_wipe:
                 pid_wipes_present[p] = pid_wipes_present.get(p, 0) + 1
-                pid_death_totals[p]  = pid_death_totals.get(p, 0) + len(deaths.get(p, []))
+                p_dlist = deaths.get(p, [])
+                pid_death_totals[p] = pid_death_totals.get(p, 0) + len(p_dlist)
+                if p_dlist:
+                    pid_death_per_pull.setdefault(p, []).append(
+                        (wi, w.get("boss_pct", 0), p_dlist)
+                    )
                 pid_dmg_totals[p]    = pid_dmg_totals.get(p, 0) + (
                     uptime_map.get(p, {}).get("total", 0)
                     if isinstance(uptime_map.get(p), dict) else 0)
@@ -3216,8 +3222,37 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             # Deaths column
             if n_deaths > 0:
                 d_avg = n_deaths / n_wipes if n_wipes > 0 else 0
-                t += (f'<td class="center death-h" style="background:#3a1a1a" data-val="{n_deaths}">{n_deaths}'
-                      f'<span style="color:#aaa;font-size:11px"> ({d_avg:.1f})</span></td>')
+                pull_death_info = pid_death_per_pull.get(pid, [])
+                if pull_death_info:
+                    parts = []
+                    for _wi, _bpct, _dlist in pull_death_info:
+                        for _d in _dlist:
+                            _tl = _d.get("timeline", [])
+                            block = (f"<b style='color:#e57373'>☠ {escape(_d['ability'])}</b>"
+                                     f" &nbsp;<span style='color:#888;font-size:11px'>"
+                                     f"Wipe {_wi} — {_bpct}% HP @ {escape(_d['time'])}</span>")
+                            if _tl:
+                                trows = []
+                                for tt in _tl:
+                                    _ik  = abs(tt["sec_before"]) < 0.05
+                                    _col = "#ff6b6b" if _ik else "#aaa"
+                                    _lbl = " ← killing blow" if _ik else f"-{tt['sec_before']:.1f}s"
+                                    trows.append(
+                                        f"<span style='color:{_col}'>{escape(tt['ability'])}: "
+                                        f"{escape(tt['amount_k'])} &nbsp;"
+                                        f"<span style='color:#666;font-size:11px'>{_lbl}</span></span>"
+                                    )
+                                block += "<br>" + "<br>".join(trows)
+                            parts.append(block)
+                    tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
+                    tip_attr = tip_html.replace("'", "&#39;")
+                    t += (f'<td class="center death-h" style="background:#3a1a1a;cursor:help"'
+                          f' data-val="{n_deaths}" data-htip=\'{tip_attr}\''
+                          f' onmouseenter="showHTip(this)" onmouseleave="hideHTip()">'
+                          f'{n_deaths}<span style="color:#aaa;font-size:11px"> ({d_avg:.1f})</span></td>')
+                else:
+                    t += (f'<td class="center death-h" style="background:#3a1a1a" data-val="{n_deaths}">{n_deaths}'
+                          f'<span style="color:#aaa;font-size:11px"> ({d_avg:.1f})</span></td>')
             else:
                 t += '<td class="center death-h" data-val="0">—</td>'
             for m in mech_defs:
