@@ -3228,23 +3228,28 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     for _wi, _bpct, _dlist in pull_death_info:
                         for _d in _dlist:
                             _tl = _d.get("timeline", [])
-                            block = (f"<b style='color:#e57373'>☠ {escape(_d['ability'])}</b>"
-                                     f" &nbsp;<span style='color:#888;font-size:11px'>"
-                                     f"Wipe {_wi} — {_bpct}% HP @ {escape(_d['time'])}</span>")
-                            if _tl:
-                                trows = []
-                                for tt in _tl:
-                                    _ik  = abs(tt["sec_before"]) < 0.05
-                                    _col = "#ff6b6b" if _ik else "#aaa"
-                                    _lbl = " ← killing blow" if _ik else f"-{tt['sec_before']:.1f}s"
-                                    trows.append(
-                                        f"<span style='color:{_col}'>{escape(tt['ability'])}: "
-                                        f"{escape(tt['amount_k'])} &nbsp;"
-                                        f"<span style='color:#666;font-size:11px'>{_lbl}</span></span>"
-                                    )
-                                block += "<br>" + "<br>".join(trows)
-                            parts.append(block)
-                    tip_html = ("<hr style='border-color:#333;margin:6px 0'>").join(parts)
+                            # Killing blow = timeline entry with sec_before ≈ 0; fallback to ability name
+                            _kb = next((tt for tt in _tl if abs(tt["sec_before"]) < 0.05), None)
+                            if _kb:
+                                _kill_str = f"{escape(_kb['ability'])} {escape(_kb['amount_k'])}"
+                            else:
+                                # Biggest hit in timeline as fallback
+                                def _parse_k(s):
+                                    try:
+                                        s = s.strip()
+                                        if s.endswith('M'): return float(s[:-1]) * 1000
+                                        if s.endswith('k'): return float(s[:-1])
+                                        return float(s)
+                                    except Exception:
+                                        return 0
+                                _biggest = max(_tl, key=lambda tt: _parse_k(tt.get("amount_k", "0")), default=None) if _tl else None
+                                _kill_str = (f"{escape(_biggest['ability'])} {escape(_biggest['amount_k'])}"
+                                             if _biggest else escape(_d['ability']))
+                            parts.append(
+                                f"<span style='color:#888'>Wipe {_wi} ({_bpct}% HP)</span>"
+                                f" <span style='color:#e57373'>{_kill_str}</span>"
+                            )
+                    tip_html = "<br>".join(parts)
                     tip_attr = tip_html.replace("'", "&#39;")
                     t += (f'<td class="center death-h" style="background:#3a1a1a;cursor:help"'
                           f' data-val="{n_deaths}" data-htip=\'{tip_attr}\''
