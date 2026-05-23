@@ -6534,7 +6534,8 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                 "waves":   fight.get("salhadaar_fracture_waves", []),
                 "alndust": alndust,
                 "horror":  horror,
-                "midnight_ints": fight.get("midnight_int_targets", {}),
+                "midnight_ints":  fight.get("midnight_int_targets", {}),
+                "lura_crystals":  fight.get("lura_crystals", []),
                 "_char": _char, "_player": _player, "_color": _color,
                 "_al": al,
             })
@@ -7227,6 +7228,9 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             _mid_cycles = build_midnight_kick_cycles(
                 p["midnight_ints"], actor_lookup, midnight_rotation)
             out += render_midnight_rotation_html(_mid_cycles, midnight_rotation)
+
+        if IS_MIDNIGHT and p.get("lura_crystals"):
+            out += render_lura_crystal_html(p["lura_crystals"])
 
         if not p["deaths"] and not mts and not defs_p and not p["waves"] and not p["alndust"] and not p["horror"]:
             out = '<p style="color:#556;padding:8px">No detailed data for this pull.</p>'
