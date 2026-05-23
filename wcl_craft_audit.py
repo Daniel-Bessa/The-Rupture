@@ -1890,6 +1890,187 @@ def analyze_gloom_soaks(debuff_events: list, player_pids: set,
     return result
 
 
+# ─── L'ura / Midnight Falls Crystal Mechanics ────────────────────────────────
+
+_LURA_GLIMMERING_DEBUFF_ID = 1253031   # Glimmering — applied to crystal carriers
+_LURA_CRYSTAL_CAST_ID      = 1253050   # Dawn Crystal — player interaction with crystal object
+
+
+def fetch_lura_crystal_events(token: str, report_code: str, fight_id: int) -> dict:
+    """Fetch Glimmering debuff (carrier assignment) + Dawn Crystal cast (pickup) events."""
+    debuff_q = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Debuffs,
+                fightIDs: [$fightID],
+                filterExpression: "ability.id = 1253031",
+                limit: 200
+            ) { data }
+        }}
+    }
+    """
+    cast_q = """
+    query ($code: String!, $fightID: Int!) {
+        reportData { report(code: $code) {
+            events(
+                dataType: Casts,
+                fightIDs: [$fightID],
+                filterExpression: "ability.id = 1253050",
+                limit: 50
+            ) { data }
+        }}
+    }
+    """
+    debuff_resp = query_wcl(token, debuff_q, {"code": report_code, "fightID": fight_id})
+    cast_resp   = query_wcl(token, cast_q,   {"code": report_code, "fightID": fight_id})
+    return {
+        "glimmering": debuff_resp["reportData"]["report"]["events"].get("data", []),
+        "pickups":    cast_resp["reportData"]["report"]["events"].get("data", []),
+    }
+
+
+def analyze_lura_crystals(crystal_events: dict, actor_lookup: dict,
+                           death_events_raw: list, fight_start_ms: int,
+                           fight_end_ms: int) -> list:
+    """
+    Build per-carrier crystal timeline from Glimmering debuff + Dawn Crystal cast events.
+
+    Returns list of dicts, one per player-segment:
+      player_id, player_name, assign_s, pickup_s, drop_s, drop_reason
+    """
+    def ts(ms):
+        return (ms - fight_start_ms) / 1000
+
+    # Pickup lookup: {player_id: sorted list of pickup times (s)}
+    pickup_times: dict = {}
+    for e in crystal_events.get("pickups", []):
+        pid = e.get("sourceID")
+        pickup_times.setdefault(pid, []).append(ts(e["timestamp"]))
+
+    # Death lookup: {player_id: sorted list of death times (s)}
+    death_times: dict = {}
+    for e in death_events_raw:
+        if e.get("type") == "death":
+            pid = e.get("targetID")
+            death_times.setdefault(pid, []).append(ts(e["timestamp"]))
+
+    # Group Glimmering debuff events by player
+    by_player: dict = {}
+    for e in crystal_events.get("glimmering", []):
+        pid = e.get("targetID")
+        by_player.setdefault(pid, []).append((ts(e["timestamp"]), e.get("type")))
+
+    result = []
+    for pid, events in sorted(by_player.items(), key=lambda x: min(t for t, _ in x[1])):
+        pname = actor_lookup.get(pid, {}).get("name", f"#{pid}")
+        sorted_events = sorted(events, key=lambda x: x[0])
+        assign_s = None
+        for t, etype in sorted_events:
+            if etype == "applydebuff":
+                assign_s = t
+            elif etype == "removedebuff" and assign_s is not None:
+                # Find closest pickup cast within 30s of assignment
+                pickup_s = None
+                for pt in sorted(pickup_times.get(pid, [])):
+                    if assign_s - 1 <= pt <= assign_s + 30:
+                        pickup_s = pt
+                        break
+                # Determine drop reason
+                drop_reason = "mechanic"
+                for dt in sorted(death_times.get(pid, [])):
+                    if abs(dt - t) < 2.0:
+                        drop_reason = "death"
+                        break
+                result.append({
+                    "player_id": pid, "player_name": pname,
+                    "assign_s": assign_s, "pickup_s": pickup_s,
+                    "drop_s": t, "drop_reason": drop_reason,
+                })
+                assign_s = None
+        # Open segment (no matching removedebuff before fight end)
+        if assign_s is not None:
+            pickup_s = None
+            for pt in sorted(pickup_times.get(pid, [])):
+                if assign_s - 1 <= pt <= assign_s + 30:
+                    pickup_s = pt
+                    break
+            result.append({
+                "player_id": pid, "player_name": pname,
+                "assign_s": assign_s, "pickup_s": pickup_s,
+                "drop_s": ts(fight_end_ms) if fight_end_ms > fight_start_ms else None,
+                "drop_reason": "end",
+            })
+    return result
+
+
+def render_lura_crystal_html(carriers: list) -> str:
+    """Render Dawn Crystal carrier assignment table for Midnight Falls."""
+    if not carriers:
+        return ""
+
+    # Check if any carrier is "non-standard" (picked up late or dropped early)
+    has_issues = any(
+        c.get("drop_reason") in ("death", "mechanic") or c.get("pickup_s") is None
+        for c in carriers if c.get("drop_reason") != "end" or c.get("assign_s", 999) > 40
+    )
+
+    out  = '<div style="margin:16px 0 4px">'
+    out += '<span style="color:#9ae;font-size:13px;font-weight:600">&#128142; Dawn Crystals</span>'
+    out += '</div>'
+    out += ('<table style="border-collapse:collapse;font-size:12px;min-width:420px">'
+            '<tr style="color:#556;font-size:11px">'
+            '<th style="text-align:left;padding:3px 10px 3px 0">Player</th>'
+            '<th style="text-align:right;padding:3px 8px">Assigned</th>'
+            '<th style="text-align:right;padding:3px 8px">Pickup</th>'
+            '<th style="text-align:right;padding:3px 8px">Dropped</th>'
+            '<th style="text-align:right;padding:3px 8px">Held</th>'
+            '</tr>')
+
+    for c in carriers:
+        pname     = c["player_name"]
+        assign_s  = c.get("assign_s")
+        pickup_s  = c.get("pickup_s")
+        drop_s    = c.get("drop_s")
+        reason    = c.get("drop_reason", "end")
+
+        a_str = f"{assign_s:.1f}s" if assign_s is not None else "—"
+
+        if pickup_s is not None:
+            p_str = f'<span style="color:#4c4">{pickup_s:.1f}s</span>'
+        elif assign_s is not None and (assign_s or 0) < 40:
+            # Assigned early (initial carrier) but no pickup cast seen — pre-assigned
+            p_str = '<span style="color:#556">pre-assigned</span>'
+        else:
+            p_str = '<span style="color:#c44">missed</span>'
+
+        if reason == "death":
+            d_str = f'<span style="color:#c44">{drop_s:.1f}s &#x2620;</span>'
+        elif reason == "end":
+            d_str = f'<span style="color:#556">{drop_s:.1f}s</span>' if drop_s else "—"
+        else:
+            d_str = f'<span style="color:#c84">{drop_s:.1f}s</span>' if drop_s else "—"
+
+        # Duration held: from pickup (or assign if no pickup) to drop
+        ref_start = pickup_s if pickup_s is not None else assign_s
+        if ref_start is not None and drop_s is not None:
+            dur = drop_s - ref_start
+            dur_str = f"{dur:.0f}s"
+        else:
+            dur_str = "—"
+
+        row_bg = "" if reason == "end" else ' style="background:#1a0a0a"'
+        out += (f'<tr{row_bg} style="border-top:1px solid #1a1a2e">'
+                f'<td style="padding:3px 10px 3px 0;color:#ccc">{pname}</td>'
+                f'<td style="padding:3px 8px;text-align:right;color:#888">{a_str}</td>'
+                f'<td style="padding:3px 8px;text-align:right">{p_str}</td>'
+                f'<td style="padding:3px 8px;text-align:right">{d_str}</td>'
+                f'<td style="padding:3px 8px;text-align:right;color:#888">{dur_str}</td>'
+                f'</tr>')
+    out += '</table>'
+    return out
+
+
 def fetch_void_marked_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch Void Marked (1280023) applydebuff + removedebuff events for an Averzian fight."""
     query = """
@@ -4098,10 +4279,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                     wipe_midnight_rotation = render_midnight_rotation_html(_mid_cycles, midnight_rotation)
                 else:
                     wipe_midnight_rotation = ""
+                wipe_crystal_html = (render_lura_crystal_html(w.get("lura_crystals", []))
+                                     if "Midnight" in boss_name else "")
                 wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                                f'{wipe_sal_wipe}{wipe_vorasius_swap}{wipe_banners}'
                                f'{wipe_table}{wipe_chart}{wipe_sal_interrupts}'
-                               f'{wipe_midnight_rotation}</div>')
+                               f'{wipe_midnight_rotation}{wipe_crystal_html}</div>')
 
             pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
             kill_pane     = f'<div class="pull-pane active" id="pane-{table_id}">{kill_content}</div>'
@@ -4226,10 +4409,12 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 wo_midnight_rotation = render_midnight_rotation_html(_mid_cycles, midnight_rotation)
             else:
                 wo_midnight_rotation = ""
+            wo_crystal_html = (render_lura_crystal_html(w.get("lura_crystals", []))
+                               if "Midnight" in boss_name_base else "")
             wipe_panes += (f'<div class="pull-pane" id="pane-{wtbl_id}">'
                            f'{wo_sal_wipe}{wo_vorasius_swap}{wipe_banners}'
                            f'{wipe_table}{wipe_chart}{crown_html}{wo_sal_interrupts}'
-                           f'{wo_midnight_rotation}</div>')
+                           f'{wo_midnight_rotation}{wo_crystal_html}</div>')
 
         ov_pane       = f'<div class="pull-pane active" id="pane-{ov_tbl_id}">{ov_html}</div>'
         pull_selector = f'<div class="pull-selector">{pull_btns}</div>'
@@ -8902,6 +9087,13 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 interrupt_events, actor_lookup, fight_start,
                 ability_names=ability_names, npc_lookup=npc_lookup)
                 if "Midnight" in fname else {})
+            if "Midnight" in fname:
+                _crystal_raw = fetch_lura_crystal_events(token, report_code, fid)
+                lura_crystals = analyze_lura_crystals(
+                    _crystal_raw, actor_lookup, death_events,
+                    fight_start, fight_start + fight_dur_ms)
+            else:
+                lura_crystals = []
             boss_data.setdefault(boss_key, []).append({
                 "fight_id": fid, "fight_dur_ms": fight_dur_ms, "split_num": split_num,
                 "deaths": deaths, "all_player_ids": all_pids,
@@ -8923,6 +9115,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 "salhadaar_fracture_waves": salhadaar_fracture_waves,
                 "salhadaar_wipe_events":    salhadaar_wipe_events,
                 "midnight_int_targets":     midnight_int_targets,
+                "lura_crystals":            lura_crystals,
             })
             print(f"  [OK] {fname} (Split {split_num}): {len(deaths)} death(s), {sum(v['count'] for v in interrupts.values())} interrupts.")
         except Exception as e:
@@ -9030,6 +9223,13 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                     interrupt_events, actor_lookup, fight_start,
                     ability_names=ability_names, npc_lookup=npc_lookup)
                     if "Midnight" in fname else {})
+                if "Midnight" in fname:
+                    _w_crystal_raw = fetch_lura_crystal_events(token, report_code, fid)
+                    w_lura_crystals = analyze_lura_crystals(
+                        _w_crystal_raw, actor_lookup, death_events,
+                        fight_start, fight.get("endTime", fight_start + fight_dur_ms))
+                else:
+                    w_lura_crystals = []
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
                     "wipe_num": wipe_num, "boss_pct": boss_pct,
@@ -9048,6 +9248,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                     "salhadaar_fracture_waves": w_sal_fracture_waves,
                     "salhadaar_wipe_events":    w_sal_wipe_events,
                     "midnight_int_targets":     w_midnight_int_targets,
+                    "lura_crystals":            w_lura_crystals,
                 })
                 dur_s = fight_dur_ms // 1000
                 print(f"  [OK] {fname} Wipe {wipe_num} ({boss_pct}% boss HP, {dur_s//60}:{dur_s%60:02d}): {len(deaths)} death(s).")
