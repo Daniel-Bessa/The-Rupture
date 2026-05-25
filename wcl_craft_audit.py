@@ -2159,6 +2159,154 @@ def render_lura_crystal_html(carriers: list) -> str:
     return out
 
 
+def detect_wipe_cause(pull: dict, boss_name_base: str) -> dict | None:
+    """Analyse a single wipe pull and return the most likely cause.
+    Returns:
+      {"issue": str, "mts_label": str|None, "deaths_list": [(name, time)], "fault": str|None}
+    or None for kills or undetectable wipes.
+    """
+    if pull.get("is_kill"):
+        return None
+
+    deaths = pull.get("deaths", {})
+    fn = pull["_player"]
+
+    by_ability: dict = {}
+    for pid, dlist in deaths.items():
+        pname = fn(pid)
+        for d in dlist:
+            by_ability.setdefault(d["ability"], []).append((pname, d["time"]))
+
+    if not by_ability:
+        return None
+
+    if "Midnight" in boss_name_base:
+        crystals      = pull.get("lura_crystals", [])
+        dead_carriers = [c for c in crystals if c.get("drop_reason") == "death"]
+
+        naaru = by_ability.get("Naaru's Lament", [])
+        if len(naaru) >= 2:
+            fault = dead_carriers[0]["player_name"] if dead_carriers else "Crystal carrier hit (no soak)"
+            return {"issue": "Naaru's Lament (soak fail)", "mts_label": None,
+                    "deaths_list": naaru, "fault": fault}
+
+        radiance = by_ability.get("Radiance", [])
+        if dead_carriers and radiance:
+            return {"issue": "Crystal dropped → Radiance", "mts_label": None,
+                    "deaths_list": radiance, "fault": dead_carriers[0]["player_name"]}
+
+        exterminate = by_ability.get("Exterminate", [])
+        if len(exterminate) >= 2:
+            return {"issue": "Missed Kick (Exterminate)", "mts_label": None,
+                    "deaths_list": exterminate, "fault": "Kick rotation"}
+
+        lights_end = by_ability.get("Light's End", [])
+        if len(lights_end) >= 2:
+            return {"issue": "Light’s End", "mts_label": "Light's End",
+                    "deaths_list": lights_end, "fault": None}
+
+    # Generic: most frequent killing ability
+    top_ability, top_deaths = max(by_ability.items(), key=lambda x: len(x[1]))
+    mts_label = top_ability if any(
+        top_ability in pl for pl in pull["mts"].values()) else None
+    return {"issue": top_ability, "mts_label": mts_label,
+            "deaths_list": top_deaths, "fault": None}
+
+
+def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
+    """Render a Wipe Log summary table for the boss progression page.
+    Columns: Pull | Dur | HP% | Wipe Issue | Damage | Deaths | Fault
+    """
+    def _fdmg(v):
+        if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
+        if v >= 1_000:     return f"{v/1_000:.1f}k"
+        return str(v) if v else "—"
+
+    def _dur(s): return f"{s//60}:{s%60:02d}"
+
+    wipes = [p for p in pulls if not p["is_kill"]]
+    if not wipes:
+        return '<p style="color:#556;padding:8px">No wipe data recorded.</p>'
+
+    rows = ""
+    for p in wipes:
+        cause    = detect_wipe_cause(p, boss_name_base)
+        pull_num = p["pull_num"]
+        dur_str  = _dur(p["dur_s"])
+        hp_str   = f"{p['boss_pct']:.0f}%"
+
+        if cause:
+            iss = cause["issue"]
+            if "kick" in iss.lower() or "exterminate" in iss.lower():
+                iss_col = "#d29922"
+            elif "crystal" in iss.lower() or "radiance" in iss.lower():
+                iss_col = "#e3a02e"
+            elif "naaru" in iss.lower():
+                iss_col = "#a371f7"
+            else:
+                iss_col = "#e05252"
+        else:
+            iss, iss_col = "—", "#556"
+
+        # Damage from mts if we have a label
+        dmg_str = "—"
+        if cause and cause.get("mts_label"):
+            total_dmg = sum(
+                h.get("dmg", 0)
+                for pl in p["mts"].values()
+                for h in pl.get(cause["mts_label"], [])
+            )
+            if total_dmg:
+                dmg_str = _fdmg(total_dmg)
+
+        # Deaths cell with tooltip
+        if cause and cause["deaths_list"]:
+            dc       = len(cause["deaths_list"])
+            tip      = "&#10;".join(
+                f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
+            d_cell   = (f'<td style="text-align:center;padding:4px 10px">'
+                        f'<span style="color:#e05252;font-weight:700;cursor:default"'
+                        f' title="{tip}">{dc}</span></td>')
+        else:
+            d_cell = '<td style="text-align:center;padding:4px 10px;color:#556">—</td>'
+
+        fault_text  = escape(cause["fault"]) if cause and cause.get("fault") else "—"
+        fault_color = "#e3a02e" if fault_text != "—" else "#556"
+
+        rows += (
+            f'<tr style="border-bottom:1px solid #21262d">'
+            f'<td style="padding:5px 10px;white-space:nowrap;color:#aaa">#{pull_num}</td>'
+            f'<td style="padding:5px 10px;text-align:center;color:#667;white-space:nowrap">{dur_str}</td>'
+            f'<td style="padding:5px 10px;text-align:center;color:#667">{hp_str}</td>'
+            f'<td style="padding:5px 10px;white-space:nowrap">'
+            f'<span style="color:{iss_col};font-weight:600">{escape(iss)}</span></td>'
+            f'<td style="padding:5px 10px;text-align:center;color:#667">{dmg_str}</td>'
+            f'{d_cell}'
+            f'<td style="padding:5px 10px;white-space:nowrap">'
+            f'<span style="color:{fault_color}">{fault_text}</span></td>'
+            f'</tr>'
+        )
+
+    th = ('background:#161b22;padding:6px 10px;color:#8b949e;'
+          'border-bottom:2px solid #21262d;font-weight:600;font-size:12px;'
+          'text-align:{align};white-space:nowrap')
+    out  = ('<div style="margin-bottom:12px">'
+            '<span style="color:#8b949e;font-size:14px;font-weight:700">Wipe Log</span>'
+            '<span style="color:#556;font-size:12px;margin-left:10px">'
+            'hover Deaths column for player names</span></div>')
+    out += ('<div style="overflow-x:auto">'
+            '<table style="font-size:13px;border-collapse:collapse;width:100%"><thead><tr>'
+            f'<th style="{th.format(align="left")}">Pull</th>'
+            f'<th style="{th.format(align="center")}">Dur</th>'
+            f'<th style="{th.format(align="center")}">HP%</th>'
+            f'<th style="{th.format(align="left")}">Wipe Issue</th>'
+            f'<th style="{th.format(align="center")}">Damage</th>'
+            f'<th style="{th.format(align="center")}">Deaths</th>'
+            f'<th style="{th.format(align="left")}">Fault</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div>')
+    return out
+
+
 def fetch_void_marked_events(token: str, report_code: str, fight_id: int) -> list:
     """Fetch Void Marked (1280023) applydebuff + removedebuff events for an Averzian fight."""
     query = """
