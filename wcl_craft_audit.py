@@ -7476,17 +7476,22 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     tab_btns   = '<button class="tab-btn active" onclick="salTab(0,this)" style="--tc:#c9d1d9">Totals</button>'
     tab_panels = f'<div class="tab-panel active" id="sal-tab-0">{_build_totals()}</div>'
 
+    # Wipe Log tab at index 1
+    _wl_html    = render_wipe_log_html(pulls, _boss_name_base)
+    tab_btns   += '<button class="tab-btn" onclick="salTab(1,this)" style="--tc:#8b949e">Wipe Log</button>'
+    tab_panels += f'<div class="tab-panel" id="sal-tab-1">{_wl_html}</div>'
+
     for i, p in enumerate(pulls):
         lbl       = _pull_label(p)
         btn_color = "#3fb950" if p["is_kill"] else "#e05252"
-        tab_btns  += (f'<button class="tab-btn" onclick="salTab({i+1},this)" '
+        tab_btns  += (f'<button class="tab-btn" onclick="salTab({i+2},this)" '
                       f'style="--tc:{btn_color}">#{p["pull_num"]} {_esc(lbl)}</button>')
         hdr = (f'<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap">'
                f'<span style="color:{btn_color};font-size:16px;font-weight:700">Pull #{p["pull_num"]}</span>'
                f'<span style="color:#aaa">{_esc(lbl)}</span>'
                f'<a href="{_esc(_wcl(p))}" target="_blank" style="color:#6e9fcc;font-size:13px">WCL \u2197</a>'
                f'</div>')
-        tab_panels += (f'<div class="tab-panel" id="sal-tab-{i+1}">'
+        tab_panels += (f'<div class="tab-panel" id="sal-tab-{i+2}">'
                        f'{hdr}{_build_pull_tab(p)}</div>')
 
     n_kills = sum(1 for p in pulls if p["is_kill"])
