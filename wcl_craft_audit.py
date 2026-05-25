@@ -9488,6 +9488,9 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 deaths           = analyze_deaths(death_events, fight_start, ability_names,
                                                   fight_end_ms=fight_dur_ms, damage_events=damage_events,
                                                   death_threshold=death_threshold)
+                deaths_all       = analyze_deaths(death_events, fight_start, ability_names,
+                                                  fight_end_ms=fight_dur_ms, damage_events=damage_events,
+                                                  death_threshold=999)
                 avoidable        = analyze_avoidable_damage(damage_events, actor_lookup, fight_start,
                                                             ability_names, player_max_hp, player_roles_map)
                 dmg_taken        = aggregate_damage_taken(damage_events, actor_lookup)
@@ -9576,7 +9579,7 @@ def process_report(token: str, report_code: str, fight_input: str = "all", death
                 wipe_data.setdefault(boss_key, []).append({
                     "fight_id": fid, "fight_dur_ms": fight_dur_ms,
                     "wipe_num": wipe_num, "boss_pct": boss_pct,
-                    "deaths": deaths, "all_player_ids": all_pids,
+                    "deaths": deaths, "deaths_all": deaths_all, "all_player_ids": all_pids,
                     "avoidable_damage": avoidable, "dmg_taken": dmg_taken,
                     "uptime_map": uptime_map, "healing_map": healing_map,
                     "rankings_map": {},  # wipes have no rankings
