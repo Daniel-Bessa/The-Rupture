@@ -2004,70 +2004,160 @@ def analyze_lura_crystals(crystal_events: dict, actor_lookup: dict,
     return result
 
 
+def group_crystals_by_chain(carriers: list) -> list:
+    """
+    Group flat carrier segments into per-crystal chains.
+
+    Each initial crystal carrier produces two segments (pre-pickup assignment +
+    active-hold phase). This function:
+      1. Merges consecutive same-player segments for the same crystal into one holder.
+      2. Chains holders by matching drop_s → next assign_s (within LINK_WINDOW).
+
+    Returns a list of chains sorted by initial assignment time (Crystal 1, 2, 3…).
+    Each chain is a list of holder dicts:
+        player_name, assign_s, pickup_s, drop_s, drop_reason
+    where pickup_s = time the second Glimmering applydebuff fired (confirmed holding).
+    """
+    if not carriers:
+        return []
+
+    # Group by player, sort each player's segments by assign_s
+    by_player: dict = {}
+    for seg in carriers:
+        by_player.setdefault(seg["player_name"], []).append(seg)
+
+    # Merge back-to-back same-player segments (pre-pickup phase → active-hold phase).
+    # The gap between drop_s of phase-1 and assign_s of phase-2 is typically 3–6s.
+    MERGE_WINDOW = 12.0
+    merged: list = []
+    for pname, psegs in by_player.items():
+        psegs_sorted = sorted(psegs, key=lambda s: s.get("assign_s") or 0)
+        i = 0
+        while i < len(psegs_sorted):
+            s   = psegs_sorted[i]
+            nxt = psegs_sorted[i + 1] if i + 1 < len(psegs_sorted) else None
+            if (nxt
+                    and (nxt.get("assign_s") or 0) - (s.get("drop_s") or 0) < MERGE_WINDOW):
+                merged.append({
+                    "player_name": pname,
+                    "player_id":   s.get("player_id"),
+                    "assign_s":    s["assign_s"],
+                    "pickup_s":    nxt.get("assign_s"),   # second applydebuff = confirmed holding
+                    "drop_s":      nxt["drop_s"],
+                    "drop_reason": nxt["drop_reason"],
+                })
+                i += 2
+            else:
+                merged.append(dict(s))
+                i += 1
+
+    merged.sort(key=lambda m: m.get("assign_s") or 0)
+
+    # Initial holders: assigned before the crystals physically spawn (~t<40s)
+    SPAWN_THRESHOLD = 40.0
+    initial   = [m for m in merged if (m.get("assign_s") or 0) < SPAWN_THRESHOLD]
+    remaining = [m for m in merged if m not in initial]
+
+    if not initial:
+        return [[m] for m in merged]
+
+    chains = [[m] for m in sorted(initial, key=lambda m: m.get("assign_s") or 0)]
+
+    # Attach subsequent holders: assign_s should be within LINK_WINDOW after the
+    # chain's last holder's drop_s.  Resolve ties toward the chain that ended most
+    # recently (smallest positive gap).
+    LINK_WINDOW = 8.0
+    for _ in range(len(remaining) + 1):
+        unmatched: list = []
+        for seg in remaining:
+            best_chain, best_gap = None, float("inf")
+            for chain in chains:
+                last_drop = chain[-1].get("drop_s")
+                if last_drop is not None:
+                    gap = (seg.get("assign_s") or 0) - last_drop
+                    if -1.0 <= gap <= LINK_WINDOW and gap < best_gap:
+                        best_chain, best_gap = chain, gap
+            if best_chain is not None:
+                best_chain.append(seg)
+            else:
+                unmatched.append(seg)
+        remaining = unmatched
+        if not remaining:
+            break
+
+    for seg in remaining:
+        chains.append([seg])
+
+    return chains
+
+
 def render_lura_crystal_html(carriers: list) -> str:
-    """Render Dawn Crystal carrier assignment table for Midnight Falls."""
+    """Render Dawn Crystal carrier chains for Midnight Falls.
+    Groups by crystal (analogous to kick rotation by team):
+      Crystal 1: [Holder A  47s→76s] ➤ [Holder B  76s→end]
+      Crystal 2: [Holder C  51s→74s ☠] ➤ [Holder D  74s→80s]
+    """
     if not carriers:
         return ""
 
-    # Check if any carrier is "non-standard" (picked up late or dropped early)
-    has_issues = any(
-        c.get("drop_reason") in ("death", "mechanic") or c.get("pickup_s") is None
-        for c in carriers if c.get("drop_reason") != "end" or c.get("assign_s", 999) > 40
-    )
+    chains = group_crystals_by_chain(carriers)
+    if not chains:
+        return ""
 
     out  = '<div style="margin:16px 0 4px">'
     out += '<span style="color:#9ae;font-size:13px;font-weight:600">&#128142; Dawn Crystals</span>'
     out += '</div>'
-    out += ('<table style="border-collapse:collapse;font-size:12px;min-width:420px">'
-            '<tr style="color:#556;font-size:11px">'
-            '<th style="text-align:left;padding:3px 10px 3px 0">Player</th>'
-            '<th style="text-align:right;padding:3px 8px">Assigned</th>'
-            '<th style="text-align:right;padding:3px 8px">Pickup</th>'
-            '<th style="text-align:right;padding:3px 8px">Dropped</th>'
-            '<th style="text-align:right;padding:3px 8px">Held</th>'
-            '</tr>')
+    out += '<div style="display:grid;gap:5px;margin-bottom:8px">'
 
-    for c in carriers:
-        pname     = c["player_name"]
-        assign_s  = c.get("assign_s")
-        pickup_s  = c.get("pickup_s")
-        drop_s    = c.get("drop_s")
-        reason    = c.get("drop_reason", "end")
+    for ci, chain in enumerate(chains, 1):
+        out += '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">'
+        out += (f'<span style="color:#556;font-size:10px;min-width:55px;'
+                f'text-align:right;padding-right:6px;white-space:nowrap">Crystal {ci}</span>')
 
-        a_str = f"{assign_s:.1f}s" if assign_s is not None else "—"
+        for hi, holder in enumerate(chain):
+            if hi > 0:
+                out += '<span style="color:#445;font-size:13px;padding:0 2px">&#10145;</span>'
 
-        if pickup_s is not None:
-            p_str = f'<span style="color:#4c4">{pickup_s:.1f}s</span>'
-        elif assign_s is not None and (assign_s or 0) < 40:
-            # Assigned early (initial carrier) but no pickup cast seen — pre-assigned
-            p_str = '<span style="color:#556">pre-assigned</span>'
-        else:
-            p_str = '<span style="color:#c44">missed</span>'
+            pname    = holder["player_name"]
+            assign_s = holder.get("assign_s")
+            pickup_s = holder.get("pickup_s")   # confirmed-holding time (second applydebuff)
+            drop_s   = holder.get("drop_s")
+            reason   = holder.get("drop_reason", "end")
 
-        if reason == "death":
-            d_str = f'<span style="color:#c44">{drop_s:.1f}s &#x2620;</span>'
-        elif reason == "end":
-            d_str = f'<span style="color:#556">{drop_s:.1f}s</span>' if drop_s else "—"
-        else:
-            d_str = f'<span style="color:#c84">{drop_s:.1f}s</span>' if drop_s else "—"
+            if reason == "death":
+                bg, border, suffix = "#1e0808", "#5a1a1a", " &#x2620;"
+            elif reason == "end":
+                bg, border, suffix = "#0a160a", "#1a3a1a", ""
+            else:
+                bg, border, suffix = "#17160a", "#38361a", ""
 
-        # Duration held: from pickup (or assign if no pickup) to drop
-        ref_start = pickup_s if pickup_s is not None else assign_s
-        if ref_start is not None and drop_s is not None:
-            dur = drop_s - ref_start
-            dur_str = f"{dur:.0f}s"
-        else:
-            dur_str = "—"
+            # Primary time ref: pickup_s if available, else assign_s
+            hold_start = pickup_s if pickup_s is not None else assign_s
+            dur_str = ""
+            if hold_start is not None and drop_s is not None:
+                dur = drop_s - hold_start
+                dur_str = f" ({dur:.0f}s)"
 
-        row_bg = "" if reason == "end" else ' style="background:#1a0a0a"'
-        out += (f'<tr{row_bg} style="border-top:1px solid #1a1a2e">'
-                f'<td style="padding:3px 10px 3px 0;color:#ccc">{pname}</td>'
-                f'<td style="padding:3px 8px;text-align:right;color:#888">{a_str}</td>'
-                f'<td style="padding:3px 8px;text-align:right">{p_str}</td>'
-                f'<td style="padding:3px 8px;text-align:right">{d_str}</td>'
-                f'<td style="padding:3px 8px;text-align:right;color:#888">{dur_str}</td>'
-                f'</tr>')
-    out += '</table>'
+            time_line = ""
+            if hold_start is not None:
+                hs_col = "#4c4" if pickup_s is not None else "#667"
+                time_line += f'<span style="color:{hs_col}">{hold_start:.0f}s</span>'
+            if drop_s is not None:
+                d_col = "#c44" if reason == "death" else ("#c84" if reason == "mechanic" else "#445")
+                time_line += f'<span style="color:#445">→</span><span style="color:{d_col}">{drop_s:.0f}s</span>'
+
+            out += (f'<div style="background:{bg};border:1px solid {border};'
+                    f'border-radius:4px;padding:3px 8px;font-size:11px;line-height:1.5">'
+                    f'<div style="color:#ccc;font-weight:600;white-space:nowrap">'
+                    f'{pname}{suffix}</div>')
+            if time_line:
+                out += (f'<div style="font-size:10px;color:#667;white-space:nowrap">'
+                        f'{time_line}<span style="color:#445">{dur_str}</span></div>')
+            out += '</div>'
+
+        out += '</div>'  # crystal row
+
+    out += '</div>'
     return out
 
 
