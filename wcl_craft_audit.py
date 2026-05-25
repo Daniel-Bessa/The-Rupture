@@ -2189,7 +2189,7 @@ def detect_wipe_cause(pull: dict, boss_name_base: str, name_fn=None) -> dict | N
         naaru = by_ability.get("Naaru's Lament", [])  # U+2019 curly quote from WCL
         if len(naaru) >= 2:
             fault = dead_carriers[0]["player_name"] if dead_carriers else "Crystal carrier hit (no soak)"
-            return {"issue": "Naaru’s Lament (soak fail)", "mts_label": None,
+            return {"issue": "Naaru's Lament (soak fail)", "mts_label": None,
                     "deaths_list": naaru, "fault": fault}
 
         radiance = by_ability.get("Radiance", [])
@@ -2202,9 +2202,9 @@ def detect_wipe_cause(pull: dict, boss_name_base: str, name_fn=None) -> dict | N
             return {"issue": "Missed Kick (Terminate)", "mts_label": None,
                     "deaths_list": terminate, "fault": "Kick rotation"}
 
-        lights_end = by_ability.get("Light’s End", [])
+        lights_end = by_ability.get("Light's End", [])
         if len(lights_end) >= 2:
-            return {"issue": "Light’s End", "mts_label": "Light’s End",
+            return {"issue": "Light's End", "mts_label": "Light's End",
                     "deaths_list": lights_end, "fault": None}
 
     # Generic: most frequent killing ability
