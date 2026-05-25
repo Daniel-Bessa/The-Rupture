@@ -2186,7 +2186,7 @@ def detect_wipe_cause(pull: dict, boss_name_base: str, name_fn=None) -> dict | N
         crystals      = pull.get("lura_crystals", [])
         dead_carriers = [c for c in crystals if c.get("drop_reason") == "death"]
 
-        naaru = by_ability.get("Naaru’s Lament", [])  # U+2019 curly quote from WCL
+        naaru = by_ability.get("Naaru's Lament", [])  # U+2019 curly quote from WCL
         if len(naaru) >= 2:
             fault = dead_carriers[0]["player_name"] if dead_carriers else "Crystal carrier hit (no soak)"
             return {"issue": "Naaru’s Lament (soak fail)", "mts_label": None,
