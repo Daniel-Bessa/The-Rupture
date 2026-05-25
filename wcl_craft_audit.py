@@ -2159,8 +2159,10 @@ def render_lura_crystal_html(carriers: list) -> str:
     return out
 
 
-def detect_wipe_cause(pull: dict, boss_name_base: str) -> dict | None:
+def detect_wipe_cause(pull: dict, boss_name_base: str, name_fn=None) -> dict | None:
     """Analyse a single wipe pull and return the most likely cause.
+    Works with both processed pull dicts (write_boss_mythic_html) and raw fight dicts
+    (_build_boss_html) when name_fn is provided.
     Returns:
       {"issue": str, "mts_label": str|None, "deaths_list": [(name, time)], "fault": str|None}
     or None for kills or undetectable wipes.
@@ -2169,7 +2171,7 @@ def detect_wipe_cause(pull: dict, boss_name_base: str) -> dict | None:
         return None
 
     deaths = pull.get("deaths", {})
-    fn = pull["_player"]
+    fn = name_fn if name_fn is not None else pull.get("_player", lambda pid: f"#{pid}")
 
     by_ability: dict = {}
     for pid, dlist in deaths.items():
@@ -2184,10 +2186,10 @@ def detect_wipe_cause(pull: dict, boss_name_base: str) -> dict | None:
         crystals      = pull.get("lura_crystals", [])
         dead_carriers = [c for c in crystals if c.get("drop_reason") == "death"]
 
-        naaru = by_ability.get("Naaru's Lament", [])
+        naaru = by_ability.get("Naaru’s Lament", [])  # U+2019 curly quote from WCL
         if len(naaru) >= 2:
             fault = dead_carriers[0]["player_name"] if dead_carriers else "Crystal carrier hit (no soak)"
-            return {"issue": "Naaru's Lament (soak fail)", "mts_label": None,
+            return {"issue": "Naaru’s Lament (soak fail)", "mts_label": None,
                     "deaths_list": naaru, "fault": fault}
 
         radiance = by_ability.get("Radiance", [])
@@ -2195,20 +2197,20 @@ def detect_wipe_cause(pull: dict, boss_name_base: str) -> dict | None:
             return {"issue": "Crystal dropped → Radiance", "mts_label": None,
                     "deaths_list": radiance, "fault": dead_carriers[0]["player_name"]}
 
-        exterminate = by_ability.get("Exterminate", [])
-        if len(exterminate) >= 2:
-            return {"issue": "Missed Kick (Exterminate)", "mts_label": None,
-                    "deaths_list": exterminate, "fault": "Kick rotation"}
+        terminate = by_ability.get("Terminate", [])
+        if len(terminate) >= 2:
+            return {"issue": "Missed Kick (Terminate)", "mts_label": None,
+                    "deaths_list": terminate, "fault": "Kick rotation"}
 
-        lights_end = by_ability.get("Light's End", [])
+        lights_end = by_ability.get("Light’s End", [])
         if len(lights_end) >= 2:
-            return {"issue": "Light’s End", "mts_label": "Light's End",
+            return {"issue": "Light’s End", "mts_label": "Light’s End",
                     "deaths_list": lights_end, "fault": None}
 
     # Generic: most frequent killing ability
     top_ability, top_deaths = max(by_ability.items(), key=lambda x: len(x[1]))
-    mts_label = top_ability if any(
-        top_ability in pl for pl in pull["mts"].values()) else None
+    mts = pull.get("mts") or pull.get("mechanic_timestamps", {})
+    mts_label = top_ability if any(top_ability in pl for pl in mts.values()) else None
     return {"issue": top_ability, "mts_label": mts_label,
             "deaths_list": top_deaths, "fault": None}
 
@@ -2237,7 +2239,7 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
 
         if cause:
             iss = cause["issue"]
-            if "kick" in iss.lower() or "exterminate" in iss.lower():
+            if "kick" in iss.lower() or "terminate" in iss.lower():
                 iss_col = "#d29922"
             elif "crystal" in iss.lower() or "radiance" in iss.lower():
                 iss_col = "#e3a02e"
@@ -2300,6 +2302,99 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
             f'<th style="{th.format(align="center")}">Dur</th>'
             f'<th style="{th.format(align="center")}">HP%</th>'
             f'<th style="{th.format(align="left")}">Wipe Issue</th>'
+            f'<th style="{th.format(align="center")}">Damage</th>'
+            f'<th style="{th.format(align="center")}">Deaths</th>'
+            f'<th style="{th.format(align="left")}">Fault</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div>')
+    return out
+
+
+def render_raid_wipe_log_html(wipes: list, boss_name_base: str, actor_lookup: dict) -> str:
+    """Render a compact Wipe Log table for the All Wipes pane in per-report raid pages.
+    Works with raw fight dicts from _build_boss_html context.
+    """
+    if not wipes:
+        return ""
+
+    def _fdmg(v):
+        if v >= 1_000_000: return f"{v/1_000_000:.2f}M"
+        if v >= 1_000:     return f"{v/1_000:.1f}k"
+        return str(v) if v else "—"
+
+    def _dur(s): return f"{s//60}:{s%60:02d}"
+
+    def _name(pid):
+        return actor_lookup.get(int(pid), {}).get("name", f"#{pid}")
+
+    rows = ""
+    for wi, w in enumerate(wipes, 1):
+        cause   = detect_wipe_cause(w, boss_name_base, name_fn=_name)
+        dur_str = _dur(w.get("fight_dur_ms", 0) // 1000)
+        hp_str  = f"{w.get('boss_pct', 0):.0f}%"
+
+        if cause:
+            iss = cause["issue"]
+            if "kick" in iss.lower() or "terminate" in iss.lower():
+                iss_col = "#d29922"
+            elif "crystal" in iss.lower() or "radiance" in iss.lower():
+                iss_col = "#e3a02e"
+            elif "naaru" in iss.lower():
+                iss_col = "#a371f7"
+            else:
+                iss_col = "#e05252"
+        else:
+            iss, iss_col = "—", "#556"
+
+        dmg_str = "—"
+        if cause and cause.get("mts_label"):
+            total_dmg = sum(
+                h.get("dmg", 0)
+                for pl in w.get("mechanic_timestamps", {}).values()
+                for h in pl.get(cause["mts_label"], [])
+            )
+            if total_dmg:
+                dmg_str = _fdmg(total_dmg)
+
+        if cause and cause["deaths_list"]:
+            dc  = len(cause["deaths_list"])
+            tip = "&#10;".join(
+                f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
+            d_cell = (f'<td style="text-align:center;padding:4px 8px">'
+                      f'<span style="color:#e05252;font-weight:700;cursor:default"'
+                      f' title="{tip}">{dc}</span></td>')
+        else:
+            d_cell = '<td style="text-align:center;padding:4px 8px;color:#556">—</td>'
+
+        fault_text  = escape(cause["fault"]) if cause and cause.get("fault") else "—"
+        fault_color = "#e3a02e" if fault_text != "—" else "#556"
+
+        rows += (
+            f'<tr style="border-bottom:1px solid #21262d">'
+            f'<td style="padding:4px 8px;white-space:nowrap;color:#aaa">W{wi}</td>'
+            f'<td style="padding:4px 8px;text-align:center;color:#667;white-space:nowrap">{dur_str}</td>'
+            f'<td style="padding:4px 8px;text-align:center;color:#667">{hp_str}</td>'
+            f'<td style="padding:4px 8px;white-space:nowrap">'
+            f'<span style="color:{iss_col};font-weight:600">{escape(iss)}</span></td>'
+            f'<td style="padding:4px 8px;text-align:center;color:#667">{dmg_str}</td>'
+            f'{d_cell}'
+            f'<td style="padding:4px 8px;white-space:nowrap">'
+            f'<span style="color:{fault_color}">{fault_text}</span></td>'
+            f'</tr>'
+        )
+
+    th = ('background:#161b22;padding:5px 8px;color:#8b949e;'
+          'border-bottom:2px solid #21262d;font-weight:600;font-size:12px;'
+          'text-align:{align};white-space:nowrap')
+    out  = ('<div style="margin:16px 0 8px">'
+            '<span style="color:#8b949e;font-size:13px;font-weight:700">&#128221; Wipe Log</span>'
+            '<span style="color:#556;font-size:11px;margin-left:8px">'
+            'hover Deaths column for player names</span></div>')
+    out += ('<div style="overflow-x:auto">'
+            '<table style="font-size:13px;border-collapse:collapse"><thead><tr>'
+            f'<th style="{th.format(align="left")}">Wipe</th>'
+            f'<th style="{th.format(align="center")}">Dur</th>'
+            f'<th style="{th.format(align="center")}">HP%</th>'
+            f'<th style="{th.format(align="left")}">Issue</th>'
             f'<th style="{th.format(align="center")}">Damage</th>'
             f'<th style="{th.format(align="center")}">Deaths</th>'
             f'<th style="{th.format(align="left")}">Fault</th>'
@@ -4486,6 +4581,7 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
             ov_kw_id  = f"ov-{table_id}"
             ov_kw_html = _build_mechanics_overview_pane(boss_wipes, all_ov_pids_kw, tbl_id=ov_kw_id,
                                                         boss_kills_list=fights)
+            ov_kw_html += render_raid_wipe_log_html(boss_wipes, boss_name_base, actor_lookup)
             if ov_kw_html:
                 pull_btns += (f'<button class="pull-btn" onclick="switchPull(this,\'{ov_kw_id}\')">'
                               f'All Wipes</button>')
@@ -4617,6 +4713,8 @@ def _build_boss_html(boss_data: dict, actor_lookup: dict, id_prefix: str = "0", 
                 _ks += '</table></div>'
             _ks += '</div>'
             ov_html += _ks
+
+        ov_html += render_raid_wipe_log_html(boss_wipes, boss_name_base, actor_lookup)
 
         pull_btns  = (f'<button class="pull-btn active" onclick="switchPull(this,\'{ov_tbl_id}\')">'
                       f'All Wipes</button>')
