@@ -2066,7 +2066,7 @@ def group_crystals_by_chain(carriers: list) -> list:
     # Attach subsequent holders: assign_s should be within LINK_WINDOW after the
     # chain's last holder's drop_s.  Resolve ties toward the chain that ended most
     # recently (smallest positive gap).
-    LINK_WINDOW = 8.0
+    LINK_WINDOW = 20.0
     for _ in range(len(remaining) + 1):
         unmatched: list = []
         for seg in remaining:
@@ -2131,17 +2131,15 @@ def render_lura_crystal_html(carriers: list) -> str:
             else:
                 bg, border, suffix = "#17160a", "#38361a", ""
 
-            # Primary time ref: pickup_s if available, else assign_s
-            hold_start = pickup_s if pickup_s is not None else assign_s
+            # Always show assign_s as hold start — most accurate for multi-cycle fights
             dur_str = ""
-            if hold_start is not None and drop_s is not None:
-                dur = drop_s - hold_start
+            if assign_s is not None and drop_s is not None:
+                dur = drop_s - assign_s
                 dur_str = f" ({dur:.0f}s)"
 
             time_line = ""
-            if hold_start is not None:
-                hs_col = "#4c4" if pickup_s is not None else "#667"
-                time_line += f'<span style="color:{hs_col}">{hold_start:.0f}s</span>'
+            if assign_s is not None:
+                time_line += f'<span style="color:#667">{assign_s:.0f}s</span>'
             if drop_s is not None:
                 d_col = "#c44" if reason == "death" else ("#c84" if reason == "mechanic" else "#445")
                 time_line += f'<span style="color:#445">→</span><span style="color:{d_col}">{drop_s:.0f}s</span>'
