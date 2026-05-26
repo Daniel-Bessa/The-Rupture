@@ -2326,15 +2326,13 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
         fault_color = "#e3a02e" if fault_text != "—" else "#556"
 
         if cause and cause["deaths_list"]:
-            died_lines = "<br>".join(
-                f'<span style="color:#e05252">{escape(nm)}</span>'
-                f'<span style="color:#556;font-size:10px"> {escape(t)}</span>'
-                for nm, t in cause["deaths_list"]
-            )
-            d_cell = (f'<td style="padding:4px 10px;font-size:11px;line-height:1.6">'
-                      f'{died_lines}</td>')
+            dc  = len(cause["deaths_list"])
+            tip = "&#10;".join(f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
+            d_cell = (f'<td style="text-align:center;padding:5px 10px">'
+                      f'<span style="color:#e05252;font-weight:700;cursor:default"'
+                      f' title="{tip}">{dc}</span></td>')
         else:
-            d_cell = '<td style="padding:4px 10px;color:#556">—</td>'
+            d_cell = '<td style="text-align:center;padding:5px 10px;color:#556">—</td>'
 
         is_midnight = "midnight" in boss_name_base.lower()
         seed_cell = ""
@@ -2366,6 +2364,7 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
                if is_midnight else "")
     out  = ('<div style="margin-bottom:12px">'
             '<span style="color:#8b949e;font-size:14px;font-weight:700">Wipe Log</span>'
+            '<span style="color:#556;font-size:12px;margin-left:10px">hover Deaths for names</span>'
             '</div>')
     out += ('<div style="overflow-x:auto">'
             '<table style="font-size:13px;border-collapse:collapse;width:100%"><thead><tr>'
@@ -2374,7 +2373,7 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
             f'<th style="{th.format(align="center")}">HP%</th>'
             f'<th style="{th.format(align="left")}">Wipe Issue</th>'
             f'<th style="{th.format(align="center")}">Damage</th>'
-            f'<th style="{th.format(align="left")}">Deaths</th>'
+            f'<th style="{th.format(align="center")}">Deaths</th>'
             f'<th style="{th.format(align="left")}">Fault</th>'
             f'{seed_th}'
             f'</tr></thead><tbody>{rows}</tbody></table></div>')
@@ -2431,15 +2430,13 @@ def render_raid_wipe_log_html(wipes: list, boss_name_base: str, actor_lookup: di
         fault_color = "#e3a02e" if fault_text != "—" else "#556"
 
         if cause and cause["deaths_list"]:
-            died_lines = "<br>".join(
-                f'<span style="color:#e05252">{escape(nm)}</span>'
-                f'<span style="color:#556;font-size:10px"> {escape(t)}</span>'
-                for nm, t in cause["deaths_list"]
-            )
-            d_cell = (f'<td style="padding:4px 8px;font-size:11px;line-height:1.6">'
-                      f'{died_lines}</td>')
+            dc  = len(cause["deaths_list"])
+            tip = "&#10;".join(f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
+            d_cell = (f'<td style="text-align:center;padding:4px 8px">'
+                      f'<span style="color:#e05252;font-weight:700;cursor:default"'
+                      f' title="{tip}">{dc}</span></td>')
         else:
-            d_cell = '<td style="padding:4px 8px;color:#556">—</td>'
+            d_cell = '<td style="text-align:center;padding:4px 8px;color:#556">—</td>'
 
         is_midnight = "midnight" in boss_name_base.lower()
         seed_cell = ""
