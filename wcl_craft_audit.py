@@ -5965,7 +5965,7 @@ _BOSS_DEDICATED_PAGES = {
     "Fallen-King Salhadaar":       "mythic/boss_salhadaar.html",
     "Vaelgor & Ezzorak":           "mythic/boss_vaelgor.html",
     "Lightblinded Vanguard":       "mythic/boss_vanguard.html",
-    "Crown of the Cosmos":         "heroic/boss_crown.html",
+    "Crown of the Cosmos":         "mythic/boss_crown.html",
     "Belo'ren, Child of Al'ar":    "mythic/boss_beloren.html",
     "Midnight Falls":              "mythic/boss_midnight.html",
 }
@@ -8099,8 +8099,8 @@ a:hover{{text-decoration:underline}}
     print(f"[OK] Salhadaar progression page saved: {output_path}")
 
 
-def write_crown_progression_html(days_data: list, output_path: str, guild_name: str = "") -> None:
-    """Write Crown of the Cosmos Heroic boss progression page.
+def write_crown_progression_html(days_data: list, output_path: str, guild_name: str = "", difficulty: str = "Heroic") -> None:
+    """Write Crown of the Cosmos boss progression page for the given difficulty.
 
     Shows per-wipe Silverstrike intermission tables (arrow order, multi-hits)
     and P3 circle leave-order tables. Aggregates multi-hit counts per player
@@ -8113,7 +8113,7 @@ def write_crown_progression_html(days_data: list, output_path: str, guild_name: 
     _root = "../" if _dir else ""
 
     TARGET_BOSS = "Crown of the Cosmos"
-    TARGET_DIFF = "Heroic"
+    TARGET_DIFF = difficulty
     WCL_BASE    = "https://www.warcraftlogs.com/reports"
 
     # ── collect all Crown wipes ──────────────────────────────────────────────
@@ -9919,7 +9919,8 @@ def main():
     write_gear_html(days_data, "gear_normal.html", guild_name=guild_name)
     write_roster_html(days_data, "roster.html", guild_name=guild_name)
     write_boss_progression_html(days_data, "heroic/boss_chimaerus.html", guild_name=guild_name)
-    write_crown_progression_html(days_data, "heroic/boss_crown.html", guild_name=guild_name)
+    write_crown_progression_html(days_data, "heroic/boss_crown.html", guild_name=guild_name, difficulty="Heroic")
+    write_crown_progression_html(days_data, "mythic/boss_crown.html", guild_name=guild_name, difficulty="Mythic")
     write_salhadaar_progression_html(days_data, "heroic/boss_salhadaar.html", guild_name=guild_name)
     for _bname, _bfile in _BOSS_DEDICATED_PAGES.items():
         if _bfile.startswith("mythic/"):
