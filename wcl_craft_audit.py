@@ -2276,6 +2276,19 @@ def _crystal_deaths_html(lura_crystals: list) -> str:
     return "<br>".join(deaths) if deaths else "—"
 
 
+def _wipe_deaths_ordered(pull_or_wipe: dict, name_fn=None) -> list:
+    """Return all deaths sorted chronologically as [(name, time_str), ...]."""
+    deaths_src = pull_or_wipe.get("deaths_all") or pull_or_wipe.get("deaths", {})
+    fn = name_fn if name_fn is not None else pull_or_wipe.get("_player", lambda pid: f"#{pid}")
+    entries = []
+    for pid, dlist in deaths_src.items():
+        pname = fn(pid)
+        for d in dlist:
+            entries.append((pname, d.get("time", ""), d.get("fight_pct", 50)))
+    entries.sort(key=lambda e: e[2])
+    return [(name, t) for name, t, _ in entries]
+
+
 def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
     """Render a Wipe Log summary table for the boss progression page.
     Columns: Pull | Dur | HP% | Wipe Issue | Damage | Deaths | Fault [| Seed]
@@ -2325,14 +2338,15 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
         fault_text  = escape(cause["fault"]) if cause and cause.get("fault") else "—"
         fault_color = "#e3a02e" if fault_text != "—" else "#556"
 
-        if cause and cause["deaths_list"]:
-            dc  = len(cause["deaths_list"])
-            tip = "&#10;".join(f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
-            d_cell = (f'<td style="text-align:center;padding:5px 10px">'
-                      f'<span style="color:#e05252;font-weight:700;cursor:default"'
-                      f' title="{tip}">{dc}</span></td>')
-        else:
-            d_cell = '<td style="text-align:center;padding:5px 10px;color:#556">—</td>'
+        all_deaths = _wipe_deaths_ordered(p)
+        def _dcell(idx, _ad=all_deaths):
+            if idx < len(_ad):
+                nm, t = _ad[idx]
+                return (f'<td style="padding:5px 8px;white-space:nowrap;font-size:12px">'
+                        f'<span style="color:#e05252">{escape(nm)}</span>'
+                        f'<span style="color:#556;font-size:11px"> {escape(t)}</span></td>')
+            return '<td style="text-align:center;padding:5px 8px;color:#334">—</td>'
+        d_cells = "".join(_dcell(i) for i in range(4))
 
         is_midnight = "midnight" in boss_name_base.lower()
         seed_cell = ""
@@ -2349,7 +2363,7 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
             f'<td style="padding:5px 10px;white-space:nowrap">'
             f'<span style="color:{iss_col};font-weight:600">{escape(iss)}</span></td>'
             f'<td style="padding:5px 10px;text-align:center;color:#667">{dmg_str}</td>'
-            f'{d_cell}'
+            f'{d_cells}'
             f'<td style="padding:5px 10px;white-space:nowrap">'
             f'<span style="color:{fault_color}">{fault_text}</span></td>'
             f'{seed_cell}'
@@ -2364,7 +2378,6 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
                if is_midnight else "")
     out  = ('<div style="margin-bottom:12px">'
             '<span style="color:#8b949e;font-size:14px;font-weight:700">Wipe Log</span>'
-            '<span style="color:#556;font-size:12px;margin-left:10px">hover Deaths for names</span>'
             '</div>')
     out += ('<div style="overflow-x:auto">'
             '<table style="font-size:13px;border-collapse:collapse;width:100%"><thead><tr>'
@@ -2373,7 +2386,10 @@ def render_wipe_log_html(pulls: list, boss_name_base: str) -> str:
             f'<th style="{th.format(align="center")}">HP%</th>'
             f'<th style="{th.format(align="left")}">Wipe Issue</th>'
             f'<th style="{th.format(align="center")}">Damage</th>'
-            f'<th style="{th.format(align="center")}">Deaths</th>'
+            f'<th style="{th.format(align="left")}">1st &#9760;</th>'
+            f'<th style="{th.format(align="left")}">2nd &#9760;</th>'
+            f'<th style="{th.format(align="left")}">3rd &#9760;</th>'
+            f'<th style="{th.format(align="left")}">4th &#9760;</th>'
             f'<th style="{th.format(align="left")}">Fault</th>'
             f'{seed_th}'
             f'</tr></thead><tbody>{rows}</tbody></table></div>')
@@ -2429,14 +2445,15 @@ def render_raid_wipe_log_html(wipes: list, boss_name_base: str, actor_lookup: di
         fault_text  = escape(cause["fault"]) if cause and cause.get("fault") else "—"
         fault_color = "#e3a02e" if fault_text != "—" else "#556"
 
-        if cause and cause["deaths_list"]:
-            dc  = len(cause["deaths_list"])
-            tip = "&#10;".join(f"{escape(nm)} · {escape(t)}" for nm, t in cause["deaths_list"])
-            d_cell = (f'<td style="text-align:center;padding:4px 8px">'
-                      f'<span style="color:#e05252;font-weight:700;cursor:default"'
-                      f' title="{tip}">{dc}</span></td>')
-        else:
-            d_cell = '<td style="text-align:center;padding:4px 8px;color:#556">—</td>'
+        all_deaths = _wipe_deaths_ordered(w, name_fn=_name)
+        def _dcell(idx, _ad=all_deaths):
+            if idx < len(_ad):
+                nm, t = _ad[idx]
+                return (f'<td style="padding:4px 8px;white-space:nowrap;font-size:12px">'
+                        f'<span style="color:#e05252">{escape(nm)}</span>'
+                        f'<span style="color:#556;font-size:11px"> {escape(t)}</span></td>')
+            return '<td style="text-align:center;padding:4px 8px;color:#334">—</td>'
+        d_cells = "".join(_dcell(i) for i in range(4))
 
         is_midnight = "midnight" in boss_name_base.lower()
         seed_cell = ""
@@ -2453,7 +2470,7 @@ def render_raid_wipe_log_html(wipes: list, boss_name_base: str, actor_lookup: di
             f'<td style="padding:4px 8px;white-space:nowrap">'
             f'<span style="color:{iss_col};font-weight:600">{escape(iss)}</span></td>'
             f'<td style="padding:4px 8px;text-align:center;color:#667">{dmg_str}</td>'
-            f'{d_cell}'
+            f'{d_cells}'
             f'<td style="padding:4px 8px;white-space:nowrap">'
             f'<span style="color:{fault_color}">{fault_text}</span></td>'
             f'{seed_cell}'
@@ -2476,7 +2493,10 @@ def render_raid_wipe_log_html(wipes: list, boss_name_base: str, actor_lookup: di
             f'<th style="{th.format(align="center")}">HP%</th>'
             f'<th style="{th.format(align="left")}">Issue</th>'
             f'<th style="{th.format(align="center")}">Damage</th>'
-            f'<th style="{th.format(align="left")}">Deaths</th>'
+            f'<th style="{th.format(align="left")}">1st &#9760;</th>'
+            f'<th style="{th.format(align="left")}">2nd &#9760;</th>'
+            f'<th style="{th.format(align="left")}">3rd &#9760;</th>'
+            f'<th style="{th.format(align="left")}">4th &#9760;</th>'
             f'<th style="{th.format(align="left")}">Fault</th>'
             f'{seed_th}'
             f'</tr></thead><tbody>{rows}</tbody></table></div>')
