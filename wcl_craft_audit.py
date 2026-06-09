@@ -7019,6 +7019,7 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     # ── Step 3: aggregate totals ──────────────────────────────────────────────
     def _empty_player(char, color):
         return {"char": char, "color": color, "deaths": 0, "interrupts": 0, "defs": 0,
+                "death_order": [0, 0, 0, 0],
                 "mech": {ml: {"hits": 0, "dmg": 0} for ml in mech_labels}}
 
     all_players: dict = {}
@@ -7051,6 +7052,18 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             if pname not in all_players:
                 all_players[pname] = _empty_player(fchar(raw_pid), fc(raw_pid))
             all_players[pname]["defs"] += len(dlist)
+        # Death order: record position (1st/2nd/3rd/4th) each player occupied
+        if not p["is_kill"]:
+            ordered = _wipe_deaths_ordered(p)
+            for pos, (pname, _t) in enumerate(ordered[:4]):
+                if pname not in all_players:
+                    # find any pid for this player to get char/color
+                    _pid = next((pid for pid in p["deaths"] if fn(pid) == pname), None)
+                    if _pid is not None:
+                        all_players[pname] = _empty_player(fchar(_pid), fc(_pid))
+                    else:
+                        continue
+                all_players[pname]["death_order"][pos] += 1
 
     sorted_players = sorted(all_players.items(), key=lambda x: (-x[1]["deaths"], x[0]))
 
@@ -7119,6 +7132,10 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
     def _build_totals():
         hdrs = [("Player", "left", "min-width:140px", "", ""),
                 ("Deaths",  "center", "min-width:70px", "", ""),
+                ("1st ☠", "center", "min-width:55px", "Times this player was the 1st to die in a wipe.", ""),
+                ("2nd ☠", "center", "min-width:55px", "Times this player was the 2nd to die in a wipe.", ""),
+                ("3rd ☠", "center", "min-width:55px", "Times this player was the 3rd to die in a wipe.", ""),
+                ("4th ☠", "center", "min-width:55px", "Times this player was the 4th to die in a wipe.", ""),
                 ("Defensives", "center", "min-width:80px", "Total personal defensive cooldowns used across all pulls.", "")]
         if IS_VANGUARD:
             hdrs.append(("Dmg Taken", "center", "min-width:90px",
@@ -7149,6 +7166,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
                   f'<span style="color:#444;font-size:11px;margin-left:5px">({_esc(pname)})</span></td>')
             t += (f'<td data-val="{pd["deaths"]}" style="text-align:center;padding:5px 8px;font-weight:700;color:{d_col}">'
                   f'{pd["deaths"]}</td>')
+            for _pos in range(4):
+                _cnt = pd["death_order"][_pos]
+                _shade = ("#e05252" if _pos == 0 else "#e07a52" if _pos == 1 else "#e09952" if _pos == 2 else "#aaa")
+                t += (f'<td data-val="{_cnt}" style="text-align:center;padding:5px 8px;color:{_shade if _cnt else "#333"}">'
+                      f'{"<b>" if _cnt else ""}{_cnt if _cnt else "—"}{"</b>" if _cnt else ""}</td>')
             def_n = pd["defs"]
             def_col = "#3fb950" if def_n > 0 else "#556"
             t += (f'<td data-val="{def_n}" style="text-align:center;padding:5px 8px;color:{def_col}">'
@@ -7177,8 +7199,11 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
         t_ints   = sum(pd["interrupts"] for _, pd in sorted_players)
         t += (f'<tr style="border-top:2px solid #3a3a5a;font-weight:700">'
               f'<td style="padding:5px 10px;color:#aaa">Total</td>'
-              f'<td style="text-align:center;padding:5px 8px;color:#e05252">{t_deaths}</td>'
-              f'<td style="text-align:center;padding:5px 8px;color:#3fb950">{t_defs if t_defs else "—"}</td>')
+              f'<td style="text-align:center;padding:5px 8px;color:#e05252">{t_deaths}</td>')
+        for _pos in range(4):
+            _tot = sum(pd["death_order"][_pos] for _, pd in sorted_players)
+            t += f'<td style="text-align:center;padding:5px 8px;color:#aaa">{_tot if _tot else "—"}</td>'
+        t += (f'<td style="text-align:center;padding:5px 8px;color:#3fb950">{t_defs if t_defs else "—"}</td>')
         if IS_VANGUARD:
             t_vdmg = sum(_van_dmg.values())
             t += (f'<td style="text-align:center;padding:5px 8px;color:#e3a02e">'
