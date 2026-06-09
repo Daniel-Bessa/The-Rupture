@@ -7239,9 +7239,12 @@ def write_boss_mythic_html(days_data: list, boss_name: str, output_path: str, gu
             _cycles = build_midnight_kick_cycles(_mit, actor_lookup, midnight_rotation)
             _n_cycles = len(_cycles)
             # players present in this pull (by name)
+            # mts keys may be strings after JSON load, so normalise to int
+            _al = p.get("_al", actor_lookup)
             _present_names = set()
             for _pid in set(p.get("mts", [])) | set(p.get("defs", [])) | set(p.get("deaths", [])):
-                _cn = actor_lookup.get(_pid, {}).get("name", "")
+                _pid_i = int(_pid) if isinstance(_pid, str) else _pid
+                _cn = _al.get(_pid_i, actor_lookup.get(_pid_i, {})).get("name", "")
                 if _cn:
                     _present_names.add(_cn)
             for _grp, _assigned in midnight_rotation.items():
